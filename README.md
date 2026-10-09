@@ -16,6 +16,8 @@ The deployment lives in nix-config; this repository owns the agent.
 - `src/`: the TypeScript package (pi's extension language).
 - `ci/`: the gen-harness CI flake. Its workflow is `.github/workflows/ci.yml`.
 - `docs/`: the design and the plan.
+- `support-memory/`: the curated memory `genie-expert@public` reads, admitted only by a merged PR
+  (see its README).
 
 ## Tests
 

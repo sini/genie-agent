@@ -43,6 +43,8 @@
               checks.redactor = genie-agent.checks.${system}.redactor;
               # The injection corpus under corpus/injection lints clean.
               checks.corpus = genie-agent.checks.${system}.corpus;
+              # Every file under support-memory/ passes the refusal-only admission check.
+              checks.support-memory = genie-agent.checks.${system}.support-memory;
             };
         }
       ];

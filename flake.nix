@@ -77,6 +77,26 @@
           python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}
           touch $out
         '';
+        # The support memory holds no credential shape, private repository name, home path or
+        # entry without frontmatter. It can only refuse: a merged PR admits.
+        support-memory =
+          pkgs.runCommand "genie-agent-support-memory"
+            {
+              nativeBuildInputs = [ pkgs.nodejs ];
+              src = nixpkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = nixpkgs.lib.fileset.unions [
+                  ./src/redactor
+                  ./tests/support-memory.ts
+                  ./support-memory
+                ];
+              };
+            }
+            ''
+              cd $src
+              node tests/support-memory.ts support-memory
+              touch $out
+            '';
       });
 
       devShells = forAllSystems (pkgs: {
