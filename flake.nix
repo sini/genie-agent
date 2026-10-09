@@ -50,6 +50,28 @@
               bash ${./tests/schemas.sh} ${./schemas}
               touch $out
             '';
+        # The redactor's gating oracle. node counts a file with no tests as one passing test, so
+        # the run must show a named cell, not just a pass count.
+        redactor =
+          pkgs.runCommand "genie-agent-redactor"
+            {
+              nativeBuildInputs = [ pkgs.nodejs ];
+              src = nixpkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = nixpkgs.lib.fileset.unions [
+                  ./src/redactor
+                  ./tests/redactor.test.ts
+                ];
+              };
+            }
+            ''
+              cd $src
+              rc=0
+              node --test --test-reporter=tap tests/redactor.test.ts > $TMPDIR/tap || rc=$?
+              cat $TMPDIR/tap
+              [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - clean control passes byte-identical$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+              touch $out
+            '';
       });
 
       devShells = forAllSystems (pkgs: {

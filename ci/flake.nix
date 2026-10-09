@@ -37,6 +37,8 @@
               checks.package = genie-agent.packages.${system}.default;
               # Every fixture under schemas/fixtures validates or fails as its directory names.
               checks.schemas = genie-agent.checks.${system}.schemas;
+              # Every credential shape is redacted and named; clean text passes byte-identical.
+              checks.redactor = genie-agent.checks.${system}.redactor;
             };
         }
       ];
