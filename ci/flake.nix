@@ -41,6 +41,8 @@
               checks.redactor = genie-agent.checks.${system}.redactor;
               # IFD only on the trusted tier, which the request cannot raise; evaluation is pure.
               checks.eval = genie-agent.checks.${system}.eval;
+              # The injection corpus under corpus/injection lints clean.
+              checks.corpus = genie-agent.checks.${system}.corpus;
             };
         }
       ];

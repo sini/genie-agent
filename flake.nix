@@ -99,6 +99,11 @@
               [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - request.trusted cannot raise a public tier$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
               touch $out
             '';
+        # The guard-in injection corpus is well-formed and covers every attack vector.
+        corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+          python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}
+          touch $out
+        '';
       });
 
       devShells = forAllSystems (pkgs: {
