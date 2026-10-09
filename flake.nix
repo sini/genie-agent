@@ -72,6 +72,27 @@
               [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - clean control passes byte-identical$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
               touch $out
             '';
+        # The dispatcher core's gating oracle (design oracle 24), against a recording herdr fake.
+        dispatcher =
+          pkgs.runCommand "genie-agent-dispatcher"
+            {
+              nativeBuildInputs = [ pkgs.nodejs ];
+              src = nixpkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = nixpkgs.lib.fileset.unions [
+                  ./src/dispatcher
+                  ./tests/dispatcher.test.ts
+                ];
+              };
+            }
+            ''
+              cd $src
+              rc=0
+              node --test --test-reporter=tap tests/dispatcher.test.ts > $TMPDIR/tap || rc=$?
+              cat $TMPDIR/tap
+              [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+              touch $out
+            '';
         # The guard-in injection corpus is well-formed and covers every attack vector.
         corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
           python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}

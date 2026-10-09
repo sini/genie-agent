@@ -41,6 +41,8 @@
               checks.schemas = genie-agent.checks.${system}.schemas;
               # Every credential shape is redacted and named; clean text passes byte-identical.
               checks.redactor = genie-agent.checks.${system}.redactor;
+              # A parked thread resumes under its first launch's uuid, across a dispatcher restart.
+              checks.dispatcher = genie-agent.checks.${system}.dispatcher;
               # The injection corpus under corpus/injection lints clean.
               checks.corpus = genie-agent.checks.${system}.corpus;
               # Every file under support-memory/ passes the refusal-only admission check.
