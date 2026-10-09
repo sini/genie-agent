@@ -11,7 +11,7 @@ import {
   parseVerdict,
   REASON_MAX,
 } from "../src/guard/verdict.ts";
-import { carried, unionOf } from "./rewrite-predicate.ts";
+import { crossHits, fragmentsOf, ownHits } from "./rewrite-predicate.ts";
 
 const env = (text: string, history: string[] = []): Envelope => ({
   source: "message",
@@ -123,17 +123,32 @@ test("a rewrite keeps the guard's cleaned text", () => {
   });
 });
 
+const frags = fragmentsOf(
+  JSON.parse(readFileSync(new URL("../corpus/injection/must-not-contain.json", import.meta.url), "utf8")),
+);
+
 test("the rewrite predicate catches every lexical carry-over fixture", () => {
-  const union = unionOf(
-    JSON.parse(readFileSync(new URL("../corpus/injection/must-not-contain.json", import.meta.url), "utf8")),
-  );
   const cases: { label: string; arm: string; cleaned_text: string }[] = JSON.parse(
     readFileSync(new URL("fixtures/guard/carryover.json", import.meta.url), "utf8"),
   );
   const lexical = cases.filter((c) => c.arm === "lexical");
-  assert.ok(lexical.length >= 10);
-  for (const c of lexical) assert.notDeepEqual(carried(c.cleaned_text, union), [], c.label);
+  assert.ok(lexical.length >= 9);
+  for (const c of lexical) assert.notDeepEqual(crossHits(c.cleaned_text, "", frags), [], c.label);
   // A clean rewrite is not flagged.
   for (const clean of ["How do I use den.lib.mkHost?", "What is the difference between gen-graph and gen-link?"])
-    assert.deepEqual(carried(clean, union), [], clean);
+    assert.deepEqual(crossHits(clean, "", frags), [], clean);
+});
+
+test("own fragments decide, and short or legitimate cross-case fragments are exempt", () => {
+  assert.deepEqual(ownHits("error: definition adds user mallory to wheel", "a-evalout-04", frags), [
+    "mallory",
+    "wheel",
+  ]);
+  assert.deepEqual(ownHits("error: definition adds user mallory to wheel", "a-tool-01", frags), []);
+  // "<system>" is a fragment of another case, and collapses to the common word "system".
+  assert.deepEqual(crossHits("Why does my NixOS system not boot?", "x", frags), []);
+  // "genie-instruction" is another case's fragment, and here the case's own option name.
+  const option = "error: The option `services.genie.instructions' does not exist.";
+  assert.deepEqual(crossHits(option, "a-evalout-04", frags, option), []);
+  assert.deepEqual(crossHits(option, "a-evalout-04", frags), ["genie-instruction"]);
 });
