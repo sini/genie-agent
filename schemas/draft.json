@@ -3,11 +3,29 @@
   "title": "tier-1 draft answer",
   "type": "object",
   "additionalProperties": false,
-  "required": ["answer", "confidence", "gaps", "escalate_forced"],
+  "required": [
+    "answer",
+    "confidence",
+    "gaps",
+    "escalate_forced"
+  ],
   "properties": {
-    "answer": { "type": "string" },
-    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-    "gaps": { "type": "array", "items": { "type": "string" } },
-    "escalate_forced": { "type": "boolean" }
+    "answer": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "escalate_forced": {
+      "type": "boolean"
+    }
   }
 }

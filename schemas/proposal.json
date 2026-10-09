@@ -4,20 +4,54 @@
   "description": "A gist needs no repository; a PR needs the repository and the branch it opens from.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "files", "title", "body"],
+  "required": [
+    "kind",
+    "files",
+    "title",
+    "body"
+  ],
   "properties": {
-    "kind": { "enum": ["gist", "pr"] },
-    "repo": { "type": "string", "minLength": 1 },
-    "branch": { "type": "string", "minLength": 1 },
+    "kind": {
+      "enum": [
+        "gist",
+        "pr"
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
     "files": {
       "description": "path to full file content",
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
-    "title": { "type": "string", "minLength": 1 },
-    "body": { "type": "string" }
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "type": "string"
+    }
   },
-  "if": { "properties": { "kind": { "const": "pr" } } },
-  "then": { "required": ["repo", "branch"] }
+  "if": {
+    "properties": {
+      "kind": {
+        "const": "pr"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "repo",
+      "branch"
+    ]
+  }
 }

@@ -3,10 +3,24 @@
   "title": "guard-in verdict on one inbound message",
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "reason", "cleaned_text"],
+  "required": [
+    "verdict",
+    "reason",
+    "cleaned_text"
+  ],
   "properties": {
-    "verdict": { "enum": ["allow", "rewrite", "reject"] },
-    "reason": { "type": "string" },
-    "cleaned_text": { "type": "string" }
+    "verdict": {
+      "enum": [
+        "allow",
+        "rewrite",
+        "reject"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "cleaned_text": {
+      "type": "string"
+    }
   }
 }

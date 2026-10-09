@@ -3,11 +3,31 @@
   "title": "supervisor state for one Matrix thread",
   "type": "object",
   "additionalProperties": false,
-  "required": ["thread_id", "status", "created", "last_active"],
+  "required": [
+    "thread_id",
+    "status",
+    "created",
+    "last_active"
+  ],
   "properties": {
-    "thread_id": { "type": "string", "minLength": 1 },
-    "status": { "enum": ["active", "escalated", "closed"] },
-    "created": { "type": "string", "format": "date-time" },
-    "last_active": { "type": "string", "format": "date-time" }
+    "thread_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "active",
+        "escalated",
+        "closed"
+      ]
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_active": {
+      "type": "string",
+      "format": "date-time"
+    }
   }
 }

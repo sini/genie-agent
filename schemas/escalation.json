@@ -3,22 +3,44 @@
   "title": "package sent to the Opus expert",
   "type": "object",
   "additionalProperties": false,
-  "required": ["cleaned_question", "draft", "eval_transcript", "gaps"],
+  "required": [
+    "cleaned_question",
+    "draft",
+    "eval_transcript",
+    "gaps"
+  ],
   "properties": {
-    "cleaned_question": { "type": "string", "minLength": 1 },
-    "draft": { "$ref": "draft.json" },
+    "cleaned_question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "draft": {
+      "$ref": "draft.json"
+    },
     "eval_transcript": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["request", "result"],
+        "required": [
+          "request",
+          "result"
+        ],
         "properties": {
-          "request": { "$ref": "eval-request.json" },
-          "result": { "$ref": "eval-result.json" }
+          "request": {
+            "$ref": "eval-request.json"
+          },
+          "result": {
+            "$ref": "eval-result.json"
+          }
         }
       }
     },
-    "gaps": { "type": "array", "items": { "type": "string" } }
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
   }
 }
