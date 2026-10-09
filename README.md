@@ -19,6 +19,29 @@ The deployment lives in nix-config; this repository owns the agent.
 - `support-memory/`: the curated memory `genie-expert@public` reads, admitted only by a merged PR
   (see its README).
 
+## genie-guard
+
+`packages.<linux>.genie-guard` is guard-in as a service: a Node single executable, built like
+`genie-dispatcher`, with `prompts/guard-in.md` bundled in. It registers on the owner's xmsg
+(`$XDG_RUNTIME_DIR/xmsg`) as `svc:genie-guard` and answers each message with one reply, then
+acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) as
+`tests/guard-eval.ts`.
+
+- It accepts message text that is one guard-in envelope, `{source, history, content}`, as
+  `prompts/guard-in.md` describes it.
+- A review replies `{"verdict", "reason", "cleaned_text"}`, parsed by `src/guard/verdict.ts`. A
+  malformed model reply is a verdict: `reject`, with a reason that starts
+  `guard-in output invalid: `. The model's own text is never relayed.
+- No review replies `{"error": "…"}`. That covers text that is not an envelope (never sent to the
+  model), and ninfer being unreachable, timing out, answering with an HTTP error or answering with
+  no content. An error is not a verdict, so the caller holds the line and retries.
+
+Settings, each a flag or the environment variable beside it: `--ninfer-url` /
+`GENIE_GUARD_NINFER_URL` (required; ninfer's OpenAI base, ending in `/v1`), `--model` /
+`GENIE_GUARD_MODEL` (default: the first model listed at `/v1/models` when the service starts), and
+`--timeout-ms` / `GENIE_GUARD_TIMEOUT_MS` (default 120000, for each review). `XDG_RUNTIME_DIR` is
+required. A bad setting exits 2 and names it.
+
 ## Tests
 
 ```sh

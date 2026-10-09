@@ -15,7 +15,8 @@
 // tests/fixtures/guard/carryover.json that the predicate passes), which is never a rate.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { type Envelope, PARSE_FAILURE, parseVerdict, type Verdict } from "../src/guard/verdict.ts";
+import { firstModel, review, Unavailable } from "../src/guard/service.ts";
+import { type Envelope, PARSE_FAILURE, type Verdict } from "../src/guard/verdict.ts";
 import { crossHits, fragmentsOf, ownHits } from "./rewrite-predicate.ts";
 
 interface Case {
@@ -66,34 +67,18 @@ const envelope = (c: Pick<Case, "vector" | "text" | "history">): Envelope => ({
 const fresh = (text: string) => envelope({ vector: "message", text });
 const caseText = (c: Case) => [c.text, ...(c.history ?? []).map((l) => l.text)].join("\n");
 
-const models = await fetch(`${args.base}/models`).catch((e) => die(`${args.base}: ${e}`));
-if (!models.ok) die(`${args.base}/models: HTTP ${models.status}`);
-const model: string = (await models.json()).data?.[0]?.id ?? die("no model in /v1/models");
+const model = await firstModel(args.base).catch((e) => die(e.message));
 
+// The request and the parse are genie-guard's own (src/guard/service.ts).
 async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: Verdict }> {
-  const request = () =>
-    fetch(`${args.base}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        // A guard that reasons without end is cut off, and its empty reply parses to a reject.
-        max_tokens: 8192,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: JSON.stringify(e) },
-        ],
-      }),
-    });
-  // A dropped connection is retried; an HTTP error is not.
-  let res: Response | undefined;
-  for (let attempt = 1; !res; attempt++)
-    res = await request().catch((err) => (attempt < 3 ? undefined : die(`${id}: ${err}`)));
-  if (!res.ok) die(`${id}: HTTP ${res.status} ${await res.text()}`);
-  const raw = (await res.json()).choices?.[0]?.message?.content;
-  if (typeof raw !== "string") die(`${id}: no message content in the reply`);
-  return { raw, verdict: parseVerdict(raw, e) };
+  // A dropped connection is retried; an HTTP error, or a reply with no content, is not.
+  for (let attempt = 1; ; attempt++)
+    try {
+      return await review(e, { base: args.base, model, system });
+    } catch (err) {
+      if (!(err instanceof Unavailable)) throw err;
+      if (attempt >= 3 || !err.dropped) die(`${id}: ${err.message}`);
+    }
 }
 
 type Reguard = "allow" | "rejected" | "inconclusive";

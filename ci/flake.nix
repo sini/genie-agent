@@ -49,18 +49,19 @@
               checks.corpus = genie-agent.checks.${system}.corpus;
               # Every file under support-memory/ passes the refusal-only admission check.
               checks.support-memory = genie-agent.checks.${system}.support-memory;
-              # Any guard-in reply outside schemas/verdict.json parses to a reject.
+              # Any guard-in reply outside schemas/verdict.json parses to a reject, and genie-guard
+              # relays a verdict or an error, never the model's text.
               checks.guard = genie-agent.checks.${system}.guard;
             };
         }
-        # The dispatcher's single executable runs its own main and no offered payload. Linux only,
-        # so it is defined only where the subject defines it.
+        # Each single executable runs its own main and no offered payload. Linux only, so it is
+        # defined only where the subject defines it.
         {
           perSystem =
             { system, lib, ... }:
             {
               checks = lib.optionalAttrs ((genie-agent.checks.${system} or { }) ? dispatcher-sea) {
-                inherit (genie-agent.checks.${system}) dispatcher-sea;
+                inherit (genie-agent.checks.${system}) dispatcher-sea genie-guard-sea;
               };
             };
         }
