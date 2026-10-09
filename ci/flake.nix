@@ -39,6 +39,8 @@
               checks.schemas = genie-agent.checks.${system}.schemas;
               # Every credential shape is redacted and named; clean text passes byte-identical.
               checks.redactor = genie-agent.checks.${system}.redactor;
+              # IFD only on the trusted tier, which the request cannot raise; evaluation is pure.
+              checks.eval = genie-agent.checks.${system}.eval;
             };
         }
       ];
