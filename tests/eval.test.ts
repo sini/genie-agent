@@ -42,7 +42,11 @@ test("request.trusted=false lowers a trusted tier", async () => {
   assert.notEqual(r.exit, 0);
 });
 
-for (const attr of ["env", "file"]) {
+// Each refusal in the wording of Nix and of Lix ("pure eval mode", a bare "assertion failed").
+for (const [attr, refusal] of [
+  ["env", /assertion\b.*failed/],
+  ["file", /forbidden in pure eval(uation)? mode/],
+] as const) {
   test(`impure ${attr} fails under pure-eval, trusted or not`, async () => {
     for (const [trusted, tier] of [
       [false, "public"],
@@ -50,7 +54,7 @@ for (const attr of ["env", "file"]) {
     ] as const) {
       const r = await run("impure", attr, trusted, tier);
       assert.notEqual(r.exit, 0, `${tier}: ${r.stdout_tail}`);
-      assert.match(r.stderr_tail, /pure evaluation mode|assertion .* failed/);
+      assert.match(r.stderr_tail, refusal);
     }
   });
 }
