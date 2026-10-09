@@ -16,6 +16,10 @@ _Revision 4, 2026-10-08: adds the expert-tier dispatcher (§5.8) on two owner ru
 _Revision 5, 2026-10-08: folds the dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo),
 REJECT, F1–F10, P1–P3) on four owner rulings, rows 16–19; §12 maps each finding._
 
+_Revision 5.1, 2026-10-08: folds the second contact's conditions
+(`reports/genie-dispatcher-design-gate-r2.md` (private design repo), ACCEPT-WITH-CONDITIONS, G1–G5). No position
+changes; §12 maps each condition._
+
 ## 1. Purpose
 
 `@genie` answers den/gen/Nix support questions in Matrix rooms, including public ones. It is a
@@ -176,7 +180,8 @@ prose.
    `reply`, and **no shell**.
 3. **Pod:** each credential is held only by the container that needs it: the Matrix token in the
    bot container, the leaf key in the xmsg container, and the launcher's namespaced RBAC. Egress is
-   allowlisted to ninfer, the federation peers' `:7788` and the Matrix homeserver.
+   allowlisted to ninfer, the federation peers' fed ports (§5.8 Topology) and the Matrix
+   homeserver.
 4. **Eval:** each eval runs as its own gVisor Job, starting from nothing, with:
    - 12Gi memory and 2 cores, request = limit (Guaranteed QoS);
    - `activeDeadlineSeconds: 120`;
@@ -293,8 +298,26 @@ because it ran as `sini`, is listed under Prerequisites and measured by I10.2.
 
 - Each instance serves its HTTP API only on `$XDG_RUNTIME_DIR/xmsg/http.sock` (mode 0600, a
   peer-cred check that the peer's uid is the server's), the `agent.sock`/`register.sock` pattern,
-  and binds no TCP socket (X8). A process reaches only its own user's bus, so the tier fence
-  holds by construction, with no network namespace and no nftables rule.
+  and binds no TCP socket other than its federation listener (X8). A process reaches only its own
+  user's bus, so the tier fence holds by construction, with no network namespace and no nftables
+  rule. Three layers refuse a foreign uid: the `xmsg/` directory at 0700 (xmsg refuses any other
+  mode or owner), the socket at 0600, and the peer-cred check. The first two refuse in the kernel
+  before the third runs (gate r2, probe `r2-sockperm`), so each layer is tested on its own
+  (oracle 29).
+- **Runtime directory** (gate r2 G3). The tier users have no login session, so no
+  `/run/user/<uid>`. Each tier's xmsg unit, `xmsg@<tier>`, owns `/run/xmsg-<tier>` by
+  `RuntimeDirectory=` (0700, owned by `genie-<tier>`, `RuntimeDirectoryPreserve=yes`, so a
+  restart of the xmsg unit does not pull the directory from under the others). `xmsg@<tier>`,
+  `genie-herdr@<tier>` and `genie-dispatcher@<tier>` all set `XDG_RUNTIME_DIR=/run/xmsg-<tier>`
+  explicitly, and the panes inherit it from the herdr server. `sini@bitstream` keeps
+  `/run/user/1000`.
+- **Federation listeners** (gate r2 G4). Each node runs its own: `sini@bitstream` on 7788,
+  `genie-public@bitstream` on 7789 and `genie-trusted@bitstream` on 7790 (*ports defaulted,
+  reversible*). Co-hosted listeners share the host's source-address rule, which cannot tell uids
+  apart. The pins are the per-node fence: a listener admits only a client key linked to its node,
+  and the links admit no tier-to-tier and no tier-to-`sini` traffic. Each node's private key is
+  its own agenix secret, owned by that node's user at 0400, so neither tier can read the other's.
+  The tools are denied the tier's own node key as well.
 - Each tier instance discovers Claude sessions from every per-token config directory of its
   tier (`--sessions-dir` per directory, X7), and its dispatcher registers on its own
   `register.sock` as `svc:genie-expert`, attested by a trusted executable and the peer uid (X9;
@@ -422,9 +445,21 @@ fresh `genie-<tier>` config directory does not have:
 - **herdr's claude classifier manifest pinned** per tier. Parking and the watchdog hang on it, and
   D0 found it sourced remotely (`agent-detection/remote/claude.toml`).
 
-**Within a tier** (gate P1). Per-thread sessions separate context windows, not storage: same-uid
-sessions could read each other's transcripts. The tools are therefore denied every config
-directory's `projects/` through Bash and Read (*defaulted, reversible*).
+**Within a tier** (gate P1; gate r2 G5). Per-thread sessions separate context windows, not
+storage or sockets: a same-uid session could read another thread's transcript, or, from Bash,
+reach the tier's own `http.sock`, `agent.sock`, `register.sock` and `herdr.sock` to list or send
+into other threads of the tier, read or type into their panes, or register a second
+`svc:genie-expert`. The reply-only MCP narrows only the MCP surface. So the tools are denied,
+through Bash (the sandbox's read and write deny) and Read (`permissions.deny`):
+
+- every config directory's `projects/` (*defaulted, reversible*);
+- the tier's xmsg runtime directory, `/run/xmsg-<tier>/xmsg/`;
+- the herdr session directory, `~/.config/herdr/sessions/<tier>/`.
+
+The xmsg MCP server is spawned by `claude` outside the Bash sandbox, so the deny is derived not to
+cut the reply path; oracle 29's positive control checks it. X9 also refuses a second live
+registration of a `svc:<name>`, so a session that execs the dispatcher's binary cannot take over
+the tier's address.
 
 **A `blocked` pane mid-turn** (a permission prompt the allowlist failed to prevent; D0 did not
 exercise one) fails the turn as "expert unavailable" and parks the thread (*defaulted,
@@ -498,38 +533,54 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 
 01. **Injection corpus:** guard-in rejects or rewrites every attack case and passes every case in
     an allow control set.
+
 02. **Redactor:** a planted credential of each in-scope shape (§5.2 layer 6) in an outbound answer
     never reaches the post, one case per shape. Mutant: redactor bypassed; and, per shape, that
     shape's pattern dropped.
+
 03. **Resource fence:** an eval allocating 16Gi dies OOM in its own pod, and the node stays Ready.
     Mutant: the limit removed (run on a disposable node only).
+
 04. **IFD gate:** an IFD eval is refused on the untrusted path and admitted on the trusted one.
     This tests the path; oracle 10 tests who may open it.
+
 05. **Forced escalation:** a hard trigger escalates with no 🔍.
+
 06. **Thread isolation:** a fact planted in thread A is absent from thread B's session.
+
 07. **Broker custody:** no process except the broker can read the `genie-bot` token; a proposal
     that fails guard-out is never acted on. Mutant: the broker skips guard-out.
+
 08. **No secret requests:** across a corpus of secret-blocked evals, no reply asks the user for a
     secret, and each one either works around the secret or names it as a blocker.
+
 09. **Resume:** a thread resumed within 96h re-runs no eval whose cache key matches. Mutant: cache
     bypassed.
+
 10. **Trust clamp:** a public thread whose tier 1 emits `trusted: true` gets an untrusted Job (no
     IFD, no builders, no builder key); a trusted thread with the request set gets a trusted one.
     Mutant: the launcher reads the model's flag alone.
+
 11. **Thread tier:** a thread whose first message is from a public sender is public from that
     message; a trusted thread into which a public sender's text enters becomes public and stays
     public. Both are read from the raw envelope, before guard-in. Mutants: the tier is the
     originator's; the trigger line's tag hard-coded `trusted`.
+
 12. **Poisoned history:** guard-in rejects or rewrites an injection carried in a thread-history
     line, not only in the latest message. Mutant: guard-in sees the latest message only.
+
 13. **Eval egress:** from an eval Job, an allowlisted host is reachable and a non-allowlisted one
     is not. Mutant: the egress policy removed.
+
 14. **Eval purity:** a fixture flake reading `builtins.getEnv`, `<nixpkgs>` or a path outside its
     inputs fails. Mutant: `pure-eval = false` (deleting the flag does not go red).
+
 15. **Eval serialization:** two eval requests on one thread produce non-overlapping Jobs. Mutant:
     no per-thread lock.
+
 16. **Mirror fence:** a fetch past the per-repo cap is aborted and leaves no mirror; filling past
     the quota evicts the least recently used mirror. Mutant: no cap; no eviction.
+
 17. **Expert isolation**, four arms, each with its own unit: (a) a marker planted in sini's memory
     is unreadable from `genie-expert@public`, and each instance's mount table holds exactly one
     memory view; (b) a marker in an ignored file of an owner checkout, and a file of a private
@@ -538,35 +589,45 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
     (d) a public thread's package goes to `@public` whatever the package says. Mutants:
     `@public` mounts the private view; `@public` mounts an owner working tree; `PrivateTmp` off;
     route by a package field.
+
 18. **Escalation guard:** an injection carried in `eval_transcript` is rejected or rewritten
     before the package leaves the pod. Mutant: the package sent unguarded.
+
 19. **Seed guard:** an injection in a recalled bank entry or a replayed transcript passes guard-in
     before it seeds a session. Mutant: seed directly.
+
 20. **Admission:** nothing enters the genie hindsight bank or the support memory without a human
     approval. A deterministic check can refuse a candidate and cannot admit one, and no model
     process can admit. Mutants: auto-admit; the deterministic check alone admits.
+
 21. **Public admission:** with the admission option off, a public sender is dropped silently (as
     today); on, the message is passed with every line from that sender tagged `public`, the
     trigger line included; a trusted sender is tagged `trusted`. Mutants: every sender tagged
     `trusted`; the trigger line's tag hard-coded `trusted`.
+
 22. **Untrusted Job mounts:** a rendered Job of effective trust untrusted mounts exactly the repo
     source (read-only), the thread store and the scratch `emptyDir`, and no Secret. Mutant: the
     thread-state volume added.
+
 23. **Trusted Job mounts:** a rendered Job of effective trust trusted mounts those three plus the
     builder-key Secret, read-only. Mutants: the key omitted; the key mounted regardless of trust
     (oracle 22 goes red).
+
 24. **Dispatcher core:** a second escalation of a parked thread launches with `--resume` and the
     uuid of its first launch, under the same token's config directory, including after the
     dispatcher is killed and restarted between the two. Mutants: always start fresh; an in-memory
     map.
+
 25. **Blocked expert reply:** a marker in an `@trusted` reply that guard-out blocks is absent from
     the thread's later `@public` package, its draft and its replay, after the thread's tier falls.
     The fixture carries real content through the pod's round trip, not a contentless fake.
     Mutant: the blocked reply retained in tier 1's context.
+
 26. **Expert park and GC:** with a fake clock, a thread with an outstanding message is never parked;
     with none, it is parked at the idle threshold after its last reply and stays resumable; at 95h
     idle it is kept, and at 96h it is handed to the archiver and gone. Mutants: never park; a TTL
     of 97h.
+
 27. **Token pool:** a thread stays on the token it started on; a pinned token that is exhausted or
     removed answers "expert unavailable"; an exhausted token is selectable again after a turn at or
     after its reset succeeds; with no token available, a new thread gets "expert unavailable"; the
@@ -574,6 +635,7 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
     before the owner's. Mutants: move the thread to another pool token; never re-admit after a
     reset; a removed pin keeps serving; no cap. Falling back to another tier's token is not a unit
     mutant, because the dispatcher holds only its own tier's pool; I10.3 guards it.
+
 28. **Dispatcher delivery:** a message sent to a parked thread is buffered, delivered after the
     resumed uuid is listed by xmsg, and answered; two buffered messages and one arriving during the
     resume are delivered in order; a send within 1 s of a reply is never lost to a park; a retried
@@ -581,12 +643,32 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
     relays the reply; a turn with no reply within the timeout ends "expert unavailable". Mutants:
     forward to the parked uuid and drop on 404; deliver at `--resume` rc 0; park on herdr `idle`;
     retry without the key; an in-memory buffer.
+
 29. **Bus fence:** from an `@public` thread session, through Bash and through its xmsg MCP, a
     connection to `@trusted`'s or `sini`'s xmsg socket is refused, and the MCP lists only `reply`.
-    Positive control: the same session's reply over its own instance arrives. Mutants: the uid check
-    removed; the MCP not in reply-only mode.
+    Positive control: the same session's reply over its own instance arrives. One mutant per layer
+    (gate r2 G1), because the filesystem modes refuse before the uid check runs:
+
+    - **directory:** `xmsg/` at 0711 with the socket at 0666 and the uid check present ⇒ still
+      refused (the uid check alone holds);
+    - **socket and directory relaxed, uid check removed** ⇒ RED;
+    - **uid check:** at unit level (X8), a foreign peer is built by injecting a server uid that
+      differs from the caller's, so the kernel admits the connection and only the peer-cred check
+      can refuse it. Mutant: skip the check ⇒ RED;
+    - **MCP:** not in reply-only mode ⇒ `tools/list` holds more than `reply` ⇒ RED.
+
+    It also has two further cells:
+
+    - **TCP** (gate r2 G2): on bitstream, `ss -ltnp` shows no xmsg process holding a listening TCP
+      socket other than its federation listener, for every instance unit. Mutant: X8's TCP flag on
+      `@trusted`'s instance ⇒ RED;
+    - **within a tier** (gate r2 G5): from the session's Bash, the tier's `http.sock`, `agent.sock`,
+      `register.sock` and `herdr.sock` are each refused while the MCP reply arrives. Mutant: the
+      deny dropped ⇒ RED.
+
 30. **Token custody:** from an `@public` thread session on token A, the bytes of pool token B and of
     token A are unreadable through Bash and Read. Mutant: the deny narrowed to one file.
+
 31. **Expert archive custody:** no `genie-<tier>` unit's credential set holds an S3 key, and an
     `@trusted` expert transcript is written to `genie-expert-trusted` only, never to
     `genie-transcripts`. Mutants: the key in the `@public` dispatcher's unit; the `@trusted`
@@ -669,3 +751,13 @@ Dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo)
 | P1 transcripts within a tier           | §5.8 Within a tier: the tools are denied every config directory's `projects/`.                                                                                                                                                                             |
 | P2 the redactor's hash match           | §5.2 layer 6: pool tokens are matched by shape only.                                                                                                                                                                                                       |
 | P3 herdr's remote classifier           | §5.8 Prerequisites: the manifest is pinned per tier (I10.2).                                                                                                                                                                                               |
+
+Dispatcher gate, second contact (`reports/genie-dispatcher-design-gate-r2.md` (private design repo)):
+
+| condition                             | resolved in                                                                                                                                                                                          |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 the uid-check mutant cannot go red | Oracle 29: one mutant per layer; X8's unit cell injects the server uid. Units X8, I16.                                                                                                               |
+| G2 no TCP cell                        | Oracle 29's TCP cell (`ss -ltnp`), and I16 renders no TCP flag on any tier instance.                                                                                                                 |
+| G3 the runtime directory              | §5.8 Topology: `/run/xmsg-<tier>`, owned by `xmsg@<tier>` through `RuntimeDirectory=`, set explicitly in all three units. Unit I16.                                                                  |
+| G4 co-hosted fed listeners            | §5.8 Topology: ports 7788/7789/7790, each node key an agenix secret owned by its user at 0400, and denied to the tools. Unit I16.                                                                    |
+| G5 same-uid sockets within a tier     | §5.8 Within a tier: the xmsg runtime directory and the herdr session directory denied to Bash and Read; oracle 29's within-tier cell; X9 refuses a second live `svc:` registration. Units I10.2, X9. |
