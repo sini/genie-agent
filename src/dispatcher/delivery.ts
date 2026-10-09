@@ -48,7 +48,7 @@ export class Delivery {
       readyTimeoutMs: 30_000,
       readyPollMs: 250,
       replyTimeoutMs: 15 * 60_000,
-      idleMs: 10 * 60_000,
+      idleMs: 60 * 60_000, // the owner's 1 h live window after the last response (design row 21)
       sendAttempts: 3,
       now: Date.now,
       threadOf: packageThread,

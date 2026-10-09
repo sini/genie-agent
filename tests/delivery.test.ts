@@ -217,6 +217,19 @@ cell("a send within 1 s of a reply is never lost to a park", async (s) => {
   assert.equal(del.parkable("t"), true, "not parkable at the idle threshold");
 });
 
+cell("a live thread is parkable one hour after its last reply and not before", async (s) => {
+  const { del } = await s.boot({ now: s.now });
+  s.msg("m1", "t:one");
+  await del.pump(0);
+  await until("delivery", () => s.x.deliveries.length === 1);
+  s.x.answer(1, "a1");
+  await until("reply", () => s.x.relayed.length === 1);
+  s.tick(59 * 60_000);
+  assert.equal(del.parkable("t"), false, "parkable at 59 min");
+  s.tick(60_000);
+  assert.equal(del.parkable("t"), true, "not parkable at 60 min");
+});
+
 cell("a retried send with the same key yields one turn", async (s) => {
   const { del } = await s.boot();
   s.x.lose = 1;
