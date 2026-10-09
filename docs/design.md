@@ -13,6 +13,9 @@ ACCEPT-WITH-CHANGES, R1–R7), mapped in §12 as well._
 _Revision 4, 2026-10-08: adds the expert-tier dispatcher (§5.8) on two owner rulings, rows 14 and
 15, and folds the D0 herdr spike (`reports/genie-d0-herdr-spike.md` (private design repo)), which measured it._
 
+_Revision 5, 2026-10-08: folds the dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo),
+REJECT, F1–F10, P1–P3) on four owner rulings, rows 16–19; §12 maps each finding._
+
 ## 1. Purpose
 
 `@genie` answers den/gen/Nix support questions in Matrix rooms, including public ones. It is a
@@ -27,23 +30,27 @@ Kubernetes, and the frontier tier stays on a workstation as the users `genie-pub
 
 ## 2. Rulings
 
-| #   | question                             | ruling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | What "evaluate a config" means       | **Eval only.** `nix eval` / `flake check --no-build`. We don't compile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 2   | Tier-1 model                         | Qwen 3.8 27B on ninfer (`cortex-cuda`). The design uses the measured **145,408-token shared pool** (`nix-config modules/den/hosts/cortex-cuda.nix`, `maxContext`). The model, window and concurrency are **configuration**: a migration to Qwen 3.8 35B-A3B MoE (~1.5M context, or ~5 parallel agents) changes only numbers.                                                                                                                                                                                                                                                                           |
-| 3   | Where tier 1 runs                    | **A k8s pod** (axon, ns `matrix`) beside matrix-xmsg and the xmsg leaf. cortex and bitstream are reserved for the Opus tier.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 4   | Frontier tier's access               | **A dedicated `genie` user, plus an approval channel.** It has read-only access to sini's `~/.claude` memories and the checkouts. Any action needing credentials becomes a proposal to sini.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 5   | Frontier tier's credential           | genie's **own** `claude setup-token` token (revocable on its own), not sini's credential file, which the tools cannot read. The owner added an LLM review layer (row 6) on top of this. *Defaulted, reversible.* Amended by row 15: the credential is a per-tier pool of subscription tokens.                                                                                                                                                                                                                                                                                                          |
-| 6   | Injection defence                    | **A separate guard agent** reviews and reformats every inbound message and reviews every outbound answer. It runs on the **local Qwen** (the owner rates it at ~Opus 4.5–4.6), in separate sessions, in both directions.                                                                                                                                                                                                                                                                                                                                                                               |
-| 7   | When to escalate                     | **Hard triggers force it; otherwise self-assessed confidence decides.** The self-assessment is **shown with the answer**, and the asker can **accept** or **request a deeper evaluation**.                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 8   | Session lifetime                     | **Per thread**, destroyed after acceptance or 24h idle. Accepted Q&A is distilled into a **dedicated genie hindsight bank**, with review before admission.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 9   | Eval sandbox                         | **One k8s Job per eval under gVisor** (`runtimeClassName: gvisor`), limits **12Gi / 2 cores**. **IFD** is off by default and allowed as a **trusted override**.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 10  | Trusted IFD builds                   | Go to **remote builders**, including **uplink** (24 threads, 128GB), as a dedicated build user. *Hardening defaulted, reversible* (§5.4).                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 11  | Repo boundary                        | **genie-agent owns the agent, nix-config owns the deployment** (the matrix-xmsg pattern). The future target, once den runs on gen and gen-link exists, is for the repo to ship its own k8s shape.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 12  | Who builds                           | **Claude (Opus) gen-build agents.** Prompts and skills are critically reviewed against `writing-for-agents` and the existing quality skills. agy stays on xmsg and matrix-xmsg.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 13  | Expert memory by tier (gate F2)      | **Trusted senders:** the expert reads sini's private memory; the risk is accepted, and trusting the user is the operational cost. **Public senders:** the expert reads only a curated, pre-redacted support memory, maintained separately, which also keeps the agent focused on the classes of task at hand. The authenticated sender tier selects the view, never a model, and the two views are never co-mounted. The gate's two fixes apply in both cases: the escalation package is guarded before Opus ingests it, and the redactor is a backstop. Realised in §5.1, §5.2 layer 5 and §4 step 6. |
-| 14  | Expert lifecycle (owner, 2026-10-08) | **Option (c), on herdr, with no `claude -p`.** Each escalated thread is its own **interactive** Claude Code session in a pane of a per-tier herdr session, run as `genie-<tier>`. A small resident **dispatcher** per tier maps `thread_id` → Claude session id. Messages travel over xmsg; herdr does only the lifecycle: start, park (close the pane on idle) and resume (`--resume` in a new pane). **The tier only ever drops:** a thread that falls from trusted to public is never resumed in `@trusted`; it starts fresh in `@public`, seeded only with the guarded package. Realised in §5.8.  |
-| 15  | Expert tokens (owner, 2026-10-08)    | **Subscription tokens only, never API keys.** When a token's quota runs out, that tier stops answering ("expert unavailable"), with **no fallback**. Each tier has a **token pool**: each contributor's subscription token is its own agenix secret; adding the file shares it, and `git rm` stops it. A thread is **pinned** to the token it started on (`--resume` needs that account's transcripts). Contributor tokens feed the **public** tier only; the owner's token serves `@trusted`. Contributors are told their quota answers public questions. Realised in §5.8.                           |
+| #   | question                                                                | ruling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | What "evaluate a config" means                                          | **Eval only.** `nix eval` / `flake check --no-build`. We don't compile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 2   | Tier-1 model                                                            | Qwen 3.8 27B on ninfer (`cortex-cuda`). The design uses the measured **145,408-token shared pool** (`nix-config modules/den/hosts/cortex-cuda.nix`, `maxContext`). The model, window and concurrency are **configuration**: a migration to Qwen 3.8 35B-A3B MoE (~1.5M context, or ~5 parallel agents) changes only numbers.                                                                                                                                                                                                                                                                                          |
+| 3   | Where tier 1 runs                                                       | **A k8s pod** (axon, ns `matrix`) beside matrix-xmsg and the xmsg leaf. cortex and bitstream are reserved for the Opus tier.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 4   | Frontier tier's access                                                  | **A dedicated `genie` user, plus an approval channel.** It has read-only access to sini's `~/.claude` memories and the checkouts. Any action needing credentials becomes a proposal to sini.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 5   | Frontier tier's credential                                              | genie's **own** `claude setup-token` token (revocable on its own), not sini's credential file, which the tools cannot read. The owner added an LLM review layer (row 6) on top of this. *Defaulted, reversible.* Amended by row 15: the credential is a per-tier pool of subscription tokens.                                                                                                                                                                                                                                                                                                                         |
+| 6   | Injection defence                                                       | **A separate guard agent** reviews and reformats every inbound message and reviews every outbound answer. It runs on the **local Qwen** (the owner rates it at ~Opus 4.5–4.6), in separate sessions, in both directions.                                                                                                                                                                                                                                                                                                                                                                                              |
+| 7   | When to escalate                                                        | **Hard triggers force it; otherwise self-assessed confidence decides.** The self-assessment is **shown with the answer**, and the asker can **accept** or **request a deeper evaluation**.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 8   | Session lifetime                                                        | **Per thread**, destroyed after acceptance or 24h idle. Accepted Q&A is distilled into a **dedicated genie hindsight bank**, with review before admission.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 9   | Eval sandbox                                                            | **One k8s Job per eval under gVisor** (`runtimeClassName: gvisor`), limits **12Gi / 2 cores**. **IFD** is off by default and allowed as a **trusted override**.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 10  | Trusted IFD builds                                                      | Go to **remote builders**, including **uplink** (24 threads, 128GB), as a dedicated build user. *Hardening defaulted, reversible* (§5.4).                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 11  | Repo boundary                                                           | **genie-agent owns the agent, nix-config owns the deployment** (the matrix-xmsg pattern). The future target, once den runs on gen and gen-link exists, is for the repo to ship its own k8s shape.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 12  | Who builds                                                              | **Claude (Opus) gen-build agents.** Prompts and skills are critically reviewed against `writing-for-agents` and the existing quality skills. agy stays on xmsg and matrix-xmsg.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 13  | Expert memory by tier (gate F2)                                         | **Trusted senders:** the expert reads sini's private memory; the risk is accepted, and trusting the user is the operational cost. **Public senders:** the expert reads only a curated, pre-redacted support memory, maintained separately, which also keeps the agent focused on the classes of task at hand. The authenticated sender tier selects the view, never a model, and the two views are never co-mounted. The gate's two fixes apply in both cases: the escalation package is guarded before Opus ingests it, and the redactor is a backstop. Realised in §5.1, §5.2 layer 5 and §4 step 6.                |
+| 14  | Expert lifecycle (owner, 2026-10-08)                                    | **Option (c), on herdr, with no `claude -p`.** Each escalated thread is its own **interactive** Claude Code session in a pane of a per-tier herdr session, run as `genie-<tier>`. A small resident **dispatcher** per tier maps `thread_id` → Claude session id. Messages travel over xmsg; herdr does only the lifecycle: start, park (close the pane on idle) and resume (`--resume` in a new pane). **The tier only ever drops:** a thread that falls from trusted to public is never resumed in `@trusted`; it starts fresh in `@public`, seeded only with the guarded package. Realised in §5.8.                 |
+| 15  | Expert tokens (owner, 2026-10-08)                                       | **Subscription tokens only, never API keys.** When a token's quota runs out, that tier stops answering ("expert unavailable"), with **no fallback**. Each tier has a **token pool**: each contributor's subscription token is its own agenix secret; adding the file shares it, and `git rm` stops it. A thread is **pinned** to the token it started on (`--resume` needs that account's transcripts). Contributor tokens feed the **public** tier only; the owner's token serves `@trusted`. Contributors are told their quota answers public questions. Realised in §5.8.                                          |
+| 16  | The owner's token in `@public` (owner, 2026-10-08; was open question 4) | **Yes, under a daily cap.** The owner's token also serves `@public`, up to a daily cap on public escalations (a small default, a typed setting). Past the cap, `@public` answers "expert unavailable" until the daily reset. Contributor tokens are preferred when present. The dispatcher counts per token per day (D4b).                                                                                                                                                                                                                                                                                            |
+| 17  | Config directory (owner, 2026-10-08; was open question 5)               | **One `CLAUDE_CONFIG_DIR` per token.** The pin holds by storage, and a contributor's account never holds another contributor's transcripts. xmsg discovers Claude sessions from several session directories (X7). The directory carries `.claude.json`, so workspace trust and onboarding are per directory too.                                                                                                                                                                                                                                                                                                      |
+| 18  | The xmsg bus on a shared host (owner, 2026-10-08; gate F1)              | **xmsg's HTTP API moves off loopback TCP onto a per-user unix socket** (0600, a peer-cred uid check: the `agent.sock`/`register.sock` pattern). Each OS user (`genie-public`, `genie-trusted`, `sini`) runs its own xmsg instance, so a process reaches only its own user's bus, and **the tier fence holds by construction**, with no network namespace and no nftables rule. Tier expert sessions get a **reply-only** xmsg MCP mode (no `list`, no `send`). Only pinned, allow-listed federation links cross tiers or hosts. The k8s pod's in-pod loopback stays: it is a private network namespace. xmsg unit X8. |
+| 19  | The dispatcher's xmsg identity (owner, 2026-10-08; was open question 3) | **Arm (a): a `svc:` daemon harness kind.** The dispatcher registers on its own user's `register.sock`, attested by a trusted executable and the peer uid, as agy is. xmsg unit X9.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## 3. Components and flow
 
@@ -69,7 +76,7 @@ that re-enters a model context from storage or from an eval passes guard-in firs
   `genie-expert@public`, each its own OS user with its own memory view and repository set (§5.2
   layer 5). Each instance is a resident **dispatcher** that receives the escalation package over
   xmsg federation and runs one interactive Claude Code session per thread in its tier's herdr
-  session (row 14, §5.8).
+  session (rows 14–19, §5.8).
 - **distiller**: after an accept, it proposes a hindsight entry into the review queue.
 - **support-memory curator**: maintains the pre-redacted support memory that
   `genie-expert@public` reads (row 13), `support-memory/` in `genie-agent`. Its changes are PRs,
@@ -111,6 +118,9 @@ that re-enters a model context from storage or from an eval passes guard-in firs
    attacker-influenced text (eval stdout). The supervisor then sends it over xmsg to the expert
    instance the thread's tier selects, `genie-expert@trusted` or `genie-expert@public`. Its answer
    returns through guard-out and the redactor and is posted in the thread, marked "expert review".
+   An expert reply that guard-out blocks is **dropped** from tier 1's context and from the thread
+   transcript, and archived with a tier label only. It never enters a later package, draft or
+   replay.
 7. **Close.** On ✅, or after 24h idle, the transcript is archived and the session destroyed. On ✅
    the distiller proposes a hindsight entry. Admission needs a **human approval**. Deterministic
    checks (credential shapes, known secret bytes, planted markers) run first and may only refuse;
@@ -125,6 +135,9 @@ that re-enters a model context from storage or from an eval passes guard-in firs
 - The thread's pinned token, or every token in its tier's pool for a new thread, is out of quota:
   the asker is told the expert is unavailable. Nothing falls back to another token or tier (row
   15).
+- The dispatcher or the herdr server is down, or an expert turn passes its reply timeout: the
+  asker is told the expert is unavailable. The dispatcher's journal survives its restart, and the
+  panes survive a dispatcher restart (§5.8).
 - An eval hits a limit: tier 1 reports which limit was hit, as a finding.
 
 **Latency (accepted cost, *defaulted, reversible*).** ninfer's pool is shared (`maxConcurrency = 4`) and prefill is serialized. A request spends three sessions in series (guard-in, tier 1,
@@ -199,16 +212,21 @@ prose.
      reversible* (gate R2);
    - **Writable set:** an allowlist per instance, `ProtectSystem=strict`, `PrivateTmp=true` and
      `ReadWritePaths` = its own home only, so nothing one tier writes is readable by the other;
-   - its tier's token pool (row 15, §5.8), each token its own agenix secret, root-owned and read
-     only by systemd (`LoadCredential`), exported to the thread's session as
-     `CLAUDE_CODE_OAUTH_TOKEN`, with the
-     tools denied read of the secret path and of `/proc/*/environ` (Claude Code's bubblewrap
-     sandbox);
-   - no ssh agent, gh, kube or agenix identity.
+   - its tier's token pool (rows 15–17, §5.8), each token its own agenix secret, root-owned and
+     read only by systemd (`LoadCredential`). Each pane gets only its own token, as
+     `CLAUDE_CODE_OAUTH_TOKEN`. The tools are denied the whole credentials directory, every
+     per-thread token directory, `/run/agenix.d/**`, `/proc/*/environ` and every config
+     directory's `projects/`, through both Bash and Read (Claude Code's bubblewrap sandbox and its
+     permission deny);
+   - **Bus:** its own xmsg instance on a per-user unix socket, and a reply-only xmsg MCP in each
+     session (row 18). No link joins the two tiers' nodes;
+   - no ssh agent, gh, kube, agenix or S3 identity. The expert archive's key is held by the
+     archiver alone (§6).
 6. **Output:** guard-out runs, then a deterministic redactor (credential-shaped patterns plus a
    hash match against known secret files), and only then does anything post. The shapes it
    matches are those of the credentials in scope: the Matrix access token, every pool token
-   (`CLAUDE_CODE_OAUTH_TOKEN`), the `genie-bot` fine-grained PAT (`github_pat_…`), the xmsg leaf
+   (`CLAUDE_CODE_OAUTH_TOKEN`, by shape only: the pod does not hold the pool tokens, so it has no
+   hash of them), the `genie-bot` fine-grained PAT (`github_pat_…`), the xmsg leaf
    ed25519 key material, and the Longhorn and Garage S3 keys.
 
 ### 5.3 Trusted IFD
@@ -259,62 +277,173 @@ eval, tier 1 works around it first, by stubbing the agenix/sops paths or substit
 values for the secret attributes in the eval. If no workaround exists, it says plainly that the
 secret blocks the eval and what it would have checked.
 
-### 5.8 The expert dispatcher (rows 14 and 15)
+### 5.8 The expert dispatcher (rows 14–19)
 
-Each tier runs one resident **dispatcher** as `genie-<tier>`, and it is what the address
-`genie-expert@<tier>` names. It holds the map `thread_id → {session uuid, token, live|parked}` and
-drives the tier's own herdr session. Messages travel only over xmsg; herdr does only the lifecycle.
-The D0 spike measured the mechanism (`reports/genie-d0-herdr-spike.md` (private design repo): herdr 0.9.3, Claude Code
-2.1.292 and xmsg 0.1.0 on cortex), and each step names the spike question that measured it.
+Each tier runs one resident **dispatcher** as `genie-<tier>`. It is the principal
+`svc:genie-expert` on that tier's own xmsg instance (row 19), which is what the supervisor
+addresses as the tier's expert. It holds the map `thread_id → {session uuid, token, live|parked}`
+and the per-thread buffers, and it drives the tier's own herdr session. Messages travel only over
+xmsg; herdr does only the lifecycle. The D0 spike measured the mechanism
+(`reports/genie-d0-herdr-spike.md` (private design repo): herdr 0.9.3, Claude Code 2.1.292 and xmsg 0.1.0 on cortex, run
+as `sini`), and each step names the spike question that measured it. What D0 did not measure,
+because it ran as `sini`, is listed under Prerequisites and measured by I10.2.
 
-- **Server** (Q2). `setsid herdr --session <tier> server` runs headless, with no client and no TTY.
-  `herdr --session <tier> status` does not start a server. Every herdr command passes `--session <tier>` and runs with `HERDR_SOCKET_PATH` and the pane, tab and workspace variables unset;
-  otherwise it reaches whatever session the environment names.
-- **Launch** (Q1, Q3). The dispatcher mints a uuid first, then runs `herdr --session <tier> pane split … --cwd <tier cwd>` and `herdr --session <tier> agent start <n> --kind claude --pane <pane> -- -n <name> --session-id <uuid> [--model …]`. The uuid is the xmsg `sessionId`, the `--resume`
-  key and the transcript name at once, so the dispatcher holds the address before the process
-  exists and never discovers it. xmsg listed the session about 3 s after the start.
-- **Talk** (Q4, Q5). The dispatcher forwards the guarded package to the thread's session over xmsg
-  and relays the session's reply as its own reply to the supervisor's message. **The end of a turn
-  is the xmsg reply**, read by long-polling `/v1/messages/{id}/replies?wait=…`. herdr state
-  (`working`, `idle`, `blocked`) is only the liveness watchdog: a bare `herdr agent wait` returns
-  at once on an idle session, and the server needs about 1 s to see a turn start, so it can return
-  before the turn begins. Messages sent during a turn queue in Claude Code and are answered in
-  order.
-- **Park and resume** (Q6). On idle, `pane close` parks the thread: the process exits and its xmsg
-  row disappears. On demand, `agent start … -- --resume <uuid>` in a new pane brings back the same
-  `sessionId`, the same name and the conversation. A send to a parked thread returns 404
-  `not_found` and is not queued, so **the dispatcher buffers it**, resumes the thread and then
-  delivers. The idle threshold is configuration (*defaulted, reversible*). After 96h idle the
-  transcript is archived and the entry dropped (§6), and a later escalation of that thread starts
-  fresh from its package.
-- **Tier drop** (row 14). Each tier's dispatcher holds only its own map, under its own uid. A thread
-  that falls from trusted to public is routed to `@public` by the thread's tier (C6, §5.1), and
-  `@public` has never seen it, so it starts fresh, seeded only with the guarded package. The tier
-  never rises, so the thread never returns to `@trusted`.
-- **Tokens** (row 15). Every pool token is its own agenix secret, given to the tier's dispatcher by
-  `LoadCredential`. A new thread takes a token with quota left (*selection defaulted, reversible*)
-  and keeps it. When the thread's token is exhausted, or when every token in the pool is exhausted
-  for a new thread, the dispatcher replies "expert unavailable"; no thread moves to another token
-  or another tier's token. A token reaches the session through `$CREDENTIALS_DIRECTORY` and the
-  environment, never through an argv: a `pane split --env` argument would sit in the herdr
-  client's `/proc/<pid>/cmdline`, which the same uid can read. That channel through the herdr
-  server and into the pane is derived, not measured in D0. How exhaustion shows (screen state,
-  error text) was not measured either; D4 measures both before its cell is written. Open question
-  5 covers the config directory a token runs under.
-- **Prerequisites** (Q7), owned by nix-config:
-  - the tier's cwd is pre-trusted. In an untrusted cwd, `agent start` stops on the workspace-trust
-    dialog (`agent_not_ready`, launch blocked; measured red), and answering it by keys would have
-    the dispatcher write `~/.claude.json` at runtime;
-  - the cwd is a slim directory chosen for the tier, and `--model` is set per tier (*defaulted,
-    reversible*). A fresh session in a `den-ag-design` cwd started at 59,167 tokens (6.0%) on
-    Opus 5.5, all of it CLAUDE.md, memory and hooks, and every thread would pay that baseline.
-- **A `blocked` pane mid-turn** (a permission prompt, which D0 did not exercise) fails the turn as
-  "expert unavailable" and parks the thread (*defaulted, reversible*). Nobody can answer the prompt.
-- **herdr's claude hook** reports outdated (v7 < v10). State detection scrapes the screen and does
-  not depend on it (Q1), so the dispatcher does not either.
-- **Rejected:** `claude -p` per message (row 14); API keys (row 15); a fallback to another token or
-  tier when quota runs out (row 15); a single resident session per tier, which is I10's tmux
-  instance, because it mixes every thread of a tier into one context (oracle 6).
+**Topology (rows 18 and 19).** bitstream hosts three xmsg nodes, one per OS user:
+`genie-public@bitstream`, `genie-trusted@bitstream` and `sini@bitstream`.
+
+- Each instance serves its HTTP API only on `$XDG_RUNTIME_DIR/xmsg/http.sock` (mode 0600, a
+  peer-cred check that the peer's uid is the server's), the `agent.sock`/`register.sock` pattern,
+  and binds no TCP socket (X8). A process reaches only its own user's bus, so the tier fence
+  holds by construction, with no network namespace and no nftables rule.
+- Each tier instance discovers Claude sessions from every per-token config directory of its
+  tier (`--sessions-dir` per directory, X7), and its dispatcher registers on its own
+  `register.sock` as `svc:genie-expert`, attested by a trusted executable and the peer uid (X9;
+  the `svc` harness of `xmsg-federation-design.md` (private design repo) §3.2, given an inbox).
+- The thread sessions load the xmsg MCP in **reply-only** mode (`xmsg mcp --reply-only`, X8): no
+  `list`, no `send`.
+- Federation links (`xmsg-links`, federation plan §6.1) re-cut the one link to `genie@bitstream`
+  into two: `genie(leaf) → genie-public@bitstream : send` and `genie(leaf) → genie-trusted@bitstream : send`, each with principal `svc:genie-expert` only. The dispatcher's
+  reply returns on the federation reply route (`POST /fed/v1/replies`, target → origin), which
+  this design does not change. No link joins the two tier nodes, or either of them to `sini@*`.
+- The pod's in-pod loopback stays as it is: it is a private network namespace (federation plan
+  §6.3).
+
+**Units.** The herdr server runs in its own unit per tier, `genie-herdr@<tier>`, and the
+dispatcher in another, `genie-dispatcher@<tier>`. A change to the token pool restarts only the
+dispatcher's unit, because `LoadCredential=` is read once at start and cannot be reloaded in place.
+The panes live in the herdr unit's cgroup and survive. Each live pane keeps the token it started
+with until it parks.
+
+**State (gate F2).** The map, the per-thread buffers, the token states and the outstanding
+message ids are a journal under the tier's home. A message is journalled before the dispatcher
+acknowledges it to xmsg, and X9's long-poll advances its cursor only on that acknowledgement. On
+start, the dispatcher reconciles the journal against `herdr agent list` and xmsg's session list,
+marks any thread whose pane is gone as parked, and re-arms the reply long-poll for every
+outstanding message id.
+
+**Server** (Q2). `setsid herdr --session <tier> server` runs headless, with no client and no TTY.
+`herdr --session <tier> status` does not start a server. Every herdr command passes `--session <tier>` and runs with `HERDR_SOCKET_PATH` and the pane, tab and workspace variables unset;
+otherwise it reaches whatever session the environment names.
+
+**Launch** (Q1, Q3). The dispatcher picks the thread's token, mints a uuid and journals both. It
+then runs `herdr --session <tier> pane split … --cwd <tier cwd>` and `herdr --session <tier> agent start <n> --kind claude --pane <pane> -- -n <name> --session-id <uuid> [--model …]` through the
+token shim (below), under the token's own `CLAUDE_CONFIG_DIR` (row 17). The uuid is the xmsg
+`sessionId`, the `--resume` key and the transcript name at once, so the dispatcher holds the
+address before the process exists and never discovers it. xmsg listed the session about 3 s after
+the start.
+
+**Talk** (Q4, Q5; gate F4).
+
+- The dispatcher forwards the guarded package to the thread's session over its own instance, and
+  relays the session's reply as its own reply to the supervisor's message.
+- **The end of a turn is the xmsg reply**, read by long-polling `/v1/messages/{id}/replies?wait=…`.
+  herdr state (`working`, `idle`, `blocked`) is only the liveness watchdog. A bare `herdr agent wait` returns at once on an idle session, and the server needs about 1 s to see a turn start, so
+  it can return before the turn begins.
+- **Delivery is at most once.** Every send carries an idempotency key, the supervisor's message id
+  plus a sequence number (X10). A send is retried only with the same key, so a POST whose response
+  was lost does not deliver twice.
+- **Readiness.** A session is ready when xmsg lists its uuid, with a bounded wait (configuration,
+  *defaulted, reversible*). D0 Q6 saw the row after `agent start --resume` returned rc 0, but did
+  not measure that registration precedes rc 0, so rc 0 is not the signal.
+- **Order.** Each thread's buffer is FIFO. A message that arrives during a resume queues behind
+  the buffer, and the buffer drains in order once the session is ready. Messages sent during a
+  turn queue in Claude Code and are answered in order (Q4).
+- **Reply timeout.** A turn with no reply within the reply timeout (configuration, *defaulted,
+  reversible*) ends as "expert unavailable". A later reply to that message is dropped, not posted.
+
+**Park and resume** (Q6; gate F4).
+
+- **Park predicate:** no outstanding message without a reply, and the idle threshold has elapsed
+  since the last reply. herdr's `idle` state alone never parks, because a session reads `idle` for
+  about 1 s after a send (Q5). The idle threshold is configuration (*defaulted, reversible*).
+- Parking is `pane close`: the process exits and its xmsg row disappears.
+- On demand, `agent start … -- --resume <uuid>` in a new pane, under the thread's token, brings back
+  the same `sessionId`, the same name and the conversation.
+- A send to a parked thread returns 404 `not_found` and is not queued, so **the dispatcher buffers
+  it**, resumes the thread, waits for readiness and then delivers.
+- At **96h** idle, the transcript goes to the archiver (§6), and the entry and the transcript leave
+  the tier's home. A later escalation of that thread starts fresh from its package.
+
+**Tier drop** (row 14; gate F5). Each tier's dispatcher holds only its own map, under its own uid,
+on its own bus. A thread that falls from trusted to public is routed to `@public` by the thread's
+tier (C6, §5.1), and `@public` has never seen it, so it starts fresh, seeded only with the guarded
+package. The tier never rises, so the thread never returns to `@trusted`. The pod round trip is the
+other route, and it is closed separately: an `@trusted` reply that guard-out blocks is **dropped**
+from tier 1's context and from the thread transcript, and archived with a tier label only, so it
+never enters a later package, draft or replay (§4 step 6).
+
+**Tokens** (rows 15–17; gate F3, F7).
+
+- Every pool token is its own agenix secret, given to the tier's dispatcher by `LoadCredential`.
+  `@trusted`'s pool is the owner's token. `@public`'s pool is the contributors' tokens plus the
+  owner's token under its daily cap (row 16). Each token in each tier has its own config directory
+  under that tier's home (row 17), so the owner's token in `@public` never shares a directory with
+  the owner's token in `@trusted`.
+- **Selection.** A new thread takes an `available` contributor token when one exists (*selection
+  among them defaulted, reversible*), and otherwise the owner's token while its daily count of
+  public escalations is under the cap. The thread keeps the token it started on.
+- **States:** `available`, `exhausted-until(t)` and `removed`. Quota is not queryable in advance,
+  so a token becomes `exhausted-until(t)` when a turn shows exhaustion (its appearance is measured
+  by D4a), with `t` the reset the exhaustion reports. It becomes `available` again only when a turn
+  at or after `t` succeeds; the reset is observed, never assumed. A token whose secret has left the
+  pool is `removed`.
+- **Unavailable, with no fallback.** A thread whose pinned token is `exhausted` or `removed`, and a
+  new thread when no token is `available` (the owner's cap counts), gets "expert unavailable". No
+  thread moves to another token, and no tier uses another tier's token. The second is held by
+  construction, because I10.3 renders only the tier's own pool into its unit.
+- **Channel to the pane.** Each pane gets only its own token. The dispatcher writes the thread's
+  token to a per-thread file at mode 0400 in a per-thread directory. A shim reads it into
+  `CLAUDE_CODE_OAUTH_TOKEN`, unlinks it and execs `claude`, and the dispatcher removes the directory
+  when the thread parks. No token ever rides an argv, which would leave it in
+  `/proc/<pid>/cmdline`, or the herdr server's environment, which every pane inherits.
+- **Deny.** The tools are denied the whole credentials directory (`/run/credentials/**`), every
+  per-thread token directory, `/run/agenix.d/**` and `/proc/*/environ` through both Bash and Read,
+  and the variable is unset for sandboxed commands (I10's `credentials.envVars` deny). Whether
+  Claude Code's own environment exposes the variable to the Bash tool is unmeasured. D4a step 0
+  measures it, and oracle 30 holds either way.
+
+**Prerequisites** (Q7; gate F10), owned by nix-config (I10.2). D0 rode on `sini`'s state, which a
+fresh `genie-<tier>` config directory does not have:
+
+- **onboarding** completed in each token's config directory;
+- **workspace trust** for the tier's cwd, recorded per config directory (row 17 moves
+  `.claude.json` with the directory). In an untrusted cwd, `agent start` stops on the
+  workspace-trust dialog (`agent_not_ready`, launch blocked; measured red), and answering it by
+  keys would have the dispatcher write `.claude.json` at runtime;
+- **an explicit permission mode and allowlist** per tier, in which a tool outside the allowlist is
+  refused rather than prompted, so no turn blocks on a prompt. The mode's name and behaviour as a
+  non-`sini` user are I10.2's to measure;
+- **the xmsg plugin**, with its MCP in reply-only mode and its hook that marks each inbound message
+  with its `message_id`;
+- **the per-token `--sessions-dir`** set on the tier's instance (X7);
+- a **slim cwd** chosen for the tier, and `--model` set per tier (*defaulted, reversible*). A fresh
+  session in a `den-ag-design` cwd started at 59,167 tokens (6.0%) on Opus 5.5, all of it
+  CLAUDE.md, memory and hooks, and every thread would pay that baseline;
+- **herdr's claude classifier manifest pinned** per tier. Parking and the watchdog hang on it, and
+  D0 found it sourced remotely (`agent-detection/remote/claude.toml`).
+
+**Within a tier** (gate P1). Per-thread sessions separate context windows, not storage: same-uid
+sessions could read each other's transcripts. The tools are therefore denied every config
+directory's `projects/` through Bash and Read (*defaulted, reversible*).
+
+**A `blocked` pane mid-turn** (a permission prompt the allowlist failed to prevent; D0 did not
+exercise one) fails the turn as "expert unavailable" and parks the thread (*defaulted,
+reversible*). Nobody can answer the prompt.
+
+**herdr's claude hook** reports outdated (v7 < v10). State detection scrapes the screen and does
+not depend on it (Q1), so the dispatcher does not either.
+
+**Rejected:**
+
+- `claude -p` per message (row 14);
+- API keys, and a fallback to another token or tier when quota runs out (row 15);
+- a single resident session per tier, which is I10's tmux instance, because it mixes every thread
+  of a tier into one context window (oracle 6);
+- a private network namespace or nftables `meta skuid` rules on a shared loopback bus. Both fence a
+  bus that is shared by default; row 18's per-user socket has no shared bus to fence;
+- an anonymous HTTP dispatcher, which cannot receive (row 19 rejects arms (b) and (c) of the old
+  open question 3; §11);
+- the token in a `pane split --env` argument, or in the herdr server's environment (see Tokens).
 
 ## 6. Artifacts and retention (ruled: a shared mirror, per-thread state, a permanent archive)
 
@@ -336,6 +465,12 @@ The D0 spike measured the mechanism (`reports/genie-d0-herdr-spike.md` (private 
   Purpose: training data, and reviving an expired thread by replaying its transcript into a fresh
   session. A replayed transcript passes guard-in before it seeds, as a recall does. The users'
   messages are public and the work is ours, so no retention notice is needed.
+- **Expert transcripts** (gate F6). On bitstream, only the **archiver**, a root-run unit with no
+  tier uid, holds an S3 key, and its key is write-only. It collects each tier's expired transcripts
+  (§5.8) from the tier homes. `@public`'s go to `genie-transcripts` under an `expert/public/`
+  prefix. `@trusted`'s carry private memory (row 13) and go to a separate bucket,
+  `genie-expert-trusted` (*name defaulted, reversible*), which P5 never reads. No `genie-<tier>`
+  process holds any S3 key.
 
 ## 7. Repository
 
@@ -420,17 +555,42 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 23. **Trusted Job mounts:** a rendered Job of effective trust trusted mounts those three plus the
     builder-key Secret, read-only. Mutants: the key omitted; the key mounted regardless of trust
     (oracle 22 goes red).
-24. **Dispatcher resume:** a second escalation of a parked thread resumes the session it started
-    (`--resume` with the minted uuid), and a message sent while the thread is parked is buffered
-    and delivered after the resume, never lost to the 404. Mutant: always start fresh.
-25. **Tier drop:** a thread escalated while trusted and again after its tier falls starts fresh in
-    `@public`. A marker that the `@trusted` session held but never posted is absent from the
-    `@public` seed and session. Mutant: resume across tiers.
-26. **Expert park and GC:** with a fake clock, an idle thread is parked at the idle threshold and
-    stays resumable; at 96h it is archived and gone, at 95h kept. Mutant: an off-by-a-unit TTL.
-27. **Token pool:** a thread stays on the token it started on; when that token is exhausted, the
-    reply is "expert unavailable"; with every pool token exhausted, a new thread gets the same.
-    Mutants: fall back to another tier's token; move the thread to another token in the pool.
+24. **Dispatcher core:** a second escalation of a parked thread launches with `--resume` and the
+    uuid of its first launch, under the same token's config directory, including after the
+    dispatcher is killed and restarted between the two. Mutants: always start fresh; an in-memory
+    map.
+25. **Blocked expert reply:** a marker in an `@trusted` reply that guard-out blocks is absent from
+    the thread's later `@public` package, its draft and its replay, after the thread's tier falls.
+    The fixture carries real content through the pod's round trip, not a contentless fake.
+    Mutant: the blocked reply retained in tier 1's context.
+26. **Expert park and GC:** with a fake clock, a thread with an outstanding message is never parked;
+    with none, it is parked at the idle threshold after its last reply and stays resumable; at 95h
+    idle it is kept, and at 96h it is handed to the archiver and gone. Mutants: never park; a TTL
+    of 97h.
+27. **Token pool:** a thread stays on the token it started on; a pinned token that is exhausted or
+    removed answers "expert unavailable"; an exhausted token is selectable again after a turn at or
+    after its reset succeeds; with no token available, a new thread gets "expert unavailable"; the
+    owner's token in `@public` takes no turn past its daily cap; a contributor token is chosen
+    before the owner's. Mutants: move the thread to another pool token; never re-admit after a
+    reset; a removed pin keeps serving; no cap. Falling back to another tier's token is not a unit
+    mutant, because the dispatcher holds only its own tier's pool; I10.3 guards it.
+28. **Dispatcher delivery:** a message sent to a parked thread is buffered, delivered after the
+    resumed uuid is listed by xmsg, and answered; two buffered messages and one arriving during the
+    resume are delivered in order; a send within 1 s of a reply is never lost to a park; a retried
+    send with the same key yields one turn; a dispatcher killed between a send and its reply still
+    relays the reply; a turn with no reply within the timeout ends "expert unavailable". Mutants:
+    forward to the parked uuid and drop on 404; deliver at `--resume` rc 0; park on herdr `idle`;
+    retry without the key; an in-memory buffer.
+29. **Bus fence:** from an `@public` thread session, through Bash and through its xmsg MCP, a
+    connection to `@trusted`'s or `sini`'s xmsg socket is refused, and the MCP lists only `reply`.
+    Positive control: the same session's reply over its own instance arrives. Mutants: the uid check
+    removed; the MCP not in reply-only mode.
+30. **Token custody:** from an `@public` thread session on token A, the bytes of pool token B and of
+    token A are unreadable through Bash and Read. Mutant: the deny narrowed to one file.
+31. **Expert archive custody:** no `genie-<tier>` unit's credential set holds an S3 key, and an
+    `@trusted` expert transcript is written to `genie-expert-trusted` only, never to
+    `genie-transcripts`. Mutants: the key in the `@public` dispatcher's unit; the `@trusted`
+    transcript written to the shared bucket.
 
 ## 10. Not in scope
 
@@ -442,6 +602,7 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
   answers a public thread.
 - API keys for the expert tier, `claude -p`, and any fallback between tokens or tiers (rows 14 and
   15).
+- A shared xmsg bus between OS users on one host (row 18).
 
 ## 11. Open questions
 
@@ -450,49 +611,19 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
    (oracle 20). `genie-expert@public` reads it from the root-owned clean clone of `genie-agent`
    at its published revision (§5.2 layer 5), so a merged PR reaches it on the next sync and the
    owner's working tree never does.
-
 2. **Volume placement.** A PVC is namespaced and Longhorn RWO binds one node, while the mirror and
    the worktrees are read by eval Jobs in `genie-eval` across nodes, and the thread store is
    per thread. Which namespace holds each volume, which access mode the mirror takes (RWX is not
    the house pattern: nix-config uses it only for the NFS media volumes), and whether the launcher's
    RBAC extends to per-thread PVCs are unsettled. Not picked here.
-
-3. **The dispatcher's xmsg identity.** D0 measured only its outbound half. An anonymous HTTP send
-   works, and long-polling `/v1/messages/{id}/replies` reads the reply with no push, so a daemon
-   can talk to its sessions (Q4a). The inbound half was not measured: the supervisor's escalation
-   must reach an addressable principal named `genie-expert@<tier>` on that tier's xmsg instance.
-   The HTTP API has no registration route (xmsg `a01b4f4`, `http.rs`: list, get, send, message and
-   replies only). The non-Claude principals register over `register.sock`, and each is attested as
-   its own harness (agy by a trusted executable and a presence lock, pi by argv and cwd, which
-   README §1.3 calls a misconfiguration guard). The arms visible:
-
-   - (a) a new xmsg harness kind for a resident daemon, attested the way agy is, by a trusted
-     executable. This is xmsg work, in agy's lane;
-   - (b) register through the pi path, which misattributes the harness and has to satisfy pi's
-     argv check;
-   - (c) a Claude Code session as the dispatcher, attested natively. It pays the context baseline
-     (§5.8) and puts a model in the routing path that row 14 gives to a small resident process.
-
-   Not picked here.
-
-4. **The owner's token in the public pool.** Row 15 says contributor tokens feed public and the
-   owner's token serves `@trusted`. It does not say whether the owner's token may also serve
-   public, so a pool with no contributors leaves `@public` unavailable. This design reads it as
-   no.
-
-5. **One config directory per token, or one per tier.** Row 15 gives the pin's reason as
-   "`--resume` needs that account's transcripts". That holds by construction only if each token
-   runs under its own `CLAUDE_CONFIG_DIR`. But xmsg discovers Claude sessions from one session
-   directory (`main.rs`: a single path, default `~/.claude/sessions`), so with a directory per
-   token, xmsg would see the sessions of one directory only. The arms:
-
-   - (a) one directory per tier. xmsg works as it is, and the dispatcher's map enforces the pin.
-     Whether a token in the environment cleanly overrides a shared `.claude.json`'s account state
-     is unmeasured;
-   - (b) one directory per token. The pin holds by storage, and xmsg has to watch several session
-     directories.
-
-   Not picked here. Oracle 27 holds under either arm.
+3. **The dispatcher's xmsg identity.** Ruled: row 19, arm (a), a `svc:` harness kind (X9). Arm
+   (b), registering through pi's path, misattributes the harness. Arm (c), a Claude session as the
+   dispatcher, pays the context baseline and puts a model in the routing path. Both are rejected.
+4. **The owner's token in the public pool.** Ruled: row 16, yes, under a daily cap.
+5. **One config directory per token, or one per tier.** Ruled: row 17, one per token (X7). The
+   ruling's reason, "`--resume` needs that account's transcripts", is not re-opened. Transcripts
+   are local files, and whether `--resume` consults the account at all is unmeasured; the pin's
+   isolation between contributors holds whatever the answer is.
 
 ## 12. Gate disposition
 
@@ -520,3 +651,21 @@ Second contact (`reports/genie-agent-design-gate-rev2.md` (private design repo))
 | R5 builder key vs the mount property               | §5.3: the key is a Secret mounted only on clamped-trusted Jobs; the mount property splits by effective trust. Oracles 10, 22, 23; units E7, E10, E11.                                              |
 | R6 one store or two                                | §5.2 layer 4: the thread store is the Job's store root; the `emptyDir` is scratch.                                                                                                                 |
 | R7 unit ids and status                             | The plan's schema unit is K3 (K2 is a landed CI fix); statuses refreshed; §7's schema list matches the landed files.                                                                               |
+
+Dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo)):
+
+| finding                                | resolved in                                                                                                                                                                                                                                                |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 the shared xmsg bus                 | Row 18 (owner): a per-user unix-socket API and a reply-only session MCP; §5.8 Topology states the three nodes, their sockets and session dirs, the two re-cut links and the reply route. Oracle 29; units X8, I16.                                         |
+| F2 dispatcher state not persisted      | §5.8 State and Units: a journal written before the acknowledgement, reconciliation on start, herdr in its own unit, and a pool change restarting only the dispatcher; §4 failure modes. Oracles 24 (restart cell), 28; units D1a, D1b, X9 (cursor on ack). |
+| F3 the token channel and the deny      | §5.8 Tokens: a per-thread 0400 file and an unlinking shim, one token per pane; §5.2 layer 5 denies the whole credentials directory. D4a step 0 measures the Bash environment. Oracle 30; units D4a, D5.                                                    |
+| F4 park and resume races               | §5.8 Talk and Park: the park predicate, readiness by xmsg listing, FIFO, idempotency keys, a reply timeout. Oracle 28; units D1b, X10.                                                                                                                     |
+| F5 the blocked reply's return route    | §4 step 6 and §5.8 Tier drop: a blocked expert reply is dropped from tier 1's context and the transcript. Oracle 25 runs against content; unit C8. D2 is retired.                                                                                          |
+| F6 the archive key on bitstream        | §6: a write-only key held only by a root-run archiver, and `@trusted` expert transcripts in a separate bucket that P5 never reads. Oracle 31; unit I17.                                                                                                    |
+| F7 the token state machine             | §5.8 Tokens: `available`, `exhausted-until(t)`, `removed`, with the reset observed; a removed pin is unavailable. Oracle 27; unit D4b.                                                                                                                     |
+| F8 atomicity and ordering              | D1 splits into D1a and D1b, and D4 into D4a and D4b; D1b, I10.2, I10.3 and D4b are gated on X7–X10 in the plan.                                                                                                                                            |
+| F9 oracle discrimination               | Oracles 24–28 carry the named mutants, 95h/96h everywhere, and I10.3 adds the mutant "a contributor token in `@trusted`".                                                                                                                                  |
+| F10 prerequisites D0 rode on as `sini` | §5.8 Prerequisites; I10.2's deliverable, and its oracle is one xmsg round trip as `genie-<tier>` on bitstream.                                                                                                                                             |
+| P1 transcripts within a tier           | §5.8 Within a tier: the tools are denied every config directory's `projects/`.                                                                                                                                                                             |
+| P2 the redactor's hash match           | §5.2 layer 6: pool tokens are matched by shape only.                                                                                                                                                                                                       |
+| P3 herdr's remote classifier           | §5.8 Prerequisites: the manifest is pinned per tier (I10.2).                                                                                                                                                                                               |
