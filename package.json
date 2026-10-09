@@ -7,6 +7,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p ."
+    "build": "tsc -p .",
+    "guard-eval": "node tests/guard-eval.ts"
   }
 }

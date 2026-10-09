@@ -47,6 +47,8 @@
               checks.corpus = genie-agent.checks.${system}.corpus;
               # Every file under support-memory/ passes the refusal-only admission check.
               checks.support-memory = genie-agent.checks.${system}.support-memory;
+              # Any guard-in reply outside schemas/verdict.json parses to a reject.
+              checks.guard = genie-agent.checks.${system}.guard;
             };
         }
       ];
