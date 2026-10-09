@@ -20,3 +20,30 @@ declare module "node:fs" {
   export function renameSync(from: string, to: string): void;
   export function writeSync(fd: number, data: string): number;
 }
+declare module "node:net" {
+  export interface Socket {
+    setEncoding(encoding: "utf8"): void;
+    on(event: "data", listener: (chunk: string) => void): void;
+    on(event: "error", listener: (err: Error) => void): void;
+    on(event: "close", listener: () => void): void;
+    write(data: string): boolean;
+    end(): void;
+  }
+  export function createConnection(path: string): Socket;
+}
+declare module "node:http" {
+  interface IncomingMessage {
+    statusCode?: number;
+    setEncoding(encoding: "utf8"): void;
+    on(event: "data", listener: (chunk: string) => void): void;
+    on(event: "end", listener: () => void): void;
+  }
+  interface ClientRequest {
+    on(event: "error", listener: (err: Error) => void): void;
+    end(): void;
+  }
+  export function request(
+    options: { socketPath: string; path: string },
+    callback: (res: IncomingMessage) => void,
+  ): ClientRequest;
+}

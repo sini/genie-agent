@@ -6,12 +6,10 @@ import type { Herdr } from "./herdr.ts";
 import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.ts";
 
 export type { Herdr } from "./herdr.ts";
-export type { Journal, Thread } from "./journal.ts";
-
-// The live Claude sessions on the tier's xmsg instance, by sessionId. D1b supplies the real one.
-export interface XmsgSessions {
-  list(): Promise<string[]>;
-}
+export type { Buffered, Journal, Outstanding, Thread } from "./journal.ts";
+export { Delivery, UNAVAILABLE, type DeliveryOptions } from "./delivery.ts";
+export { SocketXmsg, XmsgError, type Inbound, type XmsgClient, type XmsgSessions } from "./xmsg.ts";
+import type { XmsgSessions } from "./xmsg.ts";
 
 export interface TokenRef {
   id: string;
@@ -55,7 +53,7 @@ export class Dispatcher {
     return d;
   }
 
-  private save(): void {
+  save(): void {
     saveJournal(this.o.stateDir, this.journal);
   }
 
@@ -63,11 +61,9 @@ export class Dispatcher {
     return this.o.model ? ["--model", this.o.model] : [];
   }
 
-  // Bring the thread's session up, launching a new thread under a minted uuid and resuming a
-  // parked one under the uuid it was launched with. A live thread is returned as it is.
-  async escalate(threadId: string): Promise<Thread> {
+  // The thread's entry, created parked and unlaunched under a picked token and a minted uuid.
+  thread(threadId: string): Thread {
     let t = this.journal.threads[threadId];
-    if (t?.state === "live") return t;
     if (!t) {
       const token = this.o.pickToken(threadId);
       const session = randomUUID();
@@ -81,12 +77,22 @@ export class Dispatcher {
         launched: false,
         buffer: [],
         outstanding: [],
+        lastReply: null,
+        seq: 0,
       };
       this.journal.threads[threadId] = t;
       this.journal.tokens[token.id] ??= { state: "available" };
       // The address is journalled before the process exists.
       this.save();
     }
+    return t;
+  }
+
+  // Bring the thread's session up, launching a new thread under a minted uuid and resuming a
+  // parked one under the uuid it was launched with. A live thread is returned as it is.
+  async escalate(threadId: string): Promise<Thread> {
+    const t = this.thread(threadId);
+    if (t.state === "live") return t;
     const args = t.launched
       ? ["--resume", t.session, ...this.modelArgs()]
       : ["-n", t.name, "--session-id", t.session, ...this.modelArgs()];

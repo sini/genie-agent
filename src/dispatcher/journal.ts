@@ -11,10 +11,22 @@ import {
   writeSync,
 } from "node:fs";
 
-// A message held for a parked thread until its session is ready (D1b drains it).
+// A supervisor message held for its thread until the session is ready, in arrival order.
 export interface Buffered {
+  // The supervisor's message id, which the relayed reply answers.
   id: string;
-  body: unknown;
+  body: string;
+  // The idempotency key (X10), fixed when the message is journalled so every retry reuses it.
+  key: string;
+}
+
+// A message forwarded to the thread's session and not yet answered.
+export interface Outstanding {
+  id: string;
+  // The forwarded message's id on the tier's xmsg, whose replies end the turn.
+  sent: string;
+  // Epoch ms; a reply after it is dropped and the turn ends "expert unavailable".
+  deadline: number;
 }
 
 export interface Thread {
@@ -31,8 +43,11 @@ export interface Thread {
   // uuid fresh rather than resuming a session that never ran.
   launched: boolean;
   buffer: Buffered[];
-  // Supervisor message ids forwarded and not yet replied to.
-  outstanding: string[];
+  outstanding: Outstanding[];
+  // Epoch ms of the last relayed reply; the park predicate's idle clock starts here.
+  lastReply: number | null;
+  // The count of messages journalled for the thread, the idempotency key's sequence number.
+  seq: number;
 }
 
 export type TokenState =
