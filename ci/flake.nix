@@ -27,6 +27,8 @@
         { gen.ci.agentsMd.sheet = "not-owed"; }
         # Nor a root library surface: there is no root default.nix.
         { gen.ci.rootSurface.entry = "not-owed"; }
+        # Nor an evaluator matrix: its CI is one upstream-Nix column, not evaluators.yml.
+        { gen.ci.evaluators = "not-owed"; }
         # The eval runner's oracle runs as a program under each column's evaluator, not as a check.
         ./tests-process.nix
         {

@@ -4,12 +4,47 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # A negative test runs on a scratch branch with no pull request: `gh workflow run ci.yml --ref <branch>`.
   workflow_dispatch:
 
+# One upstream-Nix column, not gen-harness's three-evaluator matrix: this is not a gen library, so
+# evaluator divergence is not what its CI tests.
 jobs:
-  # The three-evaluator matrix (upstream Nix, Determinate, Lix) from gen-harness, and its `fmt` job
-  # (`nix fmt -- --ci` in ci/). The ref is the gen-harness rev locked in ci/flake.lock, so one harness
-  # identity governs the run; `relock` rewrites it when that lock moves.
-  evaluators:
-    uses: sini/gen-harness/.github/workflows/evaluators.yml@732f7fbb0ddd31cb4b4979b6a18f54258eff4a3e
+  nix:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+      - name: flake checks
+        run: nix flake check ./ci --keep-going
+      - name: ci devShell
+        run: nix eval --raw "./ci#devShells.x86_64-linux.default.drvPath"
+      # The runners refuse unprivileged user namespaces; admit only the process plane's own unshare.
+      - name: admit the process plane's own unshare to user namespaces
+        run: |
+          nix develop ./ci --command ci --tests-process --userns-binaries > "$RUNNER_TEMP/userns-binaries"
+          while IFS= read -r b; do
+            case "$b" in
+              /nix/store/*/bin/unshare) ;;
+              *) echo "::error::not an unshare store path: '$b'"; exit 1 ;;
+            esac
+            h=$(basename "$(dirname "$(dirname "$b")")"); h=${h%%-*}
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile tests-process-userns-%s %s flags=(unconfined) {\n  userns,\n}\n' "$h" "$b" > "$RUNNER_TEMP/userns-$h.profile"
+            sudo -n apparmor_parser -r "$RUNNER_TEMP/userns-$h.profile"
+            echo "admitted to user namespaces: $b"
+          done < "$RUNNER_TEMP/userns-binaries"
+      - name: process plane
+        run: nix develop ./ci --command ci --tests-process
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+      - run: nix fmt -- --ci
+        working-directory: ci
