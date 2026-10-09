@@ -93,7 +93,8 @@
               [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
               touch $out
             '';
-        # The verdict parser's gating oracle: any reply outside schemas/verdict.json is a reject.
+        # The verdict parser's gating oracle: any reply outside schemas/verdict.json, or breaking its
+        # contract with the reviewed envelope, is a reject. Also the rewrite predicate's lexical arm.
         guard =
           pkgs.runCommand "genie-agent-guard"
             {
@@ -103,7 +104,10 @@
                 fileset = nixpkgs.lib.fileset.unions [
                   ./src/guard
                   ./schemas/fixtures/verdict
+                  ./corpus/injection/must-not-contain.json
                   ./tests/guard.test.ts
+                  ./tests/rewrite-predicate.ts
+                  ./tests/fixtures/guard
                 ];
               };
             }
