@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "outcome of one eval Job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["exit", "stdout_tail", "stderr_tail", "limit_hit"],
+  "properties": {
+    "exit": { "type": "integer" },
+    "stdout_tail": { "type": "string" },
+    "stderr_tail": { "type": "string" },
+    "limit_hit": { "enum": ["none", "oom", "timeout", "egress"] }
+  }
+}

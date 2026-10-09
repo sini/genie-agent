@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout_tail": "",
+  "stderr_tail": "error: attribute 'foo' missing"
+}

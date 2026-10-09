@@ -1,0 +1,8 @@
+{
+  "kind": "gist",
+  "files": {
+    "flake.nix": "{ }\n"
+  },
+  "title": "Minimal repro",
+  "body": "From thread !abc:example.org"
+}

@@ -1,0 +1,11 @@
+{
+  "cleaned_question": "Explain gen-select.",
+  "draft": {
+    "answer": "Set `services.foo.enable = true;`.",
+    "confidence": 0.82,
+    "gaps": [],
+    "escalate_forced": false
+  },
+  "eval_transcript": [],
+  "gaps": []
+}

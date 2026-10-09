@@ -1,0 +1,5 @@
+{
+  "repo": "github:alice/nix-config",
+  "rev": "4f2a9c1",
+  "attr": "nixosConfigurations.laptop.config.system.build.toplevel.drvPath"
+}

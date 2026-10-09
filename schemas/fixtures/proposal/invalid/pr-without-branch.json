@@ -1,0 +1,9 @@
+{
+  "kind": "pr",
+  "repo": "alice/nix-config",
+  "files": {
+    "a": ""
+  },
+  "title": "t",
+  "body": ""
+}

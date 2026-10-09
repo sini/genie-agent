@@ -1,0 +1,6 @@
+{
+  "exit": 1,
+  "stdout_tail": "",
+  "stderr_tail": "error: attribute 'foo' missing",
+  "limit_hit": "none"
+}

@@ -1,0 +1,8 @@
+{
+  "answer": "Set `services.foo.enable = true;`.",
+  "confidence": 0.82,
+  "gaps": [
+    1
+  ],
+  "escalate_forced": false
+}

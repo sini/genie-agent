@@ -1,0 +1,7 @@
+result
+result-*
+.direnv/
+.gcroots
+node_modules/
+dist/
+.pre-commit-config.yaml

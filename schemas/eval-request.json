@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tier-1 request to evaluate one attribute of a repository",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repo", "rev", "attr", "trusted"],
+  "properties": {
+    "repo": { "type": "string", "minLength": 1 },
+    "rev": { "type": "string", "minLength": 1 },
+    "attr": { "type": "string", "minLength": 1 },
+    "trusted": { "type": "boolean" }
+  }
+}

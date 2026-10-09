@@ -1,0 +1,6 @@
+{
+  "exit": 137,
+  "stdout_tail": "",
+  "stderr_tail": "",
+  "limit_hit": "oom"
+}

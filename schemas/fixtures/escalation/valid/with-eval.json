@@ -1,0 +1,28 @@
+{
+  "cleaned_question": "Why does foo fail?",
+  "draft": {
+    "answer": "Set `services.foo.enable = true;`.",
+    "confidence": 0.82,
+    "gaps": [],
+    "escalate_forced": false
+  },
+  "eval_transcript": [
+    {
+      "request": {
+        "repo": "github:alice/nix-config",
+        "rev": "4f2a9c1",
+        "attr": "nixosConfigurations.laptop.config.system.build.toplevel.drvPath",
+        "trusted": false
+      },
+      "result": {
+        "exit": 1,
+        "stdout_tail": "",
+        "stderr_tail": "error: attribute 'foo' missing",
+        "limit_hit": "none"
+      }
+    }
+  ],
+  "gaps": [
+    "unexplained eval error"
+  ]
+}
