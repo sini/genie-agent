@@ -13,6 +13,7 @@ import {
   SocketXmsg,
   UNAVAILABLE,
   XmsgError,
+  type DeliveryOptions,
   type Inbound,
   type Options,
   type XmsgClient,
@@ -114,9 +115,12 @@ const setup = () => {
   const live: Delivery[] = [];
   let clock = 1_000_000;
   const tick = (ms: number) => (clock += ms);
-  const boot = async (extra: object = {}) => {
+  // `packages` boots the production thread key, the package's thread_id; otherwise a message
+  // `<thread>:<body>` names its thread.
+  const boot = async (extra: DeliveryOptions = {}, packages = false) => {
     const d = await Dispatcher.open(o);
-    const del = new Delivery(d, x, { threadOf: (m) => m.text.split(":")[0], readyPollMs: 5, replyTimeoutMs: 1500, ...extra });
+    const threadOf = packages ? {} : { threadOf: (m: Inbound) => m.text.split(":")[0] };
+    const del = new Delivery(d, x, { ...threadOf, readyPollMs: 5, replyTimeoutMs: 1500, ...extra });
     del.start();
     live.push(del);
     return { d, del };
@@ -272,6 +276,35 @@ cell("a turn with no reply within the timeout ends expert unavailable, and a lat
   s.x.answer(1, "late");
   await sleep(100);
   assert.equal(s.x.relayed.length, 1);
+});
+
+const pkg = (thread_id: string, q: string) => JSON.stringify({ thread_id, cleaned_question: q });
+
+cell("two packages with one thread_id reach one session, and another thread_id a second", async (s) => {
+  const { d, del } = await s.boot({}, true);
+  for (const [id, t] of [["m1", "$a"], ["m2", "$a"], ["m3", "$b"]]) {
+    s.msg(id, pkg(t, id));
+    await del.pump(0);
+  }
+  await until("three deliveries", () => s.x.deliveries.length === 3);
+  assert.deepEqual(Object.keys(d.journal.threads).sort(), ["$a", "$b"]);
+  assert.equal(s.herdr.starts.length, 2);
+  const [a1, a2, b] = s.x.deliveries.map((m) => m.session);
+  assert.equal(a1, a2);
+  assert.notEqual(a1, b);
+});
+
+cell("a message that is not a package is answered expert unavailable, acknowledged, and makes no thread", async (s) => {
+  const { del } = await s.boot({}, true);
+  const bad = ["not json", "null", JSON.stringify({ cleaned_question: "q" }), pkg("", "q"), JSON.stringify({ thread_id: 5 })];
+  for (const [i, text] of bad.entries()) {
+    s.msg(`m${i}`, text);
+    assert.equal(await del.pump(0), true);
+  }
+  assert.deepEqual(s.x.queue, [], "every message acknowledged");
+  assert.deepEqual(s.x.relayed, bad.map((_, i) => ({ id: `m${i}`, text: UNAVAILABLE })));
+  assert.equal(s.herdr.starts.length, 0);
+  assert.deepEqual((await Dispatcher.open(s.o)).journal.threads, {}, "nothing journalled");
 });
 
 // The real client, by its frames, against a socket server per xmsg socket.

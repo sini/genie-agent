@@ -47,3 +47,12 @@ declare module "node:http" {
     callback: (res: IncomingMessage) => void,
   ): ClientRequest;
 }
+declare module "node:process" {
+  const process: {
+    argv: string[];
+    env: Record<string, string | undefined>;
+    stderr: { write(data: string): boolean };
+    exit(code: number): never;
+  };
+  export default process;
+}

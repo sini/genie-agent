@@ -9,9 +9,20 @@ import type { Outstanding, Thread } from "./journal.ts";
 
 export const UNAVAILABLE = "expert unavailable";
 
+// The thread an `escalation` package names, as the supervisor stamped it; null for a message that
+// does not parse as one.
+function packageThread(m: Inbound): string | null {
+  try {
+    const t = JSON.parse(m.text)?.thread_id;
+    return typeof t === "string" && t !== "" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface DeliveryOptions {
-  // The thread a supervisor message belongs to.
-  threadOf: (m: Inbound) => string;
+  // The thread a supervisor message belongs to, or null to answer it unavailable.
+  threadOf?: (m: Inbound) => string | null;
   // Every bound below is configuration (defaulted, reversible).
   readyTimeoutMs?: number;
   readyPollMs?: number;
@@ -30,7 +41,7 @@ export class Delivery {
   private readonly chains = new Map<string, Promise<void>>();
   private stopped = false;
 
-  constructor(d: Dispatcher, x: XmsgClient, o: DeliveryOptions) {
+  constructor(d: Dispatcher, x: XmsgClient, o: DeliveryOptions = {}) {
     this.d = d;
     this.x = x;
     this.o = {
@@ -40,6 +51,7 @@ export class Delivery {
       idleMs: 10 * 60_000,
       sendAttempts: 3,
       now: Date.now,
+      threadOf: packageThread,
       ...o,
     };
   }
@@ -63,7 +75,7 @@ export class Delivery {
   async pump(waitMs = 30_000): Promise<boolean> {
     const m = await this.x.poll(waitMs);
     if (!m) return false;
-    this.receive(m);
+    await this.receive(m);
     await this.x.ack(m.id);
     return true;
   }
@@ -72,7 +84,7 @@ export class Delivery {
     while (!this.stopped) await this.pump();
   }
 
-  private receive(m: Inbound): void {
+  private async receive(m: Inbound): Promise<void> {
     const known = Object.values(this.d.journal.threads).some(
       (t) => t.buffer.some((b) => b.id === m.id) || t.outstanding.some((o) => o.id === m.id),
     );
@@ -81,6 +93,8 @@ export class Delivery {
     // still holds the session to one turn. Keep answered ids if that window matters.
     if (known) return;
     const threadId = this.o.threadOf(m);
+    // Not a package: answered and acknowledged, with no thread and nothing journalled.
+    if (threadId === null) return this.x.reply(m.id, UNAVAILABLE);
     const t = this.d.thread(threadId);
     t.buffer.push({ id: m.id, body: m.text, key: `${m.id}#${++t.seq}` });
     this.d.save();

@@ -1,5 +1,4 @@
 {
-  "thread_id": "$thread-1:example.org",
   "cleaned_question": "Explain gen-select.",
   "draft": {
     "answer": "Set `services.foo.enable = true;`.",
@@ -8,5 +7,6 @@
     "escalate_forced": false
   },
   "eval_transcript": [],
-  "gaps": []
+  "gaps": [],
+  "thread_id": ""
 }

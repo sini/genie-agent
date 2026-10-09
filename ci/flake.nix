@@ -51,6 +51,17 @@
               checks.guard = genie-agent.checks.${system}.guard;
             };
         }
+        # The dispatcher's single executable runs its own main and no offered payload. Linux only,
+        # so it is defined only where the subject defines it.
+        {
+          perSystem =
+            { system, lib, ... }:
+            {
+              checks = lib.optionalAttrs ((genie-agent.checks.${system} or { }) ? dispatcher-sea) {
+                inherit (genie-agent.checks.${system}) dispatcher-sea;
+              };
+            };
+        }
       ];
     };
 }

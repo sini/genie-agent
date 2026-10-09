@@ -4,12 +4,17 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "thread_id",
     "cleaned_question",
     "draft",
     "eval_transcript",
     "gaps"
   ],
   "properties": {
+    "thread_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "cleaned_question": {
       "type": "string",
       "minLength": 1
