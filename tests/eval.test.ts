@@ -6,39 +6,39 @@ import { fileURLToPath } from "node:url";
 import { runEval, type Tier } from "../src/eval/run.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/eval/${name}`, import.meta.url));
-const run = (name: string, attr: string, trusted: boolean, tier: Tier) =>
+const run = (name: string, attr: string, trusted: "yes" | "no", tier: Tier) =>
   runEval({ repo: "local/fixture", rev: name, attr, trusted }, tier, {
     localFlake: fixture(name),
     timeoutMs: 60_000,
   });
 
 test("a plain flake evaluates", async () => {
-  const r = await run("plain", "hello", false, "public");
+  const r = await run("plain", "hello", "no", "public");
   assert.equal(r.exit, 0, r.stderr_tail);
   assert.equal(r.stdout_tail.trim(), '"hi"');
   assert.equal(r.limit_hit, "none");
 });
 
 test("IFD is refused under public", async () => {
-  const r = await run("ifd", "ifd", false, "public");
+  const r = await run("ifd", "ifd", "no", "public");
   assert.notEqual(r.exit, 0);
   assert.match(r.stderr_tail, /allow-import-from-derivation/);
 });
 
 test("IFD is admitted under trusted", async () => {
-  const r = await run("ifd", "ifd", true, "trusted");
+  const r = await run("ifd", "ifd", "yes", "trusted");
   assert.equal(r.exit, 0, r.stderr_tail);
   assert.equal(r.stdout_tail.trim(), '[ "manifest.nix" ]');
 });
 
 test("request.trusted cannot raise a public tier", async () => {
-  const r = await run("ifd", "ifd", true, "public");
+  const r = await run("ifd", "ifd", "yes", "public");
   assert.notEqual(r.exit, 0);
   assert.match(r.stderr_tail, /allow-import-from-derivation/);
 });
 
-test("request.trusted=false lowers a trusted tier", async () => {
-  const r = await run("ifd", "ifd", false, "trusted");
+test("request.trusted=no lowers a trusted tier", async () => {
+  const r = await run("ifd", "ifd", "no", "trusted");
   assert.notEqual(r.exit, 0);
 });
 
@@ -49,8 +49,8 @@ for (const [attr, refusal] of [
 ] as const) {
   test(`impure ${attr} fails under pure-eval, trusted or not`, async () => {
     for (const [trusted, tier] of [
-      [false, "public"],
-      [true, "trusted"],
+      ["no", "public"],
+      ["yes", "trusted"],
     ] as const) {
       const r = await run("impure", attr, trusted, tier);
       assert.notEqual(r.exit, 0, `${tier}: ${r.stdout_tail}`);
@@ -61,7 +61,7 @@ for (const [attr, refusal] of [
 
 test("a non-github coordinate is refused before nix runs", async () => {
   await assert.rejects(
-    runEval({ repo: "a/b/c", rev: "main", attr: "x", trusted: false }, "public"),
+    runEval({ repo: "a/b/c", rev: "main", attr: "x", trusted: "no" }, "public"),
     /not a github coordinate/,
   );
 });

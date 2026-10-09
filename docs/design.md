@@ -557,7 +557,7 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 09. **Resume:** a thread resumed within 96h re-runs no eval whose cache key matches. Mutant: cache
     bypassed.
 
-10. **Trust clamp:** a public thread whose tier 1 emits `trusted: true` gets an untrusted Job (no
+10. **Trust clamp:** a public thread whose tier 1 emits `trusted: "yes"` gets an untrusted Job (no
     IFD, no builders, no builder key); a trusted thread with the request set gets a trusted one.
     Mutant: the launcher reads the model's flag alone.
 

@@ -23,7 +23,10 @@
       "minLength": 1
     },
     "trusted": {
-      "type": "boolean"
+      "enum": [
+        "yes",
+        "no"
+      ]
     }
   }
 }

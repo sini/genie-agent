@@ -10,7 +10,7 @@ export interface EvalRequest {
   repo: string;
   rev: string;
   attr: string;
-  trusted: boolean;
+  trusted: "yes" | "no";
 }
 
 // schemas/eval-result.json
@@ -29,9 +29,10 @@ export interface RunOptions {
 
 export const TAIL_CHARS = 4096;
 
-// The caller's tier is the authenticated sender's; the request can only lower it (gate F1).
+// The caller's tier is the authenticated sender's; the request can only lower it (gate F1): only "yes" on a
+// trusted tier runs trusted.
 export const effectiveTier = (tier: Tier, request: EvalRequest): Tier =>
-  tier === "trusted" && request.trusted ? "trusted" : "public";
+  tier === "trusted" && request.trusted === "yes" ? "trusted" : "public";
 
 const tail = (s: string) => s.slice(-TAIL_CHARS);
 
