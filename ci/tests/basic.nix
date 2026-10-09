@@ -1,4 +1,4 @@
-{ inputs, lib, ... }:
+{ lib, ... }:
 let
   names = [
     "draft"
@@ -9,7 +9,7 @@ let
     "thread-state"
     "verdict"
   ];
-  dir = "${inputs.genie-agent}/schemas";
+  dir = ../../schemas;
 in
 {
   flake.tests.basic = {

@@ -204,20 +204,6 @@
         "type": "github"
       }
     },
-    "genie-agent": {
-      "inputs": {
-        "nixpkgs": "nixpkgs_6"
-      },
-      "locked": {
-        "path": "..",
-        "type": "path"
-      },
-      "original": {
-        "path": "..",
-        "type": "path"
-      },
-      "parent": []
-    },
     "git-hooks-nix": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -664,19 +650,6 @@
         "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
       }
     },
-    "nixpkgs_7": {
-      "locked": {
-        "lastModified": 1791456040,
-        "narHash": "sha256-gRZ/s8WQJ2CsXdhcDVQH34qxuL0MuMCOs3aBiK1Prsw=",
-        "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
-        "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1087755.e7439b6b14ad/nixexprs.tar.xz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
-      }
-    },
     "pre-commit-hooks": {
       "flake": false,
       "locked": {
@@ -696,8 +669,7 @@
     "root": {
       "inputs": {
         "gen-harness": "gen-harness",
-        "genie-agent": "genie-agent",
-        "nixpkgs": "nixpkgs_7"
+        "nixpkgs": "nixpkgs_6"
       }
     },
     "treefmt-nix": {
