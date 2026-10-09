@@ -119,9 +119,11 @@
               [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
               touch $out
             '';
-        # The guard-in injection corpus is well-formed and covers every attack vector.
+        # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
+        # every attack vector; the held-out sidecar names fragments each attack actually carries.
         corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
           python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}
+          python3 ${./tests/corpus.py} ${./corpus/injection-heldout/cases.jsonl} ${./corpus/injection-heldout/must-not-contain.json}
           touch $out
         '';
         # The support memory holds no credential shape, private repository name, home path or
