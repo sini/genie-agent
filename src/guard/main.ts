@@ -6,12 +6,11 @@ import process from "node:process";
 import { SocketXmsg } from "../dispatcher/xmsg.ts";
 import system from "../../prompts/guard-in.md";
 import { type Config, config, ConfigError } from "./config.ts";
-import { firstModel, type Ninfer, step } from "./service.ts";
+import { start, step, Unauthorized } from "./service.ts";
 
 async function main(c: Config): Promise<void> {
-  const n: Ninfer = { base: c.base, model: c.model ?? (await firstModel(c.base, c.apiKey)), system, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
   const x = new SocketXmsg(c.xmsgDir, "genie-guard");
-  await x.register();
+  const n = await start(c, x, system);
   for (;;) await step(x, n, 30_000);
 }
 
@@ -24,6 +23,10 @@ try {
   process.exit(2);
 }
 main(c).catch((e) => {
+  if (e instanceof Unauthorized) {
+    process.stderr.write(`genie-guard: ${e.message}\n`);
+    process.exit(2);
+  }
   process.stderr.write(`genie-guard: ${e instanceof Error ? e.stack : e}\n`);
   process.exit(1);
 });

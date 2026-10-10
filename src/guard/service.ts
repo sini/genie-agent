@@ -4,6 +4,8 @@
 // the parsed verdict, or with `{"error": …}` when it could not review the message at all: an
 // error is never a verdict, so a caller holds the line and retries rather than reading it as one.
 import type { Inbound, XmsgClient } from "../dispatcher/xmsg.ts";
+import process from "node:process";
+import type { Config } from "./config.ts";
 import { type Envelope, parseVerdict, type Verdict } from "./verdict.ts";
 
 export interface Ninfer {
@@ -29,15 +31,54 @@ export class Unavailable extends Error {
   }
 }
 
+// ninfer refused the key: waiting will not fix it.
+export class Unauthorized extends Unavailable {}
+
 // ninfer's first model, as `/v1/models` lists it.
 export async function firstModel(base: string, apiKey?: string): Promise<string> {
   const res = await fetch(`${base}/models`, { headers: auth(apiKey) }).catch((e) => {
     throw new Unavailable(`${base}: ${e}`, true);
   });
+  if (res.status === 401 || res.status === 403) throw new Unauthorized(`${base}: unauthorized (check --api-key-file)`);
   if (!res.ok) throw new Unavailable(`${base}/models: HTTP ${res.status}`);
   const id = (await res.json()).data?.[0]?.id;
   if (typeof id !== "string") throw new Unavailable(`no model in ${base}/models`);
   return id;
+}
+
+// The model to review with, once ninfer lists one: a model that compiles at start (HyperQwen, ~15
+// min) is waited for, not exited on, and the guard registers only after, so it is never listed
+// while it cannot judge. Backoff 2 s doubling to 60 s; an Unauthorized key throws.
+export async function awaitModel(
+  base: string,
+  apiKey: string | undefined,
+  model: string | undefined,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  log: (line: string) => void = (l) => process.stderr.write(`${l}\n`),
+): Promise<string> {
+  for (let wait = 2_000; ; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      const id = await firstModel(base, apiKey);
+      return model ?? id;
+    } catch (e) {
+      if (!(e instanceof Unavailable) || e instanceof Unauthorized) throw e;
+      log(`genie-guard: waiting for the model: ${e.message}`);
+      await sleep(wait);
+    }
+  }
+}
+
+// Wait for the model, then register: the guard is listed only once it can judge.
+export async function start(
+  c: Config,
+  x: { register(): Promise<void> },
+  system: string,
+  wait?: Parameters<typeof awaitModel>[3],
+  log?: Parameters<typeof awaitModel>[4],
+): Promise<Ninfer> {
+  const model = await awaitModel(c.base, c.apiKey, c.model, wait, log);
+  await x.register();
+  return { base: c.base, model, system, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.

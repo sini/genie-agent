@@ -35,6 +35,8 @@ acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) a
 - No review replies `{"error": "…"}`. That covers text that is not an envelope (never sent to the
   model), and ninfer being unreachable, timing out, answering with an HTTP error or answering with
   no content. An error is not a verdict, so the caller holds the line and retries.
+- At start it waits for ninfer's model (retrying `/v1/models`, 2 s backoff doubling to 60 s) and
+  registers only once it answers; a 401 or 403 exits 2 with `unauthorized (check --api-key-file)`.
 
 Settings, each a flag or the environment variable beside it: `--ninfer-url` /
 `GENIE_GUARD_NINFER_URL` (required; ninfer's OpenAI base, ending in `/v1`), `--model` /

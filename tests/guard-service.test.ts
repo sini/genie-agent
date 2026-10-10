@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { firstModel, type Ninfer, step } from "../src/guard/service.ts";
+import { firstModel, type Ninfer, start, step, Unauthorized } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -253,4 +253,68 @@ test("an api-key file that is empty, blank or unreadable is a config error namin
 test("GENIE_GUARD_API_KEY_FILE is the environment spelling of --api-key-file", () => {
   const c = config(["--ninfer-url", "http://x/v1"], { XDG_RUNTIME_DIR: "/run", GENIE_GUARD_API_KEY_FILE: keyFile("k1") });
   assert.equal(c.apiKey, "k1");
+});
+
+// G4: /v1/models answers `status` per attempt (the last one repeats); `order` records probes and registers.
+async function modelsAt(statuses: number[]) {
+  const order: string[] = [];
+  const server = createServer((_req, res) => {
+    order.push("probe");
+    const code = statuses[Math.min(order.length - 1, statuses.length - 1)];
+    res.statusCode = code;
+    res.end(code === 200 ? JSON.stringify({ data: [{ id: "m" }] }) : "no");
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as { port: number };
+  const x = { register: async () => void order.push("register") };
+  const close = () => new Promise((r) => server.close(r).closeAllConnections());
+  return { c: { ...cfg(), base: `http://127.0.0.1:${port}/v1` }, x, order, close };
+}
+const quiet = { sleep: async () => {}, log: () => {} };
+
+test("a model down at start is retried with backoff until it is up, then the guard registers", { timeout: 5000 }, async () => {
+  const { c, x, order, close } = await modelsAt([503, 503, 503, 200]);
+  const waits: number[] = [];
+  try {
+    const n = await start(c, x, system, async (ms) => void waits.push(ms), () => {});
+    assert.equal(n.model, "m");
+    assert.deepEqual(order, ["probe", "probe", "probe", "probe", "register"]);
+    assert.deepEqual(waits, [2000, 4000, 8000]);
+  } finally {
+    await close();
+  }
+});
+
+test("the backoff caps at 60 s", { timeout: 5000 }, async () => {
+  const { c, x, close } = await modelsAt([503, 503, 503, 503, 503, 503, 503, 503, 200]);
+  const waits: number[] = [];
+  try {
+    await start(c, x, system, async (ms) => void waits.push(ms), () => {});
+    assert.deepEqual(waits, [2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
+  } finally {
+    await close();
+  }
+});
+
+test("register is called only after the model probe succeeds", { timeout: 5000 }, async () => {
+  const { c, x, order, close } = await modelsAt([503, 200]);
+  try {
+    await start(c, x, system, quiet.sleep, quiet.log);
+    assert.ok(order.indexOf("register") > order.lastIndexOf("probe"), order.join());
+    assert.equal(order.filter((o) => o === "register").length, 1);
+  } finally {
+    await close();
+  }
+});
+
+test("a 401 or 403 at start is Unauthorized, not retried, and the guard never registers", { timeout: 5000 }, async () => {
+  for (const code of [401, 403]) {
+    const { c, x, order, close } = await modelsAt([code]);
+    try {
+      await assert.rejects(start(c, x, system, quiet.sleep, quiet.log), (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`);
+      assert.deepEqual(order, ["probe"]);
+    } finally {
+      await close();
+    }
+  }
 });
