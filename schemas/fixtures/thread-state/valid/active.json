@@ -2,5 +2,6 @@
   "thread_id": "$evt:example.org",
   "status": "active",
   "created": "2026-10-08T10:00:00Z",
-  "last_active": "2026-10-08T10:05:00Z"
+  "last_active": "2026-10-08T10:05:00Z",
+  "sender_tier": "trusted"
 }

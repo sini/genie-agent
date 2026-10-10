@@ -2,5 +2,6 @@
   "thread_id": "t",
   "status": "active",
   "created": "yesterday",
-  "last_active": "2026-10-08T10:00:00Z"
+  "last_active": "2026-10-08T10:00:00Z",
+  "sender_tier": "public"
 }

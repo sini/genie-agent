@@ -1,4 +1,4 @@
-// The local eval runner: one eval-request evaluated by Nix inside bubblewrap, starting from an
+// The local eval runner: one launch (an eval-request and its sender tier) evaluated by Nix inside bubblewrap, starting from an
 // empty throwaway store, and reported as an eval-result.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -11,6 +11,12 @@ export interface EvalRequest {
   rev: string;
   attr: string;
   trusted: "yes" | "no";
+}
+
+// schemas/launch.json: what the launcher accepts. sender_tier is the thread's, from the supervisor.
+export interface Launch {
+  request: EvalRequest;
+  sender_tier: Tier;
 }
 
 // schemas/eval-result.json
@@ -29,10 +35,10 @@ export interface RunOptions {
 
 export const TAIL_CHARS = 4096;
 
-// The caller's tier is the authenticated sender's; the request can only lower it (gate F1): only "yes" on a
+// The sender tier is the authenticated sender's; the request can only lower it (gate F1): only "yes" on a
 // trusted tier runs trusted.
-export const effectiveTier = (tier: Tier, request: EvalRequest): Tier =>
-  tier === "trusted" && request.trusted === "yes" ? "trusted" : "public";
+export const effectiveTier = ({ request, sender_tier }: Launch): Tier =>
+  sender_tier === "trusted" && request.trusted === "yes" ? "trusted" : "public";
 
 const tail = (s: string) => s.slice(-TAIL_CHARS);
 
@@ -47,10 +53,11 @@ const which = (name: string): string => {
 // The model writes the request; nothing in it may reach Nix as anything but a github coordinate.
 const coordinate = /^[A-Za-z0-9._-]+$/;
 
-export function nixArgv(request: EvalRequest, tier: Tier, flakeRef: string): string[] {
+export function nixArgv(launch: Launch, flakeRef: string): string[] {
+  const { request } = launch;
   const settings = {
     "pure-eval": "true",
-    "allow-import-from-derivation": effectiveTier(tier, request) === "trusted" ? "true" : "false",
+    "allow-import-from-derivation": effectiveTier(launch) === "trusted" ? "true" : "false",
     builders: "",
     substituters: "",
     "accept-flake-config": "false",
@@ -69,11 +76,8 @@ export function nixArgv(request: EvalRequest, tier: Tier, flakeRef: string): str
   ];
 }
 
-export async function runEval(
-  request: EvalRequest,
-  tier: Tier,
-  options: RunOptions = {},
-): Promise<EvalResult> {
+export async function runEval(launch: Launch, options: RunOptions = {}): Promise<EvalResult> {
+  const { request } = launch;
   const [owner, name, ...rest] = request.repo.split("/");
   if (!options.localFlake && !(rest.length === 0 && [owner, name, request.rev].every((s) => coordinate.test(s ?? "")))) {
     throw new Error(`not a github coordinate: ${request.repo}/${request.rev}`);
@@ -106,7 +110,7 @@ export async function runEval(
     "--setenv", "NIX_LOG_DIR", "/work/nix/log",
     "--setenv", "NIX_SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt",
     nix,
-    ...nixArgv(request, tier, flakeRef),
+    ...nixArgv(launch, flakeRef),
   ];
   try {
     return await new Promise<EvalResult>((resolve, reject) => {

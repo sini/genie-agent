@@ -4,6 +4,7 @@ export const schemaNames = [
   "draft",
   "eval-request",
   "eval-result",
+  "launch",
   "escalation",
   "proposal",
   "thread-state",

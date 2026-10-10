@@ -7,7 +7,8 @@
     "thread_id",
     "status",
     "created",
-    "last_active"
+    "last_active",
+    "sender_tier"
   ],
   "properties": {
     "thread_id": {
@@ -28,6 +29,12 @@
     "last_active": {
       "type": "string",
       "format": "date-time"
+    },
+    "sender_tier": {
+      "enum": [
+        "trusted",
+        "public"
+      ]
     }
   }
 }

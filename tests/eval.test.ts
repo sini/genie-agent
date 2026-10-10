@@ -3,11 +3,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { runEval, type Tier } from "../src/eval/run.ts";
+import { effectiveTier, runEval, type Tier } from "../src/eval/run.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/eval/${name}`, import.meta.url));
-const run = (name: string, attr: string, trusted: "yes" | "no", tier: Tier) =>
-  runEval({ repo: "local/fixture", rev: name, attr, trusted }, tier, {
+const run = (name: string, attr: string, trusted: "yes" | "no", sender_tier: Tier) =>
+  runEval({ request: { repo: "local/fixture", rev: name, attr, trusted }, sender_tier }, {
     localFlake: fixture(name),
     timeoutMs: 60_000,
   });
@@ -61,7 +61,14 @@ for (const [attr, refusal] of [
 
 test("a non-github coordinate is refused before nix runs", async () => {
   await assert.rejects(
-    runEval({ repo: "a/b/c", rev: "main", attr: "x", trusted: "no" }, "public"),
+    runEval({ request: { repo: "a/b/c", rev: "main", attr: "x", trusted: "no" }, sender_tier: "public" }),
     /not a github coordinate/,
   );
+});
+
+test("the clamp: trusted only on request yes and a trusted sender tier", () => {
+  const request = { repo: "a/b", rev: "main", attr: "x", trusted: "yes" } as const;
+  assert.equal(effectiveTier({ request, sender_tier: "trusted" }), "trusted");
+  assert.equal(effectiveTier({ request, sender_tier: "public" }), "public");
+  assert.equal(effectiveTier({ request: { ...request, trusted: "no" }, sender_tier: "trusted" }), "public");
 });

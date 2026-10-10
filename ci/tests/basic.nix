@@ -5,6 +5,7 @@ let
     "escalation"
     "eval-request"
     "eval-result"
+    "launch"
     "proposal"
     "thread-state"
     "verdict"

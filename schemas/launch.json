@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "what the eval launcher accepts: a tier-1 request and the thread's sender tier, which clamps it",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request",
+    "sender_tier"
+  ],
+  "properties": {
+    "request": {
+      "$ref": "eval-request.json"
+    },
+    "sender_tier": {
+      "enum": [
+        "trusted",
+        "public"
+      ]
+    }
+  }
+}

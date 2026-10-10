@@ -1,0 +1,9 @@
+{
+  "request": {
+    "repo": "sini/genie-agent",
+    "rev": "main",
+    "attr": "checks",
+    "trusted": "yes"
+  },
+  "sender_tier": "public"
+}
