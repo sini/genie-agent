@@ -52,6 +52,8 @@
               # Any guard-in reply outside schemas/verdict.json parses to a reject, and genie-guard
               # relays a verdict or an error, never the model's text.
               checks.guard = genie-agent.checks.${system}.guard;
+              # Two threads on one repo share one mirror clone, and a refused URL runs no git.
+              checks.mirror = genie-agent.checks.${system}.mirror;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is
