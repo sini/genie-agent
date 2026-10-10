@@ -89,7 +89,20 @@ const reject = (why: string): Verdict => ({
   cleaned_text: "",
 });
 
-export function parseVerdict(raw: string, reviewed: Envelope): Verdict {
+// Some models wrap the one object in a markdown fence. Only that outer pair is removed; fences
+// inside a cleaned_text string are the user's code and stay.
+const open = /^```(json)? *$/;
+const close = /^``` *$/;
+function unwrap(reply: string): string {
+  const t = reply.trim();
+  const lines = t.split("\n");
+  return lines.length >= 3 && open.test(lines[0]) && close.test(lines[lines.length - 1])
+    ? lines.slice(1, -1).join("\n")
+    : t;
+}
+
+export function parseVerdict(reply: string, reviewed: Envelope): Verdict {
+  const raw = unwrap(reply);
   let value: unknown;
   try {
     value = JSON.parse(raw);
