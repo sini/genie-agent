@@ -253,6 +253,32 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's
+          # worktrees, web_fetch refusing private and cluster addresses after resolution, and every
+          # web result screened by the guard. Stub servers on the sandbox's loopback, no network.
+          tier1 =
+            pkgs.runCommand "genie-agent-tier1"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/tier1
+                    ./src/guard/verdict.ts
+                    ./src/mirror
+                    ./schemas
+                    ./tests/tier1.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-reporter=tap tests/tier1.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''

@@ -54,6 +54,9 @@
               checks.guard = genie-agent.checks.${system}.guard;
               # Two threads on one repo share one mirror clone, and a refused URL runs no git.
               checks.mirror = genie-agent.checks.${system}.mirror;
+              # Tier 1 has exactly twelve tools, confined to its worktrees and public addresses, and
+              # sees web content only through a guard verdict.
+              checks.tier1 = genie-agent.checks.${system}.tier1;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is
