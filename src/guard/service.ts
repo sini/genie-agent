@@ -82,34 +82,43 @@ export async function start(
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.
+// A reply cut off at max_tokens or with no content (a model reasoning in a loop) is asked once
+// more; a second such reply is Unavailable.
 export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; verdict: Verdict }> {
-  const res = await fetch(`${n.base}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...auth(n.apiKey) },
-    body: JSON.stringify({
-      model: n.model,
-      temperature: 0,
-      // A guard that reasons without end is cut off, and its empty reply parses to a reject.
-      max_tokens: 8192,
-      messages: [
-        { role: "system", content: n.system },
-        { role: "user", content: JSON.stringify(e) },
-      ],
-    }),
-    signal: n.timeoutMs === undefined ? undefined : AbortSignal.timeout(n.timeoutMs),
-  }).catch((err) => {
-    throw new Unavailable(String(err), true);
-  });
-  const body = await res.text().catch((err) => {
-    throw new Unavailable(String(err), true);
-  });
-  if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(body).choices?.[0]?.message?.content;
-  } catch {}
-  if (typeof raw !== "string") throw new Unavailable("no message content in the reply");
-  return { raw, verdict: parseVerdict(raw, e) };
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`${n.base}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...auth(n.apiKey) },
+      body: JSON.stringify({
+        model: n.model,
+        temperature: 0,
+        // A guard that reasons without end is cut off, early: 1.5x the longest clean verdict.
+        // Measured 2026-10-10, guard-eval sequential on qwen3.8-27b: 1300 tokens over 103 replies.
+        max_tokens: 2048,
+        messages: [
+          { role: "system", content: n.system },
+          { role: "user", content: JSON.stringify(e) },
+        ],
+      }),
+      signal: n.timeoutMs === undefined ? undefined : AbortSignal.timeout(n.timeoutMs),
+    }).catch((err) => {
+      throw new Unavailable(String(err), true);
+    });
+    const body = await res.text().catch((err) => {
+      throw new Unavailable(String(err), true);
+    });
+    if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
+    let choice: any;
+    try {
+      choice = JSON.parse(body).choices?.[0];
+    } catch {}
+    const raw: unknown = choice?.message?.content;
+    if (choice?.finish_reason !== "length" && typeof raw === "string") return { raw, verdict: parseVerdict(raw, e) };
+    if (attempt >= 2)
+      throw new Unavailable(
+        choice?.finish_reason === "length" ? "the reply was cut off at max_tokens" : "no message content in the reply",
+      );
+  }
 }
 
 // Why `value` is not an Envelope, empty when it is one. Nothing beyond the envelope reaches the

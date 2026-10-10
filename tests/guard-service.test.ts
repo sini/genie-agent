@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { firstModel, type Ninfer, start, step, Unauthorized } from "../src/guard/service.ts";
+import { firstModel, type Ninfer, review, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -85,7 +85,7 @@ for (const v of verdicts)
       assert.deepEqual(requests[0], {
         model: "m",
         temperature: 0,
-        max_tokens: 8192,
+        max_tokens: 2048,
         messages: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(env) },
@@ -142,6 +142,44 @@ test("a chat completion with no message content is an error reply, not a verdict
   const { n, close } = await ninfer((res) => res.end("{}"));
   try {
     isError((await once(n, JSON.stringify(env))).parsed, /^guard-in unavailable: no message content/);
+  } finally {
+    await close();
+  }
+});
+
+// A model reasoning in a loop: cut off at max_tokens with no content.
+const loops = (res: ServerResponse) =>
+  res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null }, finish_reason: "length" }] }));
+
+test("a reply cut off once is asked again, and the second reply's verdict is returned", async () => {
+  let answered = 0;
+  const { n, requests, close } = await ninfer((res) => (answered++ ? says(JSON.stringify(verdicts[2])) : loops)(res));
+  try {
+    assert.equal((await review(env, n)).verdict.verdict, "reject");
+    assert.equal(requests.length, 2);
+  } finally {
+    await close();
+  }
+});
+
+test("a reply cut off twice is Unavailable after exactly two requests", async () => {
+  const { n, requests, close } = await ninfer(loops);
+  try {
+    await assert.rejects(review(env, n), (e) => e instanceof Unavailable && /cut off at max_tokens/.test(e.message));
+    assert.equal(requests.length, 2);
+  } finally {
+    await close();
+  }
+});
+
+test("an HTTP error is Unavailable after exactly one request, never retried", async () => {
+  const { n, requests, close } = await ninfer((res) => {
+    res.statusCode = 500;
+    res.end("boom");
+  });
+  try {
+    await assert.rejects(review(env, n), (e) => e instanceof Unavailable && /^HTTP 500/.test(e.message));
+    assert.equal(requests.length, 1);
   } finally {
     await close();
   }
