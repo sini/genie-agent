@@ -39,8 +39,12 @@ acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) a
 Settings, each a flag or the environment variable beside it: `--ninfer-url` /
 `GENIE_GUARD_NINFER_URL` (required; ninfer's OpenAI base, ending in `/v1`), `--model` /
 `GENIE_GUARD_MODEL` (default: the first model listed at `/v1/models` when the service starts), and
-`--timeout-ms` / `GENIE_GUARD_TIMEOUT_MS` (default 120000, for each review). `XDG_RUNTIME_DIR` is
-required. A bad setting exits 2 and names it.
+`--timeout-ms` / `GENIE_GUARD_TIMEOUT_MS` (default 120000, for each review), and
+`--api-key-file` / `GENIE_GUARD_API_KEY_FILE` (optional; a path to a file holding the key, read
+once at start and trimmed, sent as `Authorization: Bearer <key>` on `/v1/models` and
+`/v1/chat/completions`; the key is never in argv, the environment or a log, and a file that is
+unreadable or empty exits 2; unset sends no header). `tests/guard-eval.ts` takes the same
+`--api-key-file`. `XDG_RUNTIME_DIR` is required. A bad setting exits 2 and names it.
 
 ## Tests
 

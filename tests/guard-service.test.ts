@@ -4,9 +4,12 @@
 // not an envelope are `{"error": …}`, never a verdict. Run with `node --test tests/guard-service.test.ts`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Inbound } from "../src/dispatcher/xmsg.ts";
-import { type Ninfer, step } from "../src/guard/service.ts";
+import { config, ConfigError } from "../src/guard/config.ts";
+import { firstModel, type Ninfer, step } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -17,12 +20,21 @@ const env: Envelope = {
 };
 
 // ninfer, answering every chat completion with `answer` and recording each request body.
-async function ninfer(answer: (res: ServerResponse) => void) {
+// With `key`, a request lacking `Authorization: Bearer <key>` is answered 401. `calls` records each
+// request's method, path and Authorization header.
+async function ninfer(answer: (res: ServerResponse) => void, key?: string) {
   const requests: any[] = [];
+  const calls: { method?: string; url?: string; authorization?: string }[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
+      calls.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+      if (key !== undefined && req.headers.authorization !== `Bearer ${key}`) {
+        res.statusCode = 401;
+        return res.end("unauthorized");
+      }
+      if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: "m" }] }));
       requests.push(JSON.parse(body));
       answer(res);
     });
@@ -31,7 +43,7 @@ async function ninfer(answer: (res: ServerResponse) => void) {
   const { port } = server.address() as { port: number };
   const n: Ninfer = { base: `http://127.0.0.1:${port}/v1`, model: "m", system, timeoutMs: 300 };
   const close = () => new Promise((r) => server.close(r).closeAllConnections());
-  return { n, requests, close };
+  return { n, requests, calls, close };
 }
 const says = (content: string) => (res: ServerResponse) =>
   res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }));
@@ -176,4 +188,69 @@ test("no message within the wait replies and acks nothing", async () => {
     ack: async () => assert.fail("acked"),
   };
   assert.equal(await step(x, { base: "http://127.0.0.1:1/v1", model: "m", system }, 0), null);
+});
+
+const keyFile = (content: string) => {
+  const f = `${mkdtempSync(`${tmpdir()}/guard-key-`)}/key`;
+  writeFileSync(f, content);
+  return f;
+};
+const cfg = (...argv: string[]) => config(["--ninfer-url", "http://x/v1", ...argv], { XDG_RUNTIME_DIR: "/run" });
+
+test("a configured key is sent as a Bearer on /v1/models and on /v1/chat/completions", async () => {
+  const { n, calls, close } = await ninfer(says(JSON.stringify(verdicts[0])), "sekrit");
+  try {
+    const c = cfg("--api-key-file", keyFile("sekrit\n"));
+    assert.equal(c.apiKey, "sekrit");
+    assert.equal(await firstModel(n.base, c.apiKey), "m");
+    assert.equal((await once({ ...n, apiKey: c.apiKey }, JSON.stringify(env))).parsed.verdict, "allow");
+    assert.deepEqual(
+      calls.map((x) => [x.url, x.authorization]),
+      [
+        ["/v1/models", "Bearer sekrit"],
+        ["/v1/chat/completions", "Bearer sekrit"],
+      ],
+    );
+  } finally {
+    await close();
+  }
+});
+
+test("with no key configured no Authorization header is sent", async () => {
+  const { n, calls, close } = await ninfer(says(JSON.stringify(verdicts[0])));
+  try {
+    assert.equal(cfg().apiKey, undefined);
+    await firstModel(n.base, cfg().apiKey);
+    await once(n, JSON.stringify(env));
+    assert.deepEqual(
+      calls.map((x) => x.url),
+      ["/v1/models", "/v1/chat/completions"],
+    );
+    assert.deepEqual(calls.map((x) => x.authorization), [undefined, undefined]);
+  } finally {
+    await close();
+  }
+});
+
+test("a 401 for a missing or wrong key is an error reply, not a verdict, and does not echo the key", async () => {
+  const { n, close } = await ninfer(says(JSON.stringify(verdicts[0])), "sekrit");
+  try {
+    for (const apiKey of [undefined, "wrong-key"]) {
+      const { reply, parsed } = await once({ ...n, apiKey }, JSON.stringify(env));
+      isError(parsed, /^guard-in unavailable: HTTP 401 unauthorized$/);
+      assert.ok(!reply.includes("wrong-key") && !reply.includes("sekrit"));
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("an api-key file that is empty, blank or unreadable is a config error naming the flag", () => {
+  for (const f of [keyFile(""), keyFile(" \n\t"), "/nonexistent/guard-key"])
+    assert.throws(() => cfg("--api-key-file", f), (e) => e instanceof ConfigError && /^--api-key-file: /.test(e.message));
+});
+
+test("GENIE_GUARD_API_KEY_FILE is the environment spelling of --api-key-file", () => {
+  const c = config(["--ninfer-url", "http://x/v1"], { XDG_RUNTIME_DIR: "/run", GENIE_GUARD_API_KEY_FILE: keyFile("k1") });
+  assert.equal(c.apiKey, "k1");
 });

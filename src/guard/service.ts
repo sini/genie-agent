@@ -13,7 +13,11 @@ export interface Ninfer {
   // prompts/guard-in.md.
   system: string;
   timeoutMs?: number;
+  // Sent as `Authorization: Bearer` when set; never logged.
+  apiKey?: string;
 }
+
+const auth = (apiKey?: string): Record<string, string> => (apiKey ? { authorization: `Bearer ${apiKey}` } : {});
 
 // No review happened: ninfer was unreachable or timed out (`dropped`), or answered with an HTTP
 // error or with no message content.
@@ -26,8 +30,8 @@ export class Unavailable extends Error {
 }
 
 // ninfer's first model, as `/v1/models` lists it.
-export async function firstModel(base: string): Promise<string> {
-  const res = await fetch(`${base}/models`).catch((e) => {
+export async function firstModel(base: string, apiKey?: string): Promise<string> {
+  const res = await fetch(`${base}/models`, { headers: auth(apiKey) }).catch((e) => {
     throw new Unavailable(`${base}: ${e}`, true);
   });
   if (!res.ok) throw new Unavailable(`${base}/models: HTTP ${res.status}`);
@@ -40,7 +44,7 @@ export async function firstModel(base: string): Promise<string> {
 export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; verdict: Verdict }> {
   const res = await fetch(`${n.base}/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...auth(n.apiKey) },
     body: JSON.stringify({
       model: n.model,
       temperature: 0,

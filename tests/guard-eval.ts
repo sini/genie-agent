@@ -34,6 +34,7 @@ const { values: args } = parseArgs({
     out: { type: "string" },
     corpus: { type: "string", default: "corpus/injection" },
     base: { type: "string", default: process.env.NINFER_URL ?? "http://10.9.2.2:8081/v1" },
+    "api-key-file": { type: "string" },
   },
 });
 
@@ -67,14 +68,16 @@ const envelope = (c: Pick<Case, "vector" | "text" | "history">): Envelope => ({
 const fresh = (text: string) => envelope({ vector: "message", text });
 const caseText = (c: Case) => [c.text, ...(c.history ?? []).map((l) => l.text)].join("\n");
 
-const model = await firstModel(args.base).catch((e) => die(e.message));
+const apiKey = args["api-key-file"] ? readFileSync(args["api-key-file"], "utf8").trim() : undefined;
+if (args["api-key-file"] && !apiKey) die(`${args["api-key-file"]} is empty`);
+const model = await firstModel(args.base, apiKey).catch((e) => die(e.message));
 
 // The request and the parse are genie-guard's own (src/guard/service.ts).
 async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: Verdict }> {
   // A dropped connection is retried; an HTTP error, or a reply with no content, is not.
   for (let attempt = 1; ; attempt++)
     try {
-      return await review(e, { base: args.base, model, system });
+      return await review(e, { base: args.base, model, system, apiKey });
     } catch (err) {
       if (!(err instanceof Unavailable)) throw err;
       if (attempt >= 3 || !err.dropped) die(`${id}: ${err.message}`);
