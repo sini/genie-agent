@@ -346,7 +346,7 @@ test("the backoff caps at 60 s", { timeout: 5000 }, async () => {
   }
 });
 
-test("with the model pinned and ninfer down, awaitModel waits and only returns once ninfer answers", async () => {
+test("with the model pinned and ninfer down, awaitModel waits and only returns once ninfer answers", { timeout: 5000 }, async () => {
   const { c, close } = await modelsAt([503, 503, 200]);
   const waits: number[] = [];
   try {
@@ -455,7 +455,7 @@ test("oracle 4: a stub register.sock with no agent.sock receives the reply frame
 // new connection and polls again, and the process doesn't exit.
 // Mutant in src/guard/service.ts: rethrow on close (today's behaviour) => RED
 // -----------------------------------------------------------------------------
-test("oracle 1: guard re-registers when xmsg drops connection and process does not exit", async () => {
+test("oracle 1: guard re-registers when xmsg drops connection and process does not exit", { timeout: 5000 }, async () => {
   const dir = mkdtempSync(`${tmpdir()}/guard-reg-reconnect-`);
   const framesConn1: any[] = [];
   const framesConn2: any[] = [];
@@ -541,7 +541,7 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
 // Oracle 2: Stub absent at start. The guard retries and registers once the stub appears.
 // Mutant in src/guard/service.ts: no retry on ENOENT => RED
 // -----------------------------------------------------------------------------
-test("oracle 2: stub absent at start retries with backoff and registers once stub appears", async () => {
+test("oracle 2: stub absent at start retries with backoff and registers once stub appears", { timeout: 5000 }, async () => {
   const dir = mkdtempSync(`${tmpdir()}/guard-reg-absent-`);
   const sockPath = `${dir}/register.sock`;
   const waits: number[] = [];

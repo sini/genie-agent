@@ -251,7 +251,7 @@
               ''
                 cd $src
                 rc=0
-                node --test --test-reporter=tap tests/guard.test.ts tests/guard-service.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/guard.test.ts tests/guard-service.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
