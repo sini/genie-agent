@@ -5,12 +5,13 @@
 import process from "node:process";
 import { SocketXmsg } from "../dispatcher/xmsg.ts";
 import system from "../../prompts/guard-in.md";
+import systemWeb from "../../prompts/guard-web.md";
 import { type Config, config, ConfigError } from "./config.ts";
 import { start, step, Unauthorized } from "./service.ts";
 
 async function main(c: Config): Promise<void> {
   const x = new SocketXmsg(c.xmsgDir, "genie-guard");
-  const n = await start(c, x, system);
+  const n = await start(c, x, system, systemWeb);
   for (;;) await step(x, n, 30_000);
 }
 

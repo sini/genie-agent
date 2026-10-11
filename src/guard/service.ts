@@ -14,6 +14,8 @@ export interface Ninfer {
   model: string;
   // prompts/guard-in.md.
   system: string;
+  // prompts/guard-web.md.
+  systemWeb?: string;
   timeoutMs?: number;
   // Sent as `Authorization: Bearer` when set; never logged.
   apiKey?: string;
@@ -73,18 +75,30 @@ export async function start(
   c: Config,
   x: { register(): Promise<void> },
   system: string,
-  wait?: Parameters<typeof awaitModel>[3],
+  systemWeb?: string | Parameters<typeof awaitModel>[3],
+  wait?: Parameters<typeof awaitModel>[3] | Parameters<typeof awaitModel>[4],
   log?: Parameters<typeof awaitModel>[4],
 ): Promise<Ninfer> {
-  const model = await awaitModel(c.base, c.apiKey, c.model, wait, log);
+  let sw: string | undefined;
+  let w = wait as Parameters<typeof awaitModel>[3];
+  let l = log;
+  if (typeof systemWeb === "function") {
+    w = systemWeb;
+    l = wait as Parameters<typeof awaitModel>[4];
+    sw = undefined;
+  } else {
+    sw = systemWeb;
+  }
+  const model = await awaitModel(c.base, c.apiKey, c.model, w, l);
   await x.register();
-  return { base: c.base, model, system, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
+  return { base: c.base, model, system, systemWeb: sw, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.
 // A reply cut off at max_tokens or with no content (a model reasoning in a loop) is asked once
 // more; a second such reply is Unavailable.
 export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; verdict: Verdict }> {
+  const system = e.source === "web" && n.systemWeb ? n.systemWeb : n.system;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(`${n.base}/chat/completions`, {
       method: "POST",
@@ -96,7 +110,7 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
         // Measured 2026-10-10, guard-eval sequential on qwen3.8-27b: 1300 tokens over 103 replies.
         max_tokens: 2048,
         messages: [
-          { role: "system", content: n.system },
+          { role: "system", content: system },
           { role: "user", content: JSON.stringify(e) },
         ],
       }),

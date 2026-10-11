@@ -77,6 +77,7 @@
           ./src/guard
           ./src/dispatcher/xmsg.ts
           ./prompts/guard-in.md
+          ./prompts/guard-web.md
         ];
         description = "genie-agent's guard-in, as a Node single executable";
       };

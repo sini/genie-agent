@@ -365,3 +365,30 @@ test("a 401 or 403 at start is Unauthorized, not retried, and the guard never re
     }
   }
 });
+
+test("oracle 1: review sends guard-web prompt for web, and guard-in prompt for others", async () => {
+  const systemWeb = "the web guard prompt";
+  const { n, requests, close } = await ninfer(says(JSON.stringify(verdicts[0])));
+  try {
+    const nw: Ninfer = { ...n, systemWeb };
+    const cases: { source: Envelope["source"]; expected: string }[] = [
+      { source: "web", expected: systemWeb },
+      { source: "message", expected: system },
+      { source: "eval_stdout", expected: system },
+      { source: "recall", expected: system },
+    ];
+    for (const c of cases) {
+      const e: Envelope = {
+        source: c.source,
+        history: [],
+        content: c.source === "message" ? { sender: "@u:x", tier: "public", text: "hi" } : { text: "hi" },
+      };
+      await review(e, nw);
+      const last = requests[requests.length - 1];
+      const sysMsg = last.messages.find((m: any) => m.role === "system");
+      assert.equal(sysMsg?.content, c.expected, `source ${c.source} should send ${c.expected}`);
+    }
+  } finally {
+    await close();
+  }
+});

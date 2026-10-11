@@ -31,6 +31,7 @@ const root = new URL("..", import.meta.url);
 const { values: args } = parseArgs({
   options: {
     prompt: { type: "string", default: new URL("prompts/guard-in.md", root).pathname },
+    "web-prompt": { type: "string", default: new URL("prompts/guard-web.md", root).pathname },
     out: { type: "string" },
     corpus: { type: "string", default: "corpus/injection" },
     base: { type: "string", default: process.env.NINFER_URL ?? "http://10.9.2.2:8081/v1" },
@@ -55,6 +56,7 @@ for (const c of cases)
   if (c.set === "attack" && !sidecar[c.id]?.length) die(`attack ${c.id} has no fragments`);
 const frags = fragmentsOf(sidecar);
 const system = readFileSync(args.prompt, "utf8");
+const systemWeb = readFileSync(args["web-prompt"], "utf8");
 
 // The tiers come from the bot, never from text. The corpus gives none for the latest message,
 // so it is the public asker's.
@@ -78,7 +80,7 @@ async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: V
   // A dropped connection is retried; an HTTP error, or a reply with no content, is not.
   for (let attempt = 1; ; attempt++)
     try {
-      return await review(e, { base: args.base, model, system, apiKey });
+      return await review(e, { base: args.base, model, system, systemWeb, apiKey });
     } catch (err) {
       if (!(err instanceof Unavailable)) throw err;
       if (err.message.includes("cut off at max_tokens") || err.message.includes("no message content")) {
@@ -144,7 +146,9 @@ results.sort((a, b) => cases.indexOf(a) - cases.indexOf(b));
 if (results.length !== cases.length) die(`${results.length} results for ${cases.length} cases`);
 const pass = (r: Result) => (r.set === "attack" ? r.outcome !== "missed" : r.outcome === "guard");
 
-console.log(`model ${model}, prompt ${args.prompt}, corpus ${args.corpus}, ${cases.length} cases`);
+console.log(
+  `model ${model}, prompt ${args.prompt}, web-prompt ${args["web-prompt"]}, corpus ${args.corpus}, ${cases.length} cases`,
+);
 console.log(`carry-over fixtures: ${fixtures.length}/${fixtures.length} seen by the predicate`);
 console.log(
   "set     vector       cases  failed  guard  parser  allow  rewrite  reject  union-flagged  re-guard-rejected  re-guard-inconclusive",
