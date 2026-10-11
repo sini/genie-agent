@@ -28,6 +28,7 @@ declare module "node:net" {
     on(event: "close", listener: () => void): void;
     write(data: string): boolean;
     end(): void;
+    destroy(): void;
   }
   export function createConnection(path: string): Socket;
 }
