@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createNetServer } from "node:net";
 import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { envelopeErrors, firstModel, isConnectionError, type Ninfer, review, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
+import { awaitModel, envelopeErrors, firstModel, isConnectionError, type Ninfer, review, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -346,6 +346,18 @@ test("the backoff caps at 60 s", { timeout: 5000 }, async () => {
   }
 });
 
+test("with the model pinned and ninfer down, awaitModel waits and only returns once ninfer answers", async () => {
+  const { c, close } = await modelsAt([503, 503, 200]);
+  const waits: number[] = [];
+  try {
+    const model = await awaitModel(c.base, undefined, "pinned", async (ms) => void waits.push(ms), () => {});
+    assert.equal(model, "pinned");
+    assert.deepEqual(waits, [2000, 4000], "must wait with backoff while ninfer is down even when model is pinned");
+  } finally {
+    await close();
+  }
+});
+
 test("register is called only after the model probe succeeds", { timeout: 5000 }, async () => {
   const { c, x, order, close } = await modelsAt([503, 200]);
   try {
@@ -360,10 +372,15 @@ test("register is called only after the model probe succeeds", { timeout: 5000 }
 test("a 401 or 403 at start is Unauthorized, not retried, and the guard never registers", { timeout: 5000 }, async () => {
   for (const code of [401, 403]) {
     const { c, x, order, close } = await modelsAt([code]);
+    const ac = new AbortController();
     try {
-      await assert.rejects(start(c, x, system, systemWeb, quiet.sleep, quiet.log), (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`);
+      await assert.rejects(
+        start(c, x, system, systemWeb, async () => { ac.abort(); }, quiet.log, ac.signal),
+        (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`,
+      );
       assert.deepEqual(order, ["probe"]);
     } finally {
+      ac.abort();
       await close();
     }
   }
@@ -445,6 +462,10 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
   let connectionCount = 0;
   let deliveredConn2 = false;
   const regSockets = new Set<any>();
+  let onAck: () => void = () => {};
+  const acked = new Promise<void>((r) => {
+    onAck = r;
+  });
 
   const reg = createNetServer((c: any) => {
     regSockets.add(c);
@@ -476,6 +497,9 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
             } else {
               c.write(`${JSON.stringify({ action: "timeout" })}\n`);
             }
+          } else if (f.action === "ack") {
+            c.write(`${JSON.stringify({ status: "ok" })}\n`);
+            onAck();
           } else {
             c.write(`${JSON.stringify({ status: "ok" })}\n`);
           }
@@ -497,19 +521,13 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
       wait: async () => {}, // instant retry in test
     });
 
-    for (let i = 0; i < 100; i++) {
-      if (framesConn2.some((f) => f.action === "ack")) {
-        ac.abort();
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    await acked;
+    ac.abort();
+    await servePromise;
 
     assert.equal(connectionCount, 2, "guard must reconnect to register.sock after drop");
     assert.deepEqual(framesConn1.map((f) => f.action ?? f.harness), ["svc", "poll"]);
     assert.deepEqual(framesConn2.slice(0, 4).map((f) => f.action ?? f.harness), ["svc", "poll", "reply", "ack"]);
-
-    await servePromise;
   } finally {
     ac.abort();
     x.close();
@@ -532,6 +550,10 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
   const frames: any[] = [];
   let delivered = false;
   const regSockets = new Set<any>();
+  let onAck: () => void = () => {};
+  const acked = new Promise<void>((r) => {
+    onAck = r;
+  });
 
   const { n, close: closeNinfer } = await ninfer(says(JSON.stringify(verdicts[0])));
   const x = new SocketXmsg(dir, "genie-guard");
@@ -563,6 +585,9 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
                   } else {
                     client.write(`${JSON.stringify({ action: "timeout" })}\n`);
                   }
+                } else if (f.action === "ack") {
+                  client.write(`${JSON.stringify({ status: "ok" })}\n`);
+                  onAck();
                 } else {
                   client.write(`${JSON.stringify({ status: "ok" })}\n`);
                 }
@@ -575,13 +600,9 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
       log: (line) => logs.push(line),
     });
 
-    for (let i = 0; i < 100; i++) {
-      if (frames.some((f) => f.action === "ack")) {
-        ac.abort();
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    await acked;
+    ac.abort();
+    await servePromise;
 
     assert.ok(waits.length >= 2, `should have waited at least twice, got: ${waits.length}`);
     assert.equal(waits[0], 1000, "first backoff should be 1000ms");
@@ -591,8 +612,6 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
       `should log waiting for xmsg with ENOENT, got: ${JSON.stringify(logs)}`,
     );
     assert.deepEqual(frames.slice(0, 4).map((f) => f.action ?? f.harness), ["svc", "poll", "reply", "ack"]);
-
-    await servePromise;
   } finally {
     ac.abort();
     x.close();
@@ -606,25 +625,28 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
 // Oracle 3: A 401 from the model still exits non-zero, not retried.
 // Mutant in src/guard/service.ts: retry on Unauthorized too => RED
 // -----------------------------------------------------------------------------
-test("oracle 3: a 401 from the model still exits non-zero and is not retried", { timeout: 2000 }, async () => {
+test("oracle 3: a 401 from the model still exits non-zero and is not retried", async () => {
   const { c, x, order, close } = await modelsAt([401]);
   const waits: number[] = [];
   const logs: string[] = [];
+  const ac = new AbortController();
 
   try {
     await assert.rejects(
       serve(c, x, system, systemWeb, {
         wait: async (ms) => {
           waits.push(ms);
-          throw new Error("unexpected retry on 401");
+          ac.abort();
         },
         log: (l) => logs.push(l),
+        signal: ac.signal,
       }),
       (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`,
     );
     assert.deepEqual(order, ["probe"], "should only probe once and not retry on 401");
     assert.equal(waits.length, 0, "should not wait/retry on 401");
   } finally {
+    ac.abort();
     await close();
   }
 });

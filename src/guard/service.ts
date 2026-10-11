@@ -57,14 +57,29 @@ export async function backoff<T>(
     shouldRetry: (e: unknown) => boolean;
     onWait: (e: unknown) => void;
     sleep?: (ms: number) => Promise<void>;
+    signal?: AbortSignal;
   },
 ): Promise<T> {
-  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const defaultSleep = (ms: number) =>
+    new Promise<void>((resolve, reject) => {
+      if (opts.signal?.aborted) return reject(new Error("aborted"));
+      const timer = setTimeout(resolve, ms);
+      opts.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  const sleep = opts.sleep ?? defaultSleep;
   for (let wait = opts.startMs; ; wait = Math.min(wait * 2, opts.maxMs)) {
+    if (opts.signal?.aborted) throw new Error("aborted");
     try {
       return await action();
     } catch (e) {
-      if (!opts.shouldRetry(e)) throw e;
+      if (opts.signal?.aborted || !opts.shouldRetry(e)) throw e;
       opts.onWait(e);
       await sleep(wait);
     }
@@ -89,16 +104,21 @@ export async function awaitModel(
   model: string | undefined,
   sleep?: (ms: number) => Promise<void>,
   log?: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
   return backoff(
-    async () => model ?? (await firstModel(base, apiKey)),
+    async () => {
+      const id = await firstModel(base, apiKey);
+      return model ?? id;
+    },
     {
       startMs: 2_000,
       maxMs: 60_000,
       shouldRetry: (e) => e instanceof Unavailable && !(e instanceof Unauthorized),
       onWait: (e) => l(`genie-guard: waiting for the model: ${e instanceof Error ? e.message : e}`),
       sleep,
+      signal,
     },
   );
 }
@@ -109,6 +129,7 @@ export async function awaitRegister(
   x: { register(): Promise<void> },
   sleep?: (ms: number) => Promise<void>,
   log?: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
   return backoff(
@@ -119,6 +140,7 @@ export async function awaitRegister(
       shouldRetry: isConnectionError,
       onWait: (e) => l(`genie-guard: waiting for xmsg: ${e instanceof Error ? e.message : e}`),
       sleep,
+      signal,
     },
   );
 }
@@ -131,9 +153,10 @@ export async function start(
   systemWeb: string,
   wait?: (ms: number) => Promise<void>,
   log?: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<Ninfer> {
-  const model = await awaitModel(c.base, c.apiKey, c.model, wait, log);
-  await awaitRegister(x, wait, log);
+  const model = await awaitModel(c.base, c.apiKey, c.model, wait, log, signal);
+  await awaitRegister(x, wait, log, signal);
   return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
 }
 
@@ -252,7 +275,7 @@ export async function serve(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const n = await start(c, x, system, systemWeb, opts?.wait, opts?.log);
+  const n = await start(c, x, system, systemWeb, opts?.wait, opts?.log, opts?.signal);
   const pollWaitMs = opts?.pollWaitMs ?? 30_000;
   while (!opts?.signal?.aborted) {
     try {
@@ -260,7 +283,7 @@ export async function serve(
     } catch (e) {
       if (opts?.signal?.aborted) break;
       if (!isConnectionError(e)) throw e;
-      await awaitRegister(x, opts?.wait, opts?.log);
+      await awaitRegister(x, opts?.wait, opts?.log, opts?.signal);
     }
   }
 }
