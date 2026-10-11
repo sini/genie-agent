@@ -35,6 +35,7 @@
           nativeBuildInputs = [
             pkgs.nodejs
             pkgs.esbuild
+            pkgs.removeReferencesTo
           ];
           # postject is not in nixpkgs. Its api.js is self-contained (the cli adds commander).
           postject = pkgs.fetchurl {
@@ -55,7 +56,12 @@
               }).catch((e) => { console.error(e); process.exit(1); });
             ' $PWD/package/dist/api.js ${name} blob
           '';
-          installPhase = "install -Dm755 ${name} $out/bin/${name}";
+          installPhase = ''
+            install -Dm755 ${name} $out/bin/${name}
+            for p in $(grep -a -o -E '/nix/store/[a-z0-9]{32}-[a-zA-Z0-9_.-]*(-dev|nodejs[a-zA-Z0-9_.-]*)' $out/bin/${name} | grep -v '^/nix/store/e\{32\}' | sort -u); do
+              remove-references-to -t "$p" $out/bin/${name}
+            done
+          '';
           meta = {
             inherit description;
             license = nixpkgs.lib.licenses.mit;
@@ -81,6 +87,26 @@
         ];
         description = "genie-agent's guard-in, as a Node single executable";
       };
+      guardImage =
+        pkgs:
+        pkgs.dockerTools.buildLayeredImage {
+          name = "ghcr.io/sini/genie-guard";
+          tag = "latest";
+          contents = [
+            pkgs.cacert
+            (genieGuard pkgs)
+          ];
+          extraCommands = ''
+            mkdir -p -m 1777 tmp
+          '';
+          config = {
+            User = "65532:65532";
+            Entrypoint = [ "${genieGuard pkgs}/bin/genie-guard" ];
+            Env = [
+              "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+            ];
+          };
+        };
       # Each single executable runs its own main and nothing else: a payload offered through
       # NODE_OPTIONS, a node flag or a script argument never runs, and the binary's own config
       # refusal (exit 2) is the positive control that its main did.
@@ -140,6 +166,7 @@
         // onLinux pkgs {
           genie-dispatcher = genieDispatcher pkgs;
           genie-guard = genieGuard pkgs;
+          image = guardImage pkgs;
         }
       );
 
@@ -311,6 +338,15 @@
         // onLinux pkgs {
           dispatcher-sea = seaCheck "genie-dispatcher" (genieDispatcher pkgs) pkgs;
           genie-guard-sea = seaCheck "genie-guard" (genieGuard pkgs) pkgs;
+          image =
+            pkgs.runCommand "genie-agent-image-oracle"
+              {
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                python3 ${./nix/check_image.py} ${guardImage pkgs}
+                touch $out
+              '';
         }
       );
 
