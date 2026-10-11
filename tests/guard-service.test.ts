@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Inbound } from "../src/dispatcher/xmsg.ts";
+import { createServer as createNetServer } from "node:net";
+import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
 import { envelopeErrors, firstModel, type Ninfer, review, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
@@ -388,6 +389,44 @@ test("oracle 1: review sends guard-web prompt for web, and guard-in prompt for o
       assert.equal(sysMsg?.content, c.expected, `source ${c.source} should send ${c.expected}`);
     }
   } finally {
+    await close();
+  }
+});
+
+test("oracle 4: a stub register.sock with no agent.sock receives the reply frame", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/guard-reg-`);
+  const frames: any[] = [];
+  const lines = (answer: (f: any) => object) => (c: any) => {
+    let buf = "";
+    c.setEncoding("utf8");
+    c.on("data", (d: string) => {
+      for (buf += d; buf.includes("\n"); buf = buf.slice(buf.indexOf("\n") + 1)) {
+        const f = JSON.parse(buf.slice(0, buf.indexOf("\n")));
+        frames.push(f);
+        c.write(`${JSON.stringify(answer(f))}\n`);
+      }
+    });
+  };
+  const reg = createNetServer(lines((f) =>
+    f.harness ? { status: "ok", sessionId: "svc:genie-guard" }
+    : f.action === "poll" ? { action: "deliver", messageId: "01A", text: JSON.stringify(env) }
+    : { status: "ok" }));
+  await new Promise<void>((r) => reg.listen(`${dir}/register.sock`, r));
+
+  const { n, close } = await ninfer(says(JSON.stringify(verdicts[0])));
+  const x = new SocketXmsg(dir, "genie-guard");
+  try {
+    await x.register();
+    const m = await step(x, n, 1000);
+    assert.deepEqual(m, { id: "01A", text: JSON.stringify(env) });
+    const replyFrame = frames.find((f) => f.action === "reply");
+    assert.ok(replyFrame, "reply frame must be received on register.sock");
+    assert.equal(replyFrame.messageId, "01A");
+    assert.deepEqual(JSON.parse(replyFrame.text), verdicts[0]);
+    assert.deepEqual(frames.map((f) => f.action ?? f.harness), ["svc", "poll", "reply", "ack"]);
+  } finally {
+    x.close();
+    reg.close();
     await close();
   }
 });

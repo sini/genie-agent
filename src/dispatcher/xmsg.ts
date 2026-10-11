@@ -1,5 +1,5 @@
 // The dispatcher's side of the tier's xmsg (design §5.8, Talk): it receives as `svc:<name>` by
-// long-poll on register.sock (X9), sends and replies attested on agent.sock, so its idempotency
+// long-poll and replies on register.sock (X9), sends attested on agent.sock, so its idempotency
 // keys are scoped to its own session (X10), and reads sessions and replies on http.sock (X8).
 import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
@@ -134,7 +134,7 @@ export class SocketXmsg implements XmsgClient {
   }
 
   async reply(id: string, text: string): Promise<void> {
-    await this.agent({ action: "reply", messageId: id, text });
+    await this.registered({ action: "reply", messageId: id, text });
   }
 
   private http(path: string): Promise<any> {
