@@ -13,6 +13,7 @@ import { envelopeErrors, firstModel, type Ninfer, review, start, step, Unauthori
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
+const systemWeb = "the web guard prompt";
 const env: Envelope = {
   source: "message",
   history: [{ sender: "@a:example.org", tier: "trusted", text: "earlier" }],
@@ -41,7 +42,7 @@ async function ninfer(answer: (res: ServerResponse) => void, key?: string) {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as { port: number };
-  const n: Ninfer = { base: `http://127.0.0.1:${port}/v1`, model: "m", system, timeoutMs: 300 };
+  const n: Ninfer = { base: `http://127.0.0.1:${port}/v1`, model: "m", system, systemWeb, timeoutMs: 300 };
   const close = () => new Promise((r) => server.close(r).closeAllConnections());
   return { n, requests, calls, close };
 }
@@ -323,7 +324,7 @@ test("a model down at start is retried with backoff until it is up, then the gua
   const { c, x, order, close } = await modelsAt([503, 503, 503, 200]);
   const waits: number[] = [];
   try {
-    const n = await start(c, x, system, async (ms) => void waits.push(ms), () => {});
+    const n = await start(c, x, system, systemWeb, async (ms) => void waits.push(ms), () => {});
     assert.equal(n.model, "m");
     assert.deepEqual(order, ["probe", "probe", "probe", "probe", "register"]);
     assert.deepEqual(waits, [2000, 4000, 8000]);
@@ -336,7 +337,7 @@ test("the backoff caps at 60 s", { timeout: 5000 }, async () => {
   const { c, x, close } = await modelsAt([503, 503, 503, 503, 503, 503, 503, 503, 200]);
   const waits: number[] = [];
   try {
-    await start(c, x, system, async (ms) => void waits.push(ms), () => {});
+    await start(c, x, system, systemWeb, async (ms) => void waits.push(ms), () => {});
     assert.deepEqual(waits, [2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
   } finally {
     await close();
@@ -346,7 +347,7 @@ test("the backoff caps at 60 s", { timeout: 5000 }, async () => {
 test("register is called only after the model probe succeeds", { timeout: 5000 }, async () => {
   const { c, x, order, close } = await modelsAt([503, 200]);
   try {
-    await start(c, x, system, quiet.sleep, quiet.log);
+    await start(c, x, system, systemWeb, quiet.sleep, quiet.log);
     assert.ok(order.indexOf("register") > order.lastIndexOf("probe"), order.join());
     assert.equal(order.filter((o) => o === "register").length, 1);
   } finally {
@@ -358,7 +359,7 @@ test("a 401 or 403 at start is Unauthorized, not retried, and the guard never re
   for (const code of [401, 403]) {
     const { c, x, order, close } = await modelsAt([code]);
     try {
-      await assert.rejects(start(c, x, system, quiet.sleep, quiet.log), (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`);
+      await assert.rejects(start(c, x, system, systemWeb, quiet.sleep, quiet.log), (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`);
       assert.deepEqual(order, ["probe"]);
     } finally {
       await close();
@@ -367,10 +368,8 @@ test("a 401 or 403 at start is Unauthorized, not retried, and the guard never re
 });
 
 test("oracle 1: review sends guard-web prompt for web, and guard-in prompt for others", async () => {
-  const systemWeb = "the web guard prompt";
   const { n, requests, close } = await ninfer(says(JSON.stringify(verdicts[0])));
   try {
-    const nw: Ninfer = { ...n, systemWeb };
     const cases: { source: Envelope["source"]; expected: string }[] = [
       { source: "web", expected: systemWeb },
       { source: "message", expected: system },
@@ -383,7 +382,7 @@ test("oracle 1: review sends guard-web prompt for web, and guard-in prompt for o
         history: [],
         content: c.source === "message" ? { sender: "@u:x", tier: "public", text: "hi" } : { text: "hi" },
       };
-      await review(e, nw);
+      await review(e, n);
       const last = requests[requests.length - 1];
       const sysMsg = last.messages.find((m: any) => m.role === "system");
       assert.equal(sysMsg?.content, c.expected, `source ${c.source} should send ${c.expected}`);

@@ -15,7 +15,7 @@ export interface Ninfer {
   // prompts/guard-in.md.
   system: string;
   // prompts/guard-web.md.
-  systemWeb?: string;
+  systemWeb: string;
   timeoutMs?: number;
   // Sent as `Authorization: Bearer` when set; never logged.
   apiKey?: string;
@@ -75,30 +75,20 @@ export async function start(
   c: Config,
   x: { register(): Promise<void> },
   system: string,
-  systemWeb?: string | Parameters<typeof awaitModel>[3],
-  wait?: Parameters<typeof awaitModel>[3] | Parameters<typeof awaitModel>[4],
+  systemWeb: string,
+  wait?: Parameters<typeof awaitModel>[3],
   log?: Parameters<typeof awaitModel>[4],
 ): Promise<Ninfer> {
-  let sw: string | undefined;
-  let w = wait as Parameters<typeof awaitModel>[3];
-  let l = log;
-  if (typeof systemWeb === "function") {
-    w = systemWeb;
-    l = wait as Parameters<typeof awaitModel>[4];
-    sw = undefined;
-  } else {
-    sw = systemWeb;
-  }
-  const model = await awaitModel(c.base, c.apiKey, c.model, w, l);
+  const model = await awaitModel(c.base, c.apiKey, c.model, wait, log);
   await x.register();
-  return { base: c.base, model, system, systemWeb: sw, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
+  return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.
 // A reply cut off at max_tokens or with no content (a model reasoning in a loop) is asked once
 // more; a second such reply is Unavailable.
 export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; verdict: Verdict }> {
-  const system = e.source === "web" && n.systemWeb ? n.systemWeb : n.system;
+  const system = e.source === "web" ? n.systemWeb : n.system;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(`${n.base}/chat/completions`, {
       method: "POST",
