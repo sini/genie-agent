@@ -57,7 +57,7 @@ class Lines {
       }
     });
     const fail = (e: Error) => {
-      this.failed = e;
+      if (!this.failed) this.failed = e;
       for (const w of this.waiting.splice(0)) w(e);
     };
     this.sock.on("error", fail);
@@ -76,7 +76,7 @@ class Lines {
   }
 
   close(): void {
-    this.sock.end();
+    this.sock.destroy();
   }
 }
 
@@ -93,12 +93,14 @@ export class SocketXmsg implements XmsgClient {
 
   // The registration lives as long as this connection; xmsg refuses a second live one.
   async register(): Promise<void> {
+    this.reg?.close();
     this.reg = new Lines(`${this.dir}/register.sock`);
     await this.reg.call({ harness: "svc", name: this.name });
   }
 
   close(): void {
     this.reg?.close();
+    this.reg = null;
   }
 
   private async registered(frame: object): Promise<any> {

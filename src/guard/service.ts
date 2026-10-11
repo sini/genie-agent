@@ -5,7 +5,7 @@
 // error is never a verdict, so a caller holds the line and retries rather than reading it as one.
 import type { Inbound, XmsgClient } from "../dispatcher/xmsg.ts";
 import process from "node:process";
-import type { Config } from "./config.ts";
+import { type Config, ConfigError } from "./config.ts";
 import { type Envelope, parseVerdict, type Verdict } from "./verdict.ts";
 
 export interface Ninfer {
@@ -48,6 +48,38 @@ export async function firstModel(base: string, apiKey?: string): Promise<string>
   return id;
 }
 
+// Waits with exponential backoff: starts at `startMs`, doubles up to `maxMs`.
+export async function backoff<T>(
+  action: () => Promise<T>,
+  opts: {
+    startMs: number;
+    maxMs: number;
+    shouldRetry: (e: unknown) => boolean;
+    onWait: (e: unknown) => void;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<T> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  for (let wait = opts.startMs; ; wait = Math.min(wait * 2, opts.maxMs)) {
+    try {
+      return await action();
+    } catch (e) {
+      if (!opts.shouldRetry(e)) throw e;
+      opts.onWait(e);
+      await sleep(wait);
+    }
+  }
+}
+
+// Whether an error is an xmsg connection failure (absent, refused, or closed): waiting may fix it.
+export function isConnectionError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e instanceof Unauthorized || e instanceof ConfigError) return false;
+  const code = (e as any).code;
+  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE") return true;
+  return e.message.includes("connection closed");
+}
+
 // The model to review with, once ninfer lists one: a model that compiles at start (HyperQwen, ~15
 // min) is waited for, not exited on, and the guard registers only after, so it is never listed
 // while it cannot judge. Backoff 2 s doubling to 60 s; an Unauthorized key throws.
@@ -55,19 +87,40 @@ export async function awaitModel(
   base: string,
   apiKey: string | undefined,
   model: string | undefined,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
-  log: (line: string) => void = (l) => process.stderr.write(`${l}\n`),
+  sleep?: (ms: number) => Promise<void>,
+  log?: (line: string) => void,
 ): Promise<string> {
-  for (let wait = 2_000; ; wait = Math.min(wait * 2, 60_000)) {
-    try {
-      const id = await firstModel(base, apiKey);
-      return model ?? id;
-    } catch (e) {
-      if (!(e instanceof Unavailable) || e instanceof Unauthorized) throw e;
-      log(`genie-guard: waiting for the model: ${e.message}`);
-      await sleep(wait);
-    }
-  }
+  const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  return backoff(
+    async () => model ?? (await firstModel(base, apiKey)),
+    {
+      startMs: 2_000,
+      maxMs: 60_000,
+      shouldRetry: (e) => e instanceof Unavailable && !(e instanceof Unauthorized),
+      onWait: (e) => l(`genie-guard: waiting for the model: ${e instanceof Error ? e.message : e}`),
+      sleep,
+    },
+  );
+}
+
+// Registers with xmsg, retrying on connection errors (absent socket, refused, or closed).
+// Backoff 1 s doubling to 30 s.
+export async function awaitRegister(
+  x: { register(): Promise<void> },
+  sleep?: (ms: number) => Promise<void>,
+  log?: (line: string) => void,
+): Promise<void> {
+  const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  return backoff(
+    () => x.register(),
+    {
+      startMs: 1_000,
+      maxMs: 30_000,
+      shouldRetry: isConnectionError,
+      onWait: (e) => l(`genie-guard: waiting for xmsg: ${e instanceof Error ? e.message : e}`),
+      sleep,
+    },
+  );
 }
 
 // Wait for the model, then register: the guard is listed only once it can judge.
@@ -76,11 +129,11 @@ export async function start(
   x: { register(): Promise<void> },
   system: string,
   systemWeb: string,
-  wait?: Parameters<typeof awaitModel>[3],
-  log?: Parameters<typeof awaitModel>[4],
+  wait?: (ms: number) => Promise<void>,
+  log?: (line: string) => void,
 ): Promise<Ninfer> {
   const model = await awaitModel(c.base, c.apiKey, c.model, wait, log);
-  await x.register();
+  await awaitRegister(x, wait, log);
   return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
 }
 
@@ -183,3 +236,32 @@ export async function step(
   await x.ack(m.id);
   return m;
 }
+
+// Runs the guard service: waits for the model and registers with xmsg.
+// When the register connection closes or register fails with connection error,
+// re-registers with backoff and resumes polling.
+export async function serve(
+  c: Config,
+  x: Pick<XmsgClient, "poll" | "reply" | "ack"> & { register(): Promise<void> },
+  system: string,
+  systemWeb: string,
+  opts?: {
+    wait?: (ms: number) => Promise<void>;
+    log?: (line: string) => void;
+    pollWaitMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const n = await start(c, x, system, systemWeb, opts?.wait, opts?.log);
+  const pollWaitMs = opts?.pollWaitMs ?? 30_000;
+  while (!opts?.signal?.aborted) {
+    try {
+      await step(x, n, pollWaitMs);
+    } catch (e) {
+      if (opts?.signal?.aborted) break;
+      if (!isConnectionError(e)) throw e;
+      await awaitRegister(x, opts?.wait, opts?.log);
+    }
+  }
+}
+

@@ -2,6 +2,7 @@
 // fake: a model verdict is relayed as the parsed verdict, never the model's text; a malformed
 // model reply is a reject; no review (ninfer down, an HTTP error, a timeout) and a message that is
 // not an envelope are `{"error": …}`, never a verdict. Run with `node --test tests/guard-service.test.ts`.
+import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -10,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createNetServer } from "node:net";
 import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { envelopeErrors, firstModel, type Ninfer, review, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
+import { envelopeErrors, firstModel, isConnectionError, type Ninfer, review, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -430,3 +431,202 @@ test("oracle 4: a stub register.sock with no agent.sock receives the reply frame
     await close();
   }
 });
+
+// -----------------------------------------------------------------------------
+// Oracle 1: Stub register.sock server. The guard registers and polls. The stub
+// closes the connection, then accepts a new one. The guard re-registers on the
+// new connection and polls again, and the process doesn't exit.
+// Mutant in src/guard/service.ts: rethrow on close (today's behaviour) => RED
+// -----------------------------------------------------------------------------
+test("oracle 1: guard re-registers when xmsg drops connection and process does not exit", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/guard-reg-reconnect-`);
+  const framesConn1: any[] = [];
+  const framesConn2: any[] = [];
+  let connectionCount = 0;
+  let deliveredConn2 = false;
+  const regSockets = new Set<any>();
+
+  const reg = createNetServer((c: any) => {
+    regSockets.add(c);
+    c.on("close", () => regSockets.delete(c));
+    connectionCount++;
+    const currentConn = connectionCount;
+    let buf = "";
+    c.setEncoding("utf8");
+
+    c.on("data", (d: string) => {
+      for (buf += d; buf.includes("\n"); buf = buf.slice(buf.indexOf("\n") + 1)) {
+        const f = JSON.parse(buf.slice(0, buf.indexOf("\n")));
+        if (currentConn === 1) {
+          framesConn1.push(f);
+          if (f.harness) {
+            c.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+          } else if (f.action === "poll") {
+            // Drop connection while guard is polling
+            c.destroy();
+          }
+        } else {
+          framesConn2.push(f);
+          if (f.harness) {
+            c.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+          } else if (f.action === "poll") {
+            if (!deliveredConn2) {
+              deliveredConn2 = true;
+              c.write(`${JSON.stringify({ action: "deliver", messageId: "01B", text: JSON.stringify(env) })}\n`);
+            } else {
+              c.write(`${JSON.stringify({ action: "timeout" })}\n`);
+            }
+          } else {
+            c.write(`${JSON.stringify({ status: "ok" })}\n`);
+          }
+        }
+      }
+    });
+  });
+
+  await new Promise<void>((r) => reg.listen(`${dir}/register.sock`, r));
+  const { n, close: closeNinfer } = await ninfer(says(JSON.stringify(verdicts[0])));
+  const x = new SocketXmsg(dir, "genie-guard");
+  const ac = new AbortController();
+  const c = { ...cfg(), base: n.base, xmsgDir: dir };
+
+  try {
+    const servePromise = serve(c, x, system, systemWeb, {
+      pollWaitMs: 500,
+      signal: ac.signal,
+      wait: async () => {}, // instant retry in test
+    });
+
+    for (let i = 0; i < 100; i++) {
+      if (framesConn2.some((f) => f.action === "ack")) {
+        ac.abort();
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    assert.equal(connectionCount, 2, "guard must reconnect to register.sock after drop");
+    assert.deepEqual(framesConn1.map((f) => f.action ?? f.harness), ["svc", "poll"]);
+    assert.deepEqual(framesConn2.slice(0, 4).map((f) => f.action ?? f.harness), ["svc", "poll", "reply", "ack"]);
+
+    await servePromise;
+  } finally {
+    ac.abort();
+    x.close();
+    for (const s of regSockets) s.destroy();
+    reg.close();
+    await closeNinfer();
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Oracle 2: Stub absent at start. The guard retries and registers once the stub appears.
+// Mutant in src/guard/service.ts: no retry on ENOENT => RED
+// -----------------------------------------------------------------------------
+test("oracle 2: stub absent at start retries with backoff and registers once stub appears", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/guard-reg-absent-`);
+  const sockPath = `${dir}/register.sock`;
+  const waits: number[] = [];
+  const logs: string[] = [];
+  let regServer: any = null;
+  const frames: any[] = [];
+  let delivered = false;
+  const regSockets = new Set<any>();
+
+  const { n, close: closeNinfer } = await ninfer(says(JSON.stringify(verdicts[0])));
+  const x = new SocketXmsg(dir, "genie-guard");
+  const ac = new AbortController();
+  const c = { ...cfg(), base: n.base, xmsgDir: dir };
+
+  try {
+    const servePromise = serve(c, x, system, systemWeb, {
+      pollWaitMs: 500,
+      signal: ac.signal,
+      wait: async (ms) => {
+        waits.push(ms);
+        if (waits.length === 2 && !regServer) {
+          regServer = createNetServer((client: any) => {
+            regSockets.add(client);
+            client.on("close", () => regSockets.delete(client));
+            let buf = "";
+            client.setEncoding("utf8");
+            client.on("data", (d: string) => {
+              for (buf += d; buf.includes("\n"); buf = buf.slice(buf.indexOf("\n") + 1)) {
+                const f = JSON.parse(buf.slice(0, buf.indexOf("\n")));
+                frames.push(f);
+                if (f.harness) {
+                  client.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+                } else if (f.action === "poll") {
+                  if (!delivered) {
+                    delivered = true;
+                    client.write(`${JSON.stringify({ action: "deliver", messageId: "01C", text: JSON.stringify(env) })}\n`);
+                  } else {
+                    client.write(`${JSON.stringify({ action: "timeout" })}\n`);
+                  }
+                } else {
+                  client.write(`${JSON.stringify({ status: "ok" })}\n`);
+                }
+              }
+            });
+          });
+          await new Promise<void>((r) => regServer.listen(sockPath, r));
+        }
+      },
+      log: (line) => logs.push(line),
+    });
+
+    for (let i = 0; i < 100; i++) {
+      if (frames.some((f) => f.action === "ack")) {
+        ac.abort();
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    assert.ok(waits.length >= 2, `should have waited at least twice, got: ${waits.length}`);
+    assert.equal(waits[0], 1000, "first backoff should be 1000ms");
+    assert.equal(waits[1], 2000, "second backoff should be 2000ms");
+    assert.ok(
+      logs.some((l) => l.includes("waiting for xmsg") && l.includes("ENOENT")),
+      `should log waiting for xmsg with ENOENT, got: ${JSON.stringify(logs)}`,
+    );
+    assert.deepEqual(frames.slice(0, 4).map((f) => f.action ?? f.harness), ["svc", "poll", "reply", "ack"]);
+
+    await servePromise;
+  } finally {
+    ac.abort();
+    x.close();
+    for (const s of regSockets) s.destroy();
+    if (regServer) regServer.close();
+    await closeNinfer();
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Oracle 3: A 401 from the model still exits non-zero, not retried.
+// Mutant in src/guard/service.ts: retry on Unauthorized too => RED
+// -----------------------------------------------------------------------------
+test("oracle 3: a 401 from the model still exits non-zero and is not retried", { timeout: 2000 }, async () => {
+  const { c, x, order, close } = await modelsAt([401]);
+  const waits: number[] = [];
+  const logs: string[] = [];
+
+  try {
+    await assert.rejects(
+      serve(c, x, system, systemWeb, {
+        wait: async (ms) => {
+          waits.push(ms);
+          throw new Error("unexpected retry on 401");
+        },
+        log: (l) => logs.push(l),
+      }),
+      (e) => e instanceof Unauthorized && e.message === `${c.base}: unauthorized (check --api-key-file)`,
+    );
+    assert.deepEqual(order, ["probe"], "should only probe once and not retry on 401");
+    assert.equal(waits.length, 0, "should not wait/retry on 401");
+  } finally {
+    await close();
+  }
+});
+
+
