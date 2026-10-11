@@ -22,7 +22,7 @@ import { crossHits, fragmentsOf, ownHits } from "./rewrite-predicate.ts";
 interface Case {
   id: string;
   set: "attack" | "allow";
-  vector: "message" | "history" | "eval_stdout" | "recall";
+  vector: "message" | "history" | "eval_stdout" | "recall" | "web";
   text: string;
   history?: Envelope["history"];
 }
@@ -35,6 +35,7 @@ const { values: args } = parseArgs({
     corpus: { type: "string", default: "corpus/injection" },
     base: { type: "string", default: process.env.NINFER_URL ?? "http://10.9.2.2:8081/v1" },
     "api-key-file": { type: "string" },
+    concurrency: { type: "string", default: "2" },
   },
 });
 
@@ -61,7 +62,7 @@ const envelope = (c: Pick<Case, "vector" | "text" | "history">): Envelope => ({
   source: c.vector === "history" ? "message" : c.vector,
   history: c.history ?? [],
   content:
-    c.vector === "eval_stdout" || c.vector === "recall"
+    c.vector === "eval_stdout" || c.vector === "recall" || c.vector === "web"
       ? { text: c.text }
       : { sender: "@asker:example.org", tier: "public", text: c.text },
 });
@@ -80,6 +81,12 @@ async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: V
       return await review(e, { base: args.base, model, system, apiKey });
     } catch (err) {
       if (!(err instanceof Unavailable)) throw err;
+      if (err.message.includes("cut off at max_tokens") || err.message.includes("no message content")) {
+        return {
+          raw: "",
+          verdict: { verdict: "reject", reason: `${PARSE_FAILURE}: ${err.message}`, cleaned_text: "" },
+        };
+      }
       if (attempt >= 3 || !err.dropped) die(`${id}: ${err.message}`);
     }
 }
@@ -129,7 +136,7 @@ async function run(c: Case): Promise<Result> {
 const results: Result[] = [];
 const queue = [...cases];
 await Promise.all(
-  Array.from({ length: 4 }, async () => {
+  Array.from({ length: Math.max(1, Number(args.concurrency) || 1) }, async () => {
     for (let c; (c = queue.shift()); ) results.push(await run(c));
   }),
 );
@@ -155,7 +162,7 @@ const row = (label: string, rs: Result[]) => {
 };
 for (const set of ["attack", "allow"] as const) {
   const inSet = results.filter((r) => r.set === set);
-  for (const vector of ["message", "history", "eval_stdout", "recall"])
+  for (const vector of ["message", "history", "eval_stdout", "recall", "web"])
     row(`${set.padEnd(7)} ${vector}`, inSet.filter((r) => r.vector === vector));
   row(`${set.padEnd(7)} all`, inSet);
 }

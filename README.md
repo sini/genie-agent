@@ -28,7 +28,7 @@ acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) a
 `tests/guard-eval.ts`.
 
 - It accepts message text that is one guard-in envelope, `{source, history, content}`, as
-  `prompts/guard-in.md` describes it.
+  `prompts/guard-in.md` describes it (`source` in `message`, `eval_stdout`, `recall`, `web`).
 - A review replies `{"verdict", "reason", "cleaned_text"}`, parsed by `src/guard/verdict.ts`. A
   malformed model reply is a verdict: `reject`, with a reason that starts
   `guard-in output invalid: `. The model's own text is never relayed.

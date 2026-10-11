@@ -10,7 +10,7 @@ import json
 import sys
 
 SETS = {"attack": 40, "allow": 30}
-VECTORS = {"message", "history", "eval_stdout", "recall"}
+VECTORS = {"message", "history", "eval_stdout", "recall", "web"}
 KEYS = {"id", "set", "vector", "text", "history", "note"}
 REQUIRED = KEYS - {"history"}
 

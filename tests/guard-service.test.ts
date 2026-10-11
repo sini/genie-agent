@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { firstModel, type Ninfer, review, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
+import { envelopeErrors, firstModel, type Ninfer, review, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -189,11 +189,12 @@ const notEnvelopes: [string, string][] = [
   ["unparseable", "hello genie"],
   ["an array", "[]"],
   ["a missing content", JSON.stringify({ source: "message", history: [] })],
-  ["an unknown source", JSON.stringify({ ...env, source: "web" })],
+  ["an unknown source", JSON.stringify({ ...env, source: "unknown" })],
   ["an unknown key", JSON.stringify({ ...env, trusted: true })],
   ["a line tier outside trusted|public", JSON.stringify({ ...env, history: [{ ...env.history[0], tier: "owner" }] })],
   ["a message with no tier", JSON.stringify({ ...env, content: { sender: "@b:example.org", text: "hi" } })],
   ["eval output with a sender", JSON.stringify({ ...env, source: "eval_stdout", content: env.content })],
+  ["web content with a sender", JSON.stringify({ source: "web", history: [], content: env.content })],
 ];
 for (const [what, text] of notEnvelopes)
   test(`a non-envelope (${what}) is an error reply and never reaches the model`, async () => {
@@ -206,8 +207,8 @@ for (const [what, text] of notEnvelopes)
     }
   });
 
-test("eval output and recall envelopes, which carry no sender, reach the model", async () => {
-  for (const source of ["eval_stdout", "recall"] as const) {
+test("eval output, recall and web envelopes, which carry no sender, reach the model", async () => {
+  for (const source of ["eval_stdout", "recall", "web"] as const) {
     const e: Envelope = { source, history: [], content: { text: "error: attribute missing" } };
     const { n, requests, close } = await ninfer(says(JSON.stringify({ ...verdicts[0], cleaned_text: e.content.text })));
     try {
@@ -217,6 +218,14 @@ test("eval output and recall envelopes, which carry no sender, reach the model",
       await close();
     }
   }
+});
+
+test("oracle 1: envelopeErrors accepts a web envelope and refuses sender, tier or unknown source", () => {
+  const e = { source: "web", history: [], content: { text: "hello world" } };
+  assert.deepEqual(envelopeErrors(e), []);
+  assert.deepEqual(envelopeErrors({ ...e, source: "unknown" }), ["source not in message|eval_stdout|recall|web"]);
+  assert.deepEqual(envelopeErrors({ ...e, content: { ...e.content, sender: "@a:example.org" } }), ["unknown key content.sender"]);
+  assert.deepEqual(envelopeErrors({ ...e, content: { ...e.content, tier: "public" } }), ["unknown key content.tier"]);
 });
 
 test("no message within the wait replies and acks nothing", async () => {

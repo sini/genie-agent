@@ -7,7 +7,8 @@ import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import { type Host, type Pi, type ToolCall, tier1 } from "../src/tier1/index.ts";
 import { errors, load } from "../src/tier1/schema.ts";
-import type { Screen, WebEnvelope } from "../src/tier1/web.ts";
+import type { Screen } from "../src/tier1/web.ts";
+import type { Envelope } from "../src/guard/verdict.ts";
 import { worktreeFor } from "../src/mirror/index.ts";
 
 const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-tier1-test-`));
@@ -227,7 +228,7 @@ test("ssrf: a redirect from an allowed address to a refused one is refused", asy
 });
 
 test("guard: web results reach the model only through a verdict", async () => {
-  const seen: WebEnvelope[] = [];
+  const seen: Envelope[] = [];
   const verdict = (v: "allow" | "rewrite" | "reject"): Screen => async (e) => {
     seen.push(e);
     return { verdict: v, reason: "r", cleaned_text: v === "rewrite" ? "CLEANED" : v === "allow" ? e.content.text : "" };

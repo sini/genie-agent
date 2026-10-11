@@ -139,8 +139,8 @@ export function envelopeErrors(value: unknown): string[] {
   };
   if (!obj(value)) return ["not an object"];
   const errors = only(value, "", ["source", "history", "content"]);
-  if (!["message", "eval_stdout", "recall"].includes(value.source as string))
-    errors.push("source not in message|eval_stdout|recall");
+  if (!["message", "eval_stdout", "recall", "web"].includes(value.source as string))
+    errors.push("source not in message|eval_stdout|recall|web");
   if (!Array.isArray(value.history)) errors.push("history is not an array");
   else value.history.forEach((l, i) => errors.push(...line(l, `history[${i}]`, true)));
   errors.push(...line(value.content, "content", value.source === "message"));

@@ -174,8 +174,7 @@ export async function search(searxngUrl: string, query: string, n: number, timeo
 }
 
 // guard-in's input for web content. svc:genie-guard's envelope names its sources; "web" is this one.
-export type WebEnvelope = Omit<Envelope, "source"> & { source: "web" };
-export type Screen = (e: WebEnvelope) => Promise<Verdict>;
+export type Screen = (e: Envelope) => Promise<Verdict>;
 
 // The text the model may see: the fetched text on allow, the guard's cleaned_text on rewrite.
 // A reject, a reply that is not a verdict, or no reply at all withholds it.
