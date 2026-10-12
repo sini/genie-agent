@@ -14,6 +14,8 @@ The deployment lives in nix-config; this repository owns the agent.
   result, escalation package, action proposal, thread state), with valid and invalid fixtures
   under `schemas/fixtures/<schema>/`.
 - `src/`: the TypeScript package (pi's extension language).
+- `prompts/`: the model prompts. `tier1.md` with `skills/` (pi skills) is tier 1's;
+  `tests/tier1-eval.ts` scores it live against `schemas/draft.json`.
 - `ci/`: the gen-harness CI flake. Its workflow is `.github/workflows/ci.yml`.
 - `docs/`: the design and the plan.
 - `support-memory/`: the curated memory `genie-expert@public` reads, admitted only by a merged PR

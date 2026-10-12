@@ -1,0 +1,11 @@
+{
+  "content": null,
+  "tool_calls": [
+    {
+      "function": {
+        "name": "reply",
+        "arguments": "{\"answer\": \"I could not explain this error.\", \"confidence\": 0.1, \"gaps\": [\"unexplained eval error\"], \"escalate_forced\": \"yes\"}"
+      }
+    }
+  ]
+}

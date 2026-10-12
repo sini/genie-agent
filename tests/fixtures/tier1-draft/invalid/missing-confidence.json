@@ -1,0 +1,11 @@
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "function": {
+        "name": "reply",
+        "arguments": "{\"answer\": \"Set `services.foo.enable = true;`.\", \"gaps\": [], \"escalate_forced\": \"no\"}"
+      }
+    }
+  ]
+}

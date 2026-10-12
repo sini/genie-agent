@@ -1,0 +1,11 @@
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "function": {
+        "name": "eval",
+        "arguments": "{\"repo\": \"a/b\", \"rev\": \"main\", \"attr\": \"x\", \"trusted\": \"no\"}"
+      }
+    }
+  ]
+}

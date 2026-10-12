@@ -1,0 +1,17 @@
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "function": {
+        "name": "reply",
+        "arguments": "{\"answer\": \"Set `services.foo.enable = true;`.\", \"confidence\": 0.82, \"gaps\": [], \"escalate_forced\": \"no\"}"
+      }
+    },
+    {
+      "function": {
+        "name": "reply",
+        "arguments": "{\"answer\": \"Set `services.foo.enable = true;`.\", \"confidence\": 0.82, \"gaps\": [], \"escalate_forced\": \"no\"}"
+      }
+    }
+  ]
+}

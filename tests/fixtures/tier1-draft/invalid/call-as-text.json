@@ -1,0 +1,4 @@
+{
+  "content": "<tool_call>\n<function=reply>\n{\"answer\": \"Set `services.foo.enable = true;`.\", \"confidence\": 0.82, \"gaps\": [], \"escalate_forced\": \"no\"}\n</function>\n</tool_call>",
+  "tool_calls": []
+}

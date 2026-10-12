@@ -286,6 +286,8 @@
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's
           # worktrees, web_fetch refusing private and cluster addresses after resolution, and every
           # web result screened by the guard. Stub servers on the sandbox's loopback, no network.
+          # The draft parser accepts and rejects the right fixture replies, and each skill is a
+          # pi skill.
           tier1 =
             pkgs.runCommand "genie-agent-tier1"
               {
@@ -297,16 +299,19 @@
                     ./src/guard/verdict.ts
                     ./src/mirror
                     ./schemas
+                    ./skills
                     ./tests/tier1.test.ts
+                    ./tests/tier1-draft.test.ts
+                    ./tests/fixtures/tier1-draft
                   ];
                 };
               }
               ''
                 cd $src
                 rc=0
-                node --test --test-reporter=tap tests/tier1.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-reporter=tap tests/tier1.test.ts tests/tier1-draft.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the draft parser accepts every valid reply and rejects every invalid one$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The tier-1 supervisor: one pi process per thread, so a fact planted in one thread is
