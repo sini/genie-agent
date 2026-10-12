@@ -9,6 +9,7 @@ let
     "proposal"
     "thread-state"
     "verdict"
+    "verdict-out"
   ];
   dir = ../../schemas;
 in
@@ -18,8 +19,10 @@ in
     # directory (the check `schemas` then requires valid and invalid cases in each).
     test-schema-set = {
       expr = {
-        schemas = map (lib.removeSuffix ".json") (
-          builtins.attrNames (lib.filterAttrs (n: t: t == "regular") (builtins.readDir dir))
+        schemas = lib.sort (a: b: a < b) (
+          map (lib.removeSuffix ".json") (
+            builtins.attrNames (lib.filterAttrs (n: t: t == "regular") (builtins.readDir dir))
+          )
         );
         fixtures = builtins.attrNames (builtins.readDir "${dir}/fixtures");
       };

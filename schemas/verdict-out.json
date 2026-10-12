@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "guard-out verdict on one outbound answer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "reason"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "pass",
+        "block"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

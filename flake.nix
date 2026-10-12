@@ -239,8 +239,10 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/guard
                     ./schemas/fixtures/verdict
+                    ./schemas/fixtures/verdict-out
                     ./corpus/injection/must-not-contain.json
                     ./tests/guard.test.ts
+                    ./tests/guard-out.test.ts
                     ./tests/guard-service.test.ts
                     ./src/dispatcher/xmsg.ts
                     ./tests/rewrite-predicate.ts
@@ -251,9 +253,9 @@
               ''
                 cd $src
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/guard.test.ts tests/guard-service.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/guard.test.ts tests/guard-out.test.ts tests/guard-service.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The mirror fetcher's gating oracle: two threads on one repo share one clone, and a refused
@@ -312,6 +314,8 @@
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
             python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}
             python3 ${./tests/corpus.py} ${./corpus/injection-heldout/cases.jsonl} ${./corpus/injection-heldout/must-not-contain.json}
+            python3 ${./tests/corpus.py} ${./corpus/outbound/cases.jsonl}
+            python3 ${./tests/corpus.py} ${./corpus/outbound-heldout/cases.jsonl}
             touch $out
           '';
           # The support memory holds no credential shape, private repository name, home path or
