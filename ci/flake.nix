@@ -57,6 +57,9 @@
               # Tier 1 has exactly twelve tools, confined to its worktrees and public addresses, and
               # sees web content only through a guard verdict.
               checks.tier1 = genie-agent.checks.${system}.tier1;
+              # One pi process per thread: a fact planted in one thread is absent from another, and
+              # tearing one down leaves the rest running.
+              checks.supervisor = genie-agent.checks.${system}.supervisor;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is

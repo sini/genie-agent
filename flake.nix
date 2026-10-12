@@ -309,6 +309,30 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The tier-1 supervisor: one pi process per thread, so a fact planted in one thread is
+          # absent from another, and tearing one down frees it and leaves the rest. A recording fake
+          # pi run as real processes stands in for pi; no model.
+          supervisor =
+            pkgs.runCommand "genie-agent-supervisor"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/supervisor
+                    ./tests/supervisor.test.ts
+                    ./tests/fixtures/supervisor
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/supervisor.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
