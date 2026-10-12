@@ -7,6 +7,7 @@ import type { Inbound, XmsgClient } from "../dispatcher/xmsg.ts";
 import process from "node:process";
 import { type Config, ConfigError } from "./config.ts";
 import { type Envelope, parseVerdict, type Verdict } from "./verdict.ts";
+import { parseVerdictOut, type VerdictOut } from "./verdict-out.ts";
 
 export interface Ninfer {
   // ninfer's OpenAI-compatible base, ending in `/v1`.
@@ -193,7 +194,62 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
       choice = JSON.parse(body).choices?.[0];
     } catch {}
     const raw: unknown = choice?.message?.content;
-    if (choice?.finish_reason !== "length" && typeof raw === "string") return { raw, verdict: parseVerdict(raw, e) };
+    if (choice?.finish_reason !== "length" && typeof raw === "string" && raw.trim().length > 0)
+      return { raw, verdict: parseVerdict(raw, e) };
+    if (attempt >= 2)
+      throw new Unavailable(
+        choice?.finish_reason === "length" ? "the reply was cut off at max_tokens" : "no message content in the reply",
+      );
+  }
+}
+
+export interface NinferOut {
+  base: string;
+  model: string;
+  system: string;
+  timeoutMs?: number;
+  apiKey?: string;
+}
+
+export interface OutboundItem {
+  question: string;
+  answer: string;
+}
+
+// One guard-out review of `item`. A malformed model reply is a verdict, `block`, by parseVerdictOut.
+// A reply cut off at max_tokens or with no content is asked once more; a second such reply is Unavailable.
+export async function reviewOut(
+  item: OutboundItem,
+  n: NinferOut,
+): Promise<{ raw: string; verdict: VerdictOut }> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`${n.base}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...auth(n.apiKey) },
+      body: JSON.stringify({
+        model: n.model,
+        temperature: 0,
+        max_tokens: 2048,
+        messages: [
+          { role: "system", content: n.system },
+          { role: "user", content: JSON.stringify(item) },
+        ],
+      }),
+      signal: n.timeoutMs === undefined ? undefined : AbortSignal.timeout(n.timeoutMs),
+    }).catch((err) => {
+      throw new Unavailable(String(err), true);
+    });
+    const body = await res.text().catch((err) => {
+      throw new Unavailable(String(err), true);
+    });
+    if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
+    let choice: any;
+    try {
+      choice = JSON.parse(body).choices?.[0];
+    } catch {}
+    const raw: unknown = choice?.message?.content;
+    if (choice?.finish_reason !== "length" && typeof raw === "string" && raw.trim().length > 0)
+      return { raw, verdict: parseVerdictOut(raw) };
     if (attempt >= 2)
       throw new Unavailable(
         choice?.finish_reason === "length" ? "the reply was cut off at max_tokens" : "no message content in the reply",

@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createNetServer } from "node:net";
 import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { awaitModel, envelopeErrors, firstModel, isConnectionError, type Ninfer, review, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
+import { awaitModel, envelopeErrors, firstModel, isConnectionError, type Ninfer, review, reviewOut, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -169,6 +169,20 @@ test("a reply cut off twice is Unavailable after exactly two requests", async ()
   const { n, requests, close } = await ninfer(loops);
   try {
     await assert.rejects(review(env, n), (e) => e instanceof Unavailable && /cut off at max_tokens/.test(e.message));
+    assert.equal(requests.length, 2);
+  } finally {
+    await close();
+  }
+});
+
+test("reviewOut relays valid verdict and retries on empty content or cutoff", async () => {
+  const item = { question: "how to pin nixpkgs?", answer: "use nix registry" };
+  const passVerdict = { verdict: "pass" as const, reason: "clean" };
+  let answered = 0;
+  const { n, requests, close } = await ninfer((res) => (answered++ ? says(JSON.stringify(passVerdict)) : loops)(res));
+  try {
+    const res = await reviewOut(item, { base: n.base, model: n.model, system: n.system, timeoutMs: n.timeoutMs });
+    assert.deepEqual(res.verdict, passVerdict);
     assert.equal(requests.length, 2);
   } finally {
     await close();

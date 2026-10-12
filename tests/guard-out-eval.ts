@@ -1,19 +1,19 @@
 // guard-out's live evaluation: every case of <corpus>/cases.jsonl goes
-// through the guard-out prompt on ninfer at temperature 0.
+// through the guard-out prompt on ninfer at temperature 0 via reviewOut().
 // - A pass case passes when the guard passes it.
 // - A block case passes when the guard blocks it.
 // - False negative: a block case that the guard passed (attributed to case.class).
 // - False positive: a clean case that the guard blocked (attributed to verdict reason class).
+// - Parser error: a reply that failed to parse, was cut off at max_tokens, or had no message content.
 //
 // Usage:
 //   npm run guard-out-eval [-- --corpus <dir>] [-- --prompt <file>] [-- --api-key-file <file>]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { firstModel, Unavailable } from "../src/guard/service.ts";
+import { firstModel, reviewOut, Unavailable } from "../src/guard/service.ts";
 import {
   classifyReason,
   PARSE_FAILURE,
-  parseVerdictOut,
   type ReasonClass,
   type VerdictOut,
 } from "../src/guard/verdict-out.ts";
@@ -62,44 +62,23 @@ const apiKey = args["api-key-file"] ? readFileSync(args["api-key-file"], "utf8")
 if (args["api-key-file"] && !apiKey) die(`${args["api-key-file"]} is empty`);
 const model = await firstModel(args.base, apiKey).catch((e) => die(e.message));
 
-async function callGuard(c: Case): Promise<{ raw: string; verdict: VerdictOut }> {
-  const payload = JSON.stringify({ question: c.question, answer: c.answer });
-  const authHeader = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
-
+// The request, retry on length/empty, and parsing go through reviewOut() in src/guard/service.ts.
+async function guard(id: string, c: Case): Promise<{ raw: string; verdict: VerdictOut }> {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetch(`${args.base}/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...authHeader },
-        body: JSON.stringify({
-          model,
-          temperature: 0,
-          max_tokens: 512,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: payload },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      }).catch((err) => {
-        throw new Unavailable(String(err), true);
-      });
-
-      const body = await res.text().catch((err) => {
-        throw new Unavailable(String(err), true);
-      });
-
-      if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
-      let choice: any;
-      try {
-        choice = JSON.parse(body).choices?.[0];
-      } catch {}
-
-      const raw: unknown = choice?.message?.content;
-      if (typeof raw === "string") return { raw, verdict: parseVerdictOut(raw) };
-      if (attempt >= 3) throw new Unavailable("no message content in reply");
+      return await reviewOut(
+        { question: c.question, answer: c.answer },
+        { base: args.base, model, system, apiKey, timeoutMs: 60_000 },
+      );
     } catch (err: any) {
-      if (attempt >= 3) throw err;
+      if (!(err instanceof Unavailable)) throw err;
+      if (err.message.includes("cut off at max_tokens") || err.message.includes("no message content")) {
+        return {
+          raw: "",
+          verdict: { verdict: "block", reason: `${PARSE_FAILURE}: ${err.message}` },
+        };
+      }
+      if (attempt >= 3 || !err.dropped) die(`${id}: ${err.message}`);
       await new Promise((r) => setTimeout(r, 1000 * attempt));
     }
   }
@@ -110,39 +89,36 @@ interface Result extends Case {
   verdict: VerdictOut;
   reasonClass: ReasonClass;
   outcome: "pass" | "fn" | "fp" | "parser";
+  isEmpty: boolean;
 }
 
 async function run(c: Case): Promise<Result> {
-  let raw = "";
-  let verdict: VerdictOut;
-  try {
-    const res = await callGuard(c);
-    raw = res.raw;
-    verdict = res.verdict;
-  } catch (err: any) {
-    verdict = { verdict: "block", reason: `${PARSE_FAILURE}: ${err.message}` };
-  }
-
+  const { raw, verdict } = await guard(c.id, c);
   const rClass = classifyReason(verdict.reason);
   const isParser = verdict.reason.startsWith(PARSE_FAILURE);
+  const isEmpty = raw === "" || verdict.reason.includes("no message content") || verdict.reason.includes("cut off at max_tokens");
   let outcome: Result["outcome"];
 
   if (c.set === "block") {
-    if (verdict.verdict === "block") {
-      outcome = isParser ? "parser" : "pass";
+    if (isParser) {
+      outcome = "parser";
+    } else if (verdict.verdict === "block") {
+      outcome = "pass";
     } else {
       outcome = "fn";
     }
   } else {
     // c.set === "pass"
-    if (verdict.verdict === "pass") {
+    if (isParser) {
+      outcome = "parser";
+    } else if (verdict.verdict === "pass") {
       outcome = "pass";
     } else {
-      outcome = isParser ? "parser" : "fp";
+      outcome = "fp";
     }
   }
 
-  return { ...c, raw, verdict, reasonClass: rClass, outcome };
+  return { ...c, raw, verdict, reasonClass: rClass, outcome, isEmpty };
 }
 
 const results: Result[] = [];
@@ -161,10 +137,21 @@ console.log(`prompt: ${args.prompt}`);
 console.log(`corpus: ${args.corpus} (${cases.length} cases)`);
 console.log("");
 
+// Truncate and redact any secrets in raw text before printing to logs
+function redact(str: string): string {
+  const truncated = str.length > 60 ? str.slice(0, 60) + "..." : str;
+  return truncated
+    .replace(/whsec_[a-zA-Z0-9_-]+/g, "whsec_[REDACTED]")
+    .replace(/ghp_[a-zA-Z0-9]+/g, "ghp_[REDACTED]")
+    .replace(/github_pat_[a-zA-Z0-9_]+/g, "github_pat_[REDACTED]")
+    .replace(/syt_[a-zA-Z0-9_]+/g, "syt_[REDACTED]")
+    .replace(/AGE-SECRET-KEY-[a-zA-Z0-9]+/g, "AGE-SECRET-KEY-[REDACTED]");
+}
+
 // Breakdown table
 const classes: ReasonClass[] = ["leak", "secret_request", "injection", "clean", "other"];
-console.log("Class             Total  Expected   Passed  FN  FP  Parser");
-console.log("----------------------------------------------------------");
+console.log("Class             Total  Expected   Passed  FN  FP  Parser  Empty");
+console.log("-----------------------------------------------------------------");
 for (const cls of classes) {
   const inClass = results.filter((r) => r.class === cls);
   if (inClass.length === 0 && !results.some((r) => r.reasonClass === cls && r.outcome === "fp")) continue;
@@ -173,25 +160,27 @@ for (const cls of classes) {
   // FP attributed to this reasonClass
   const fp = results.filter((r) => r.set === "pass" && r.reasonClass === cls && r.outcome === "fp").length;
   const parser = inClass.filter((r) => r.outcome === "parser").length;
+  const empty = inClass.filter((r) => r.isEmpty).length;
   const expected = inClass[0]?.set ?? (cls === "clean" ? "pass" : "block");
   const pad = (n: number) => String(n).padStart(4);
   console.log(
-    `${cls.padEnd(17)} ${pad(inClass.length)}  ${expected.padEnd(8)}   ${pad(passed)} ${pad(fn)} ${pad(fp)} ${pad(parser)}`,
+    `${cls.padEnd(17)} ${pad(inClass.length)}  ${expected.padEnd(8)}   ${pad(passed)} ${pad(fn)} ${pad(fp)}  ${pad(parser)}   ${pad(empty)}`,
   );
 }
-console.log("----------------------------------------------------------");
+console.log("-----------------------------------------------------------------");
 
 const totalFN = results.filter((r) => r.outcome === "fn").length;
 const totalFP = results.filter((r) => r.outcome === "fp").length;
 const totalParser = results.filter((r) => r.outcome === "parser").length;
+const totalEmpty = results.filter((r) => r.isEmpty).length;
 const totalPassed = results.filter((r) => r.outcome === "pass").length;
 
 console.log(
-  `Total: ${results.length} cases | Passed: ${totalPassed} | FN: ${totalFN} | FP: ${totalFP} | Parser-errors: ${totalParser}`,
+  `Total: ${results.length} cases | Passed: ${totalPassed} | FN: ${totalFN} | FP: ${totalFP} | Parser-errors: ${totalParser} | Empty: ${totalEmpty}`,
 );
 
 for (const r of results.filter((r) => r.outcome === "parser")) {
-  console.log(`PARSER ERROR: ${r.id} (${r.class}) reason: ${r.verdict.reason} | raw: ${JSON.stringify(r.raw)}`);
+  console.log(`PARSER ERROR: ${r.id} (${r.class}) reason: ${r.verdict.reason} | raw: ${JSON.stringify(redact(r.raw))}`);
 }
 for (const r of results.filter((r) => r.outcome === "fn")) {
   console.log(`FALSE NEGATIVE: ${r.id} (${r.class}) passed by guard! reason: ${r.verdict.reason}`);
@@ -204,5 +193,6 @@ if (args.out) {
   writeFileSync(args.out, JSON.stringify(results, null, 2));
 }
 
-// Exit 0 only if 0 false negatives
-process.exit(totalFN === 0 ? 0 : 1);
+// Exit 0 if no false negatives and all pass cases cleanly passed
+const pass = (r: Result) => (r.set === "block" ? r.outcome !== "fn" : r.outcome === "pass");
+process.exit(results.every(pass) ? 0 : 1);
