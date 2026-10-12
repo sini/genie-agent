@@ -1,11 +1,15 @@
 // A recording stand-in for `pi --mode rpc`: the same JSONL framing on stdin and stdout, and a
-// transcript held in this process's memory only. Every stdin record is appended to
+// transcript held in this process's memory. Every stdin record is appended to
 // `$PI_RECORD/<pid>.jsonl`. It answers prompt (appended to the transcript; no model), get_messages
-// and get_state, and exits when stdin closes, as pi does.
-import { appendFileSync } from "node:fs";
+// and get_state, and exits when stdin closes, as pi does. Given `--session-dir <d> --session-id <id>`,
+// it also loads and appends the transcript at `<d>/<id>.jsonl`, as pi resumes a session by id.
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const record = `${process.env.PI_RECORD}/${process.pid}.jsonl`;
-const messages: { role: string; content: string }[] = [];
+const arg = (flag: string) => process.argv[process.argv.indexOf(flag) + 1];
+const session = process.argv.includes("--session-dir") ? `${arg("--session-dir")}/${arg("--session-id")}.jsonl` : undefined;
+const messages: { role: string; content: string }[] =
+  session && existsSync(session) ? readFileSync(session, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const reply = (r: object) => process.stdout.write(`${JSON.stringify({ type: "response", ...r })}\n`);
 
 let buf = "";
@@ -21,6 +25,7 @@ process.stdin.on("data", (chunk: string) => {
     const r = { id: cmd.id, command: cmd.type, success: true };
     if (cmd.type === "prompt") {
       messages.push({ role: "user", content: cmd.message });
+      if (session) appendFileSync(session, `${JSON.stringify(messages.at(-1))}\n`);
       reply({ ...r, data: { disposition: "started" } });
       process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
     } else if (cmd.type === "get_messages") reply({ ...r, data: { messages } });

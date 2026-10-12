@@ -60,6 +60,8 @@
               # One pi process per thread: a fact planted in one thread is absent from another, and
               # tearing one down leaves the rest running.
               checks.supervisor = genie-agent.checks.${system}.supervisor;
+              # A thread's transcript, tier and eval cache survive a restart, on its own paths.
+              checks.state = genie-agent.checks.${system}.state;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is
