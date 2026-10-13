@@ -1,13 +1,14 @@
 // Tier 1's tool surface (plan C1, design rows 25 and 26), as a pi extension: exactly the twelve
 // tools below. The C1 five act through the supervisor's Host; read, grep, find and ls are pi's
 // built-ins, confined to the thread's worktrees; clone asks the mirror fetcher (P1) for a
-// worktree; the web tools reach only public addresses, and guard-in screens what they return.
+// worktree; the web tools reach only public addresses, and guard-in screens what they return
+// through the Host, so tier 1 holds no guard client.
 // Nothing else runs: every other tool call is blocked, and so is pi's RPC `bash` command.
 import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { checkUrl } from "../mirror/index.ts";
 import { errors, forModel, fromModel, load, type Schema } from "./schema.ts";
-import { fetchText, refusedList, type Resolver, type Screen, screened, search, systemResolver } from "./web.ts";
+import { fetchText, refusedList, type Resolver, search, systemResolver } from "./web.ts";
 
 export const BUILTINS = ["read", "grep", "find", "ls"] as const;
 export const TOOLS = [
@@ -32,6 +33,9 @@ export interface Host {
   // The thread's worktree of url from the mirror fetcher (P1's worktreeFor), which runs git
   // outside tier 1.
   clone(url: string): Promise<{ path: string; rev: string }>;
+  // A web result as the model may see it, screened by guard-in (C3.2's webScreen): the text, the
+  // guard's rewrite of it, or a throw that withholds it.
+  screen(text: string): Promise<string>;
 }
 
 export interface Config {
@@ -49,8 +53,6 @@ export interface Config {
 
 export interface Deps {
   host: Host;
-  // guard-in on a web result (production: xmsg to svc:genie-guard).
-  screen: Screen;
   resolve?: Resolver;
 }
 
@@ -126,7 +128,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
   };
 
   // A C1 tool: the repo's schema validates the arguments, then the Host acts.
-  const c1 = (name: keyof Omit<Host, "clone">, description: string, schema: Schema, arg: (v: any) => unknown) => ({
+  const c1 = (name: keyof Omit<Host, "clone" | "screen">, description: string, schema: Schema, arg: (v: any) => unknown) => ({
     name,
     label: name,
     description,
@@ -165,7 +167,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       description: "Fetch a public http(s) URL as text (HTML reduced to text, JSON as is).",
       parameters: object({ url: nonEmpty }),
       async execute(_id: string, params: { url: string }) {
-        return text(await screened(deps.screen, await fetchText(params.url, fetchOptions)));
+        return text(await deps.host.screen(await fetchText(params.url, fetchOptions)));
       },
     },
     {
@@ -175,7 +177,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       parameters: object({ query: nonEmpty }),
       async execute(_id: string, params: { query: string }) {
         const found = await search(cfg.searxngUrl, params.query, cfg.searchResults ?? 5, fetchOptions.timeoutMs);
-        return text(await screened(deps.screen, found));
+        return text(await deps.host.screen(found));
       },
     },
   ];

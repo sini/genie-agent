@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import { type Host, type Pi, type ToolCall, tier1 } from "../src/tier1/index.ts";
 import { errors, load } from "../src/tier1/schema.ts";
-import type { Screen } from "../src/tier1/web.ts";
+import { type GuardClient, webScreen } from "../src/supervisor/guard-client.ts";
 import type { Envelope } from "../src/guard/verdict.ts";
 import { worktreeFor } from "../src/mirror/index.ts";
 
@@ -81,7 +81,7 @@ const resolver = async (h: string) => (names[h] ? [{ address: names[h], family: 
 type Call = { tool: string; arg: unknown };
 
 // A recording Host. Its clone is P1's worktreeFor over a git spy that only makes the directory.
-function host(calls: Call[]): Host {
+function host(calls: Call[], guard: GuardClient): Host {
   const record = (tool: string) => async (arg: unknown) => {
     calls.push({ tool, arg });
     return { ok: true };
@@ -92,6 +92,7 @@ function host(calls: Call[]): Host {
     escalate: record("escalate"),
     reply: record("reply"),
     propose: record("propose"),
+    screen: webScreen(guard),
     async clone(url) {
       calls.push({ tool: "clone", arg: url });
       return worktreeFor({ mirrorRoot: `${tmp}/mirrors`, worktreeRoot }, url, "t1", async (args) => {
@@ -103,10 +104,10 @@ function host(calls: Call[]): Host {
   };
 }
 
-const allow: Screen = async (e) => ({ verdict: "allow", reason: "ok", cleaned_text: e.content.text });
+const allow: GuardClient = { check: async (e) => ({ verdict: "allow", reason: "ok", cleaned_text: e.content.text }) };
 
 // The extension loaded into a recording pi.
-function load1(opts: { screen?: Screen; calls?: Call[]; cluster?: string[] } = {}) {
+function load1(opts: { guard?: GuardClient; calls?: Call[]; cluster?: string[] } = {}) {
   const tools = new Map<string, { parameters: any; execute(id: string, p: any): Promise<any> }>();
   const handlers = new Map<string, (e?: any) => Promise<any>>();
   let active: string[] = [];
@@ -124,7 +125,7 @@ function load1(opts: { screen?: Screen; calls?: Call[]; cluster?: string[] } = {
       timeoutMs: 3000,
       exempt: ["127.0.0.2"],
     },
-    { host: host(opts.calls ?? []), screen: opts.screen ?? allow, resolve: resolver },
+    { host: host(opts.calls ?? [], opts.guard ?? allow), resolve: resolver },
   )(pi);
   const run = async (name: string, params: unknown): Promise<string> =>
     (await tools.get(name)!.execute("id", params)).content[0].text;
@@ -229,22 +230,28 @@ test("ssrf: a redirect from an allowed address to a refused one is refused", asy
 
 test("guard: web results reach the model only through a verdict", async () => {
   const seen: Envelope[] = [];
-  const verdict = (v: "allow" | "rewrite" | "reject"): Screen => async (e) => {
-    seen.push(e);
-    return { verdict: v, reason: "r", cleaned_text: v === "rewrite" ? "CLEANED" : v === "allow" ? e.content.text : "" };
-  };
+  const verdict = (v: "allow" | "rewrite" | "reject"): GuardClient => ({
+    check: async (e) => {
+      seen.push(e);
+      return { verdict: v, reason: "r", cleaned_text: v === "rewrite" ? "CLEANED" : v === "allow" ? e.content.text : "" };
+    },
+  });
   const url = `http://ok.test:${okPort}/page`;
-  const rejected = await load1({ screen: verdict("reject") }).run("web_fetch", { url }).catch((e: Error) => e.message);
+  const rejected = await load1({ guard: verdict("reject") }).run("web_fetch", { url }).catch((e: Error) => e.message);
   assert.match(rejected, /^web content withheld: the guard rejected it$/);
   assert.deepEqual(seen[0], { source: "web", history: [], content: { text: "Title\na & b" } });
-  assert.equal(await load1({ screen: verdict("rewrite") }).run("web_fetch", { url }), "CLEANED");
-  const down: Screen = async () => {
-    throw new Error("no reply");
+  assert.equal(await load1({ guard: verdict("rewrite") }).run("web_fetch", { url }), "CLEANED");
+  const timedOut: GuardClient = { check: async () => ({ unavailable: "timed out" }) };
+  await assert.rejects(load1({ guard: timedOut }).run("web_fetch", { url }), /withheld: the guard is unavailable \(timed out\)/);
+  const throws: GuardClient = {
+    check: async () => {
+      throw new Error("no reply");
+    },
   };
-  await assert.rejects(load1({ screen: down }).run("web_fetch", { url }), /withheld: the guard is unavailable/);
-  const junk = (async () => ({ verdict: "maybe" })) as unknown as Screen;
-  await assert.rejects(load1({ screen: junk }).run("web_fetch", { url }), /withheld: the guard's reply is not a verdict/);
-  await assert.rejects(load1({ screen: verdict("reject") }).run("web_search", { query: "q" }), /withheld/);
+  await assert.rejects(load1({ guard: throws }).run("web_fetch", { url }), /withheld: the guard is unavailable/);
+  const junk = { check: async () => ({ verdict: "maybe" }) } as unknown as GuardClient;
+  await assert.rejects(load1({ guard: junk }).run("web_fetch", { url }), /withheld: the guard's reply is not a verdict/);
+  await assert.rejects(load1({ guard: verdict("reject") }).run("web_search", { query: "q" }), /withheld/);
 });
 
 test("web_search: the top five from SearXNG, as title, url and snippet", async () => {

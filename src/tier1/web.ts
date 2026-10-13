@@ -1,12 +1,11 @@
 // Tier 1's web tools (plan C1). A fetch resolves the name once, refuses any address inside the
 // cluster or the host's networks, and connects to exactly the address it checked, so a second
-// resolution cannot rebind it. Every result is screened by guard-in before the model sees it.
+// resolution cannot rebind it. Every result is screened by guard-in before the model sees it, on
+// the supervisor's side of the bridge (Host.screen).
 import { lookup } from "node:dns/promises";
 import { get as httpGet, type IncomingMessage } from "node:http";
 import { get as httpsGet } from "node:https";
 import { BlockList, isIP } from "node:net";
-import type { Envelope, Verdict } from "../guard/verdict.ts";
-import { verdictErrors } from "../guard/verdict.ts";
 
 export type Address = { address: string; family: number };
 export type Resolver = (hostname: string) => Promise<Address[]>;
@@ -171,23 +170,4 @@ export async function search(searxngUrl: string, query: string, n: number, timeo
     .slice(0, n)
     .map((r: any) => `${r.title ?? ""}\n${r.url ?? ""}\n${r.content ?? ""}`)
     .join("\n\n");
-}
-
-// guard-in's input for web content. svc:genie-guard's envelope names its sources; "web" is this one.
-export type Screen = (e: Envelope) => Promise<Verdict>;
-
-// The text the model may see: the fetched text on allow, the guard's cleaned_text on rewrite.
-// A reject, a reply that is not a verdict, or no reply at all withholds it.
-export async function screened(screen: Screen, text: string): Promise<string> {
-  const withheld = (why: string) => new Error(`web content withheld: ${why}`);
-  let v: Verdict;
-  try {
-    v = await screen({ source: "web", history: [], content: { text } });
-  } catch (e) {
-    throw withheld(`the guard is unavailable (${e instanceof Error ? e.message : e})`);
-  }
-  if (verdictErrors(v).length) throw withheld("the guard's reply is not a verdict");
-  if (v.verdict === "allow") return text;
-  if (v.verdict === "rewrite") return v.cleaned_text;
-  throw withheld("the guard rejected it");
 }

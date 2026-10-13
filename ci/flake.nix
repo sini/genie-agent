@@ -63,7 +63,8 @@
               # tearing one down leaves the rest running.
               checks.supervisor = genie-agent.checks.${system}.supervisor;
               # Under real pi, a tier-1 tool call reaches the supervisor's Host as the thread whose
-              # process made it, and the system prompt carries every skill.
+              # process made it, the system prompt carries every skill, and a web result reaches the
+              # model only as the supervisor's guard Screen allows or rewrites it.
               checks.tier1-bridge = genie-agent.checks.${system}.tier1-bridge;
               # One eval in flight per thread, threads overlap, and a failed run releases its thread.
               checks.eval-lock = genie-agent.checks.${system}.eval-lock;

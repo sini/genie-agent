@@ -301,6 +301,7 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/tier1
                     ./src/guard/verdict.ts
+                    ./src/supervisor/guard-client.ts
                     ./src/mirror
                     ./schemas
                     ./skills
@@ -344,8 +345,10 @@
               '';
           # The Host bridge (plan C3.1) under real pi with the tier-1 extension, as tier1Launch starts
           # it: a tool call in a thread reaches the supervisor's Host as that thread and its result
-          # returns to the tool, and the system prompt carries tier 1's prompt and every skill. A stub
-          # model on the sandbox's loopback; the forged-thread cell runs over the fake pi.
+          # returns to the tool, and the system prompt carries tier 1's prompt and every skill. A web
+          # result reaches the model only as the supervisor's guard Screen lets it (plan C3.2): a stub
+          # web server and a fake GuardClient. A stub model on the sandbox's loopback; the
+          # forged-thread cell runs over the fake pi.
           tier1-bridge =
             pkgs.runCommand "genie-agent-tier1-bridge"
               {
@@ -372,6 +375,13 @@
                 node --test --test-force-exit --test-reporter=tap tests/tier1-bridge.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - oracle: a tool call in thread A reaches the supervisor's Host as A and its result returns to the tool; B's as B$" $TMPDIR/tap && grep -q "^ok [0-9]* - oracle: the launched system prompt carries tier 1's prompt and every skill's body$" $TMPDIR/tap && grep -q '^ok [0-9]* - a Host call that names another thread is attributed to the thread whose pipes carried it$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  "a clean page the guard allows reaches tier 1's context" \
+                  "an injected page the guard rejects is withheld from tier 1's context" \
+                  "a page the guard rewrites reaches tier 1's context only as rewritten" \
+                  "a page the guard is unavailable for is withheld from tier 1's context"; do
+                  sed -n 's/^ok [0-9]* - oracle: //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
+                done
                 touch $out
               '';
           # The per-thread eval lock (design oracle 15): one eval in flight per thread, threads overlap,

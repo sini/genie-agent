@@ -57,7 +57,7 @@ const recorder = {
 const never = () => Promise.reject(new Error("not called"));
 tier1(
   { root: "/nonexistent", searxngUrl: "http://127.0.0.1:1", cluster: [] },
-  { host: { eval: never, recall: never, escalate: never, reply: never, propose: never, clone: never }, screen: never },
+  { host: { eval: never, recall: never, escalate: never, reply: never, propose: never, clone: never, screen: never } },
 )(recorder);
 
 const apiKey = args["api-key-file"] ? readFileSync(args["api-key-file"], "utf8").trim() : undefined;

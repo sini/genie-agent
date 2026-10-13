@@ -33,9 +33,5 @@ export default function (pi: Pi): void {
     if (!ui) throw new Error("no session yet");
     return ui.input;
   });
-  // ponytail: guard-in is not wired to tier 1 yet, so every web result is withheld (fail closed).
-  const screen = async () => {
-    throw new Error("guard-in is not connected");
-  };
-  tier1(JSON.parse(raw) as Config, { host, screen })(pi);
+  tier1(JSON.parse(raw) as Config, { host })(pi);
 }
