@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, test } from "node:test";
@@ -367,9 +367,50 @@ test("oracle: a tombstoned thread with S3 down is refused, not resumed fresh", a
   assert.equal(root.supervisor.pid(thread), undefined);
   assert.equal(prompts().includes("turn after gc while s3 is down"), false);
   // Tombstone remains intact so history is not lost
-  assert.ok(root.store.tombstone(thread) !== undefined, "tombstone is preserved for retry");
   status = 200;
 });
+
+test("oracle: an expired thread whose removal throws after tombstoning still resumes from the archive", async () => {
+  status = 200;
+  const thread = "exp_crash";
+  await inbound({ thread, envelope: envelope(ALICE, "turn 1 before crash") });
+  assert.ok(prompts().includes("turn 1 before crash"));
+
+  await root.supervisor.teardown(thread);
+  const oldActive = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
+  root.store.write({ ...root.store.read(thread)!, last_active: oldActive });
+
+  // Cause removal to throw by placing a file where the thread's worktree directory would be
+  const wtDir = `${tmp}/worktrees/${thread}`;
+  mkdirSync(`${tmp}/worktrees`, { recursive: true });
+  writeFileSync(wtDir, "not-a-dir");
+
+  // GC sweep: archive PUT succeeds, tombstone is written, but removeWorktrees throws ENOTDIR
+  await root.gc.sweep();
+  // State directory is still present because removal threw before rmSync
+  assert.equal(existsSync(`${root.store.stateRoot}/${thread}`), true);
+  // Tombstone was written before the removal threw
+  assert.ok(root.store.tombstone(thread) !== undefined, "tombstone was written before removal threw");
+
+  // Clean up the obstacle so subsequent operations succeed
+  rmSync(wtDir, { force: true });
+
+  // Next message to the crashed/tombstoned thread
+  await inbound({ thread, envelope: envelope(ALICE, "turn 2 after crash") });
+
+  const pid = root.supervisor.pid(thread);
+  assert.ok(pid !== undefined, "pi was launched for resumed thread");
+  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.type === "prompt")
+    .map((r) => r.message);
+  assert.deepEqual(threadPrompts, ["turn 1 before crash", "turn 2 after crash"]);
+  assert.equal(root.store.read(thread)?.status, "active");
+  assert.equal(root.store.tombstone(thread), undefined, "tombstone cleared after successful replay");
+});
+
 
 
 test("oracle: main launches real pi against a stub model", async () => {

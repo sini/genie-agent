@@ -68,16 +68,21 @@ export class Gc {
     const st = this.o.store.read(thread);
     const tier = st?.sender_tier ?? "public";
     await this.o.archive(thread);
+    // Write the tombstone right after archive PUT succeeds, before any rmSync.
+    // If removal throws or crashes, the thread is tombstoned so next message resumes from archive.
+    this.o.store.setTombstone(thread, { archived: true, tier });
     await removeWorktrees(this.o.mirror, thread);
     // A message that arrived during the awaits made the thread live again: keep its state.
     // ponytail: its worktrees are already gone and are re-added on demand; a per-thread lock with
     // C4 is owed if that ever costs more than a refetch.
-    if (!this.isExpired(thread)) return;
+    if (!this.isExpired(thread)) {
+      this.o.store.clearTombstone(thread);
+      return;
+    }
     // Store paths are read-only; make them writable so the store can be deleted.
     const store = `${this.o.store.storeRoot}/${thread}`;
     if (existsSync(store)) execFileSync("chmod", ["-R", "u+w", store]);
     rmSync(store, { recursive: true, force: true });
     rmSync(`${this.o.store.stateRoot}/${thread}`, { recursive: true, force: true });
-    this.o.store.setTombstone(thread, { archived: true, tier });
   }
 }

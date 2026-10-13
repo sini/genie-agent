@@ -11,7 +11,7 @@
 // The S3 client is a single SigV4-signed PUT, path-style, over fetch. The secret key is read from
 // a file at archive time, never from argv or the environment (as G3).
 import { createHash, createHmac } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { GcOptions } from "../gc/index.ts";
 import type { ThreadStateStore, Tier } from "../state/index.ts";
 import type { Supervisor } from "../supervisor/index.ts";
@@ -175,6 +175,10 @@ export async function replayResume(
   if (!archived) return null;
 
   if (archived.transcript) {
+    if (store) {
+      const sessionFile = `${store.dir(thread)}/session/thread.jsonl`;
+      if (existsSync(sessionFile)) rmSync(sessionFile, { force: true });
+    }
     await seedSession(supervisor, thread, { transcript: archived.transcript }, guard);
   }
 

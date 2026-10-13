@@ -154,13 +154,13 @@ export class ThreadStateStore {
   }
 
   // A local tombstone left by GC collection (plan P5, design §6): marks an archived thread so only
-  // tombstoned threads replay from S3. Supports tombstone under .tombstones, storeRoot, or stateRoot.
+  // tombstoned threads replay from S3. Single deterministic path under ${stateRoot}/.tombstones/${thread}.json.
+  private tombstonePath(thread: string): string {
+    return `${this.stateRoot}/.tombstones/${checkThread(thread)}.json`;
+  }
+
   tombstone(thread: string): Tombstone | undefined {
-    return (
-      readJson<Tombstone>(`${this.stateRoot}/.tombstones/${checkThread(thread)}.json`) ??
-      readJson<Tombstone>(`${this.storeRoot}/${checkThread(thread)}/tombstone.json`) ??
-      readJson<Tombstone>(`${this.stateRoot}/${checkThread(thread)}/tombstone.json`)
-    );
+    return readJson<Tombstone>(this.tombstonePath(thread));
   }
 
   setTombstone(thread: string, tombstone: Tombstone): void {
@@ -170,12 +170,8 @@ export class ThreadStateStore {
   }
 
   clearTombstone(thread: string): void {
-    const f0 = `${this.stateRoot}/.tombstones/${checkThread(thread)}.json`;
-    if (existsSync(f0)) rmSync(f0, { force: true });
-    const f1 = `${this.storeRoot}/${checkThread(thread)}/tombstone.json`;
-    if (existsSync(f1)) rmSync(f1, { force: true });
-    const f2 = `${this.stateRoot}/${checkThread(thread)}/tombstone.json`;
-    if (existsSync(f2)) rmSync(f2, { force: true });
+    const f = this.tombstonePath(thread);
+    if (existsSync(f)) rmSync(f, { force: true });
   }
 }
 

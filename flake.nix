@@ -823,6 +823,7 @@
                   "a proposal through the root's Host reaches the right act" \
                   "an idle close at 24 h archives once through the timers" \
                   "an expired thread collected by GC resumes on a new message with its transcript replayed through the root" \
+                  "an expired thread whose removal throws after tombstoning still resumes from the archive" \
                   "a new thread with S3 down still starts" \
                   "a tombstoned thread with S3 down is refused, not resumed fresh" \
                   "main launches real pi against a stub model"; do
