@@ -69,7 +69,7 @@ function boot(t: number) {
     (th) => ({ command: process.execPath, args: [fake, ...store.sessionArgs(th)], env: hold.has(th) ? { PI_SETTLE: "never" } : {} }),
     (th, r) => lc.event(th, r),
   );
-  lc = new Lifecycle({ supervisor, store, mirror, clock });
+  lc = new Lifecycle({ supervisor, store, mirror, clock, deeper: async () => {} });
   lc.start();
   // A message, then its turn settling (pi's event arrives on the pipe after the response), so the
   // clock does not move before the reply lands.

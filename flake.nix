@@ -501,6 +501,48 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: active ⇒ parked at 1 h ⇒ resumed on a message with its context intact$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a park before the first reply keeps the pending message, and the resume replays it$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: accept and 24 h idle each close the thread and remove its worktrees$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: 🔍 does not close the thread: it stays open and its worktrees stay$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a supervisor restart mid-idle still closes on the original schedule$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
+          # through the lifecycle, a repeated 🔍 delivers once, and the package sent validates with
+          # the supervisor's thread id. Fake xmsg with X10's idempotency; identity guard; fixed route.
+          escalation =
+            pkgs.runCommand "genie-agent-escalation"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/escalation
+                    ./src/lifecycle
+                    ./src/mirror
+                    ./src/state
+                    ./src/supervisor
+                    ./src/tier1/draft.ts
+                    ./src/tier1/schema.ts
+                    ./schemas/draft.json
+                    ./schemas/escalation.json
+                    ./schemas/eval-request.json
+                    ./schemas/eval-result.json
+                    ./tests/escalation.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/escalation.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'a forced draft sends with no 🔍' \
+                  'a below-threshold draft sends' \
+                  'a confident draft does not send until 🔍' \
+                  'a draft at exactly the threshold does not send until 🔍' \
+                  '🔍 arriving twice sends exactly once' \
+                  "the package validates against schemas/escalation.json, thread_id the supervisor's"; do
+                  sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
           # with its credentials redacted, and the token reaches only the act. Stub ninfer, fake act.
           broker =

@@ -18,6 +18,14 @@ export interface ThreadState {
   sender_tier: Tier;
 }
 
+// The thread's latest escalation package and the sequence number of its draft (C5); body is the
+// package as guarded and stamped, kept so a resend repeats it byte for byte.
+export interface EscalationRecord {
+  seq: number;
+  pkg: unknown;
+  body?: string;
+}
+
 export interface CacheKey {
   repo: string;
   rev: string;
@@ -101,6 +109,14 @@ export class ThreadStateStore {
 
   setPending(thread: string, messages: string[]): void {
     writeAtomic(this.dir(thread), "pending.json", JSON.stringify(messages));
+  }
+
+  escalation(thread: string): EscalationRecord | undefined {
+    return readJson<EscalationRecord>(`${this.dir(thread)}/escalation.json`);
+  }
+
+  setEscalation(thread: string, rec: EscalationRecord): void {
+    writeAtomic(this.dir(thread), "escalation.json", JSON.stringify(rec));
   }
 
   cacheGet(thread: string, key: CacheKey): unknown {

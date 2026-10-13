@@ -37,6 +37,8 @@ export interface LifecycleOptions {
   supervisor: Supervisor;
   store: ThreadStateStore;
   mirror: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">;
+  // 🔍: escalate the thread's latest draft (C5's Escalation.deeper).
+  deeper: (thread: string) => Promise<unknown>;
   clock?: Clock;
   parkMs?: number;
   closeMs?: number;
@@ -92,10 +94,11 @@ export class Lifecycle {
     this.arm(thread);
   }
 
-  // A thread control from the bot (M5a). ✅ accepts and closes the thread. 🔍 escalates, which is
-  // C5's: the expert's answer returns into this thread (§4 step 6), so it stays open.
+  // A thread control from the bot (M5a). ✅ accepts and closes the thread. 🔍 escalates (C5): the
+  // expert's answer returns into this thread (§4 step 6), so it stays open.
   async control(thread: string, c: "accept" | "deeper"): Promise<void> {
     if (c === "accept") await this.close(thread);
+    else await this.o.deeper(thread);
   }
 
   // Accept or 24 hours idle. On a failure the status stays open, and the next `start` retries.
