@@ -63,6 +63,8 @@
               checks.supervisor = genie-agent.checks.${system}.supervisor;
               # A thread's transcript, tier and eval cache survive a restart, on its own paths.
               checks.state = genie-agent.checks.${system}.state;
+              # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
+              checks.broker = genie-agent.checks.${system}.broker;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is

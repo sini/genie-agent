@@ -365,6 +365,33 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: restart, then resume ⇒ the same transcript, tier and cache$' $TMPDIR/tap && grep -q '^ok [0-9]* - a thread id that names another directory is refused$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
+          # with its credentials redacted, and the token reaches only the act. Stub ninfer, fake act.
+          broker =
+            pkgs.runCommand "genie-agent-broker"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/broker
+                    ./src/guard
+                    ./src/dispatcher/xmsg.ts
+                    ./src/redactor
+                    ./src/tier1/schema.ts
+                    ./schemas/proposal.json
+                    ./tests/broker.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/broker.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
