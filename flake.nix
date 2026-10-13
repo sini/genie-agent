@@ -342,6 +342,28 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The per-thread eval lock (design oracle 15): one eval in flight per thread, threads overlap,
+          # and a failed run releases its thread. A recording fake runner; no nix, no bwrap.
+          eval-lock =
+            pkgs.runCommand "genie-agent-eval-lock"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/eval
+                    ./tests/eval-lock.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/eval-lock.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 15: two requests on one thread never overlap, and run in arrival order$' $TMPDIR/tap && grep -q '^ok [0-9]* - two threads overlap$' $TMPDIR/tap && grep -q '^ok [0-9]* - a failed or timed-out run releases the thread, and the next request runs$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process
           # and a fresh store over the same paths, and a thread id cannot leave its root.
           state =

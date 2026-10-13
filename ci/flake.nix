@@ -62,6 +62,8 @@
               # One pi process per thread: a fact planted in one thread is absent from another, and
               # tearing one down leaves the rest running.
               checks.supervisor = genie-agent.checks.${system}.supervisor;
+              # One eval in flight per thread, threads overlap, and a failed run releases its thread.
+              checks.eval-lock = genie-agent.checks.${system}.eval-lock;
               # A thread's transcript, tier and eval cache survive a restart, on its own paths.
               checks.state = genie-agent.checks.${system}.state;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
