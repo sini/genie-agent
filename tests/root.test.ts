@@ -17,6 +17,7 @@ import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
 import { type Inbound, main, REFUSAL, WITHHELD } from "../src/root/index.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
+import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-root-test-`);
 process.env.PI_RECORD = tmp;
@@ -52,7 +53,41 @@ sh("init", "-q", "-b", "main", `${tmp}/served/fixture`);
 sh("-C", `${tmp}/served/fixture`, "commit", "-q", "--allow-empty", "-m", "c");
 const port = 20000 + (process.pid % 20000);
 const daemon = spawn("git", ["daemon", "--export-all", "--listen=127.0.0.1", `--port=${port}`, `--base-path=${tmp}/served`, `${tmp}/served`], { stdio: ["ignore", "ignore", "inherit"] });
-after(() => (daemon.kill(), s3.close(), ninfer.close()));
+const PR_URL = "https://github.com/alice/flake/pull/7";
+const GIST_URL = "https://gist.github.com/genie-bot/aa5a";
+const ghRequests: { method: string; url: string; body: string }[] = [];
+const github = createServer((req, res) => {
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", () => {
+    ghRequests.push({ method: req.method!, url: req.url!, body });
+    const ok = (data: unknown, status = 200) => res.writeHead(status).end(JSON.stringify(data));
+    switch (`${req.method} ${req.url}`) {
+      case "POST /gists":
+        return ok({ html_url: GIST_URL }, 201);
+      case "GET /repos/alice/flake":
+        return ok({ private: false, default_branch: "main" });
+      case "POST /repos/alice/flake/forks":
+        return ok({ full_name: "genie-bot/flake", owner: { login: "genie-bot" } }, 202);
+      case "GET /repos/genie-bot/flake/git/ref/heads/main":
+        return ok({ object: { sha: "base" } });
+      case "GET /repos/alice/flake/branches/main":
+        return ok({ commit: { sha: "base", commit: { tree: { sha: "basetree" } } } });
+      case "POST /repos/genie-bot/flake/git/trees":
+        return ok({ sha: "tree" }, 201);
+      case "POST /repos/genie-bot/flake/git/commits":
+        return ok({ sha: "commit" }, 201);
+      case "POST /repos/genie-bot/flake/git/refs":
+        return ok({ ref: "refs/heads/fix" }, 201);
+      case "POST /repos/alice/flake/pulls":
+        return ok({ html_url: PR_URL }, 201);
+      default:
+        res.writeHead(404).end(JSON.stringify({ message: "Not Found" }));
+    }
+  });
+});
+await new Promise<void>((r) => github.listen(0, "127.0.0.1", r));
+after(() => (daemon.kill(), s3.close(), ninfer.close(), github.close()));
 
 writeFileSync(
   `${tmp}/config.json`,
@@ -64,7 +99,12 @@ writeFileSync(
     model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${tmp}/model-key` },
     tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
     s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${tmp}/s3-key` },
-    broker: { tokenFile: `${tmp}/token-key`, guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" } },
+    broker: {
+      tokenFile: `${tmp}/token-key`,
+      githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+      threadLink: "https://chat.example.org/thread/{thread}",
+      guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+    },
   }),
 );
 
@@ -190,4 +230,104 @@ test("a failed archive is logged and the close stands", async () => {
   await inbound({ thread: "p", control: "accept" });
   assert.equal(puts.length, 2);
   assert.equal(root.store.read("p")?.status, "closed");
+});
+
+test("oracle: a proposal through the root's Host reaches the right act", async () => {
+  const gistProposal = {
+    kind: "gist",
+    title: "repro",
+    body: "here is the repro",
+    files: { "repro.nix": "{ }: 42" },
+  };
+  const gistRes = await host("q", "propose", gistProposal);
+  assert.deepEqual(gistRes.ok, { thread: "q", acted: true, reason: "acted", redactions: [], url: GIST_URL });
+
+  const prProposal = {
+    kind: "pr",
+    repo: "alice/flake",
+    branch: "fix",
+    title: "fix typo",
+    body: "fixes the typo",
+    files: { "flake.nix": "{ }: 43" },
+  };
+  const prRes = await host("q", "propose", prProposal);
+  assert.deepEqual(prRes.ok, { thread: "q", acted: true, reason: "acted", redactions: [], url: PR_URL });
+
+  const prCall = ghRequests.find((r) => r.method === "POST" && r.url === "/repos/alice/flake/pulls");
+  assert.ok(prCall, "PR call not found");
+  assert.ok(JSON.parse(prCall.body).body.includes("Thread: https://chat.example.org/thread/q"));
+});
+
+test("oracle: an idle close at 24 h archives once through the timers", async () => {
+  status = 200;
+  const thread = "idle_24h";
+  const oldActive = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  root.store.write({
+    thread_id: thread,
+    status: "active",
+    created: oldActive,
+    last_active: oldActive,
+    sender_tier: "trusted",
+  });
+  writeFileSync(`${root.store.dir(thread)}/session/thread.jsonl`, '{"type":"prompt","message":"hi"}\n');
+
+  puts.length = 0;
+  root.start();
+  for (let i = 0; i < 50; i++) {
+    if (puts.length > 0) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(root.store.read(thread)?.status, "closed");
+  assert.deepEqual(puts, [`PUT /genie-transcripts/tier1/trusted/${thread}.json`]);
+});
+
+test("oracle: main launches real pi against a stub model", async () => {
+  const model = await stubModel();
+  after(() => model.close());
+  const piTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-real-pi-test-`);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${piTmp}/${f}-key`, "k\n");
+  const cfg = `${piTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${piTmp}/state`,
+      storeRoot: `${piTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${tmp}/worktrees` },
+      pi: process.env.PI ?? "pi",
+      model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: `${piTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${piTmp}/s3-key` },
+      broker: { tokenFile: `${piTmp}/token-key`, guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" } },
+    }),
+  );
+
+  const realBatches: Inbound[][] = [];
+  const realLaunches: Launch[] = [];
+  const realRoot = main(
+    cfg,
+    {
+      intake: { next: async () => realBatches.shift() ?? null },
+      post: { post: async () => {} },
+      guard,
+      xmsg,
+    },
+    async (l) => (realLaunches.push(l), { exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+  );
+  try {
+    const thread = "real_pi";
+    const promptJson = JSON.stringify({ tool: "eval", args: { repo: "o/r", rev: "main", attr: "x", trusted: "no" } });
+    realBatches.push([{ thread, envelope: envelope(ALICE, promptJson) }]);
+    await realRoot.run();
+
+    for (let i = 0; i < 50; i++) {
+      if (model.requests.length >= 2) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    assert.ok(model.requests.length >= 2, `expected at least 2 model requests, got ${model.requests.length}`);
+    assert.equal(model.requests[0]?.model, "m");
+    assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted" }]);
+  } finally {
+    await realRoot.stop();
+  }
 });

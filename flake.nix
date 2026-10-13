@@ -792,6 +792,7 @@
               }
               ''
                 cd $src
+                export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/root.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
@@ -804,7 +805,10 @@
                   "a reply is redacted then guard-out'd before Post" \
                   "a credential in the user's question never reaches guard-out" \
                   'a guard-out block posts the withheld notice, never the draft' \
-                  'a close archives exactly once'; do
+                  'a close archives exactly once' \
+                  "a proposal through the root's Host reaches the right act" \
+                  "an idle close at 24 h archives once through the timers" \
+                  "main launches real pi against a stub model"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out
