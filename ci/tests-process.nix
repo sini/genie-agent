@@ -62,6 +62,8 @@
           sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
         done
         # Skipped where there is no systemd user scope to delegate, but never absent.
+        grep -q "^ok [0-9]* - an OOM kill under a memory cap is limit oom\( # SKIP .*\)\?$" "$tap" ||
+          { echo "missing cell: the oom cell"; exit 1; }
         grep -q "^ok [0-9]* - a concurrent eval's OOM kill is not this one's, in a delegated cgroup\( # SKIP .*\)\?$" "$tap" ||
           { echo "missing cell: the delegated cgroup's"; exit 1; }
       '';

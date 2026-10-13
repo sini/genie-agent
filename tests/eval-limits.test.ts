@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { fetchRefused, limitHit, LIMITS } from "../src/eval/run.ts";
+import { fetchRefused, limitHit, LIMITS, oomCounted } from "../src/eval/run.ts";
 
 const quiet = { deadline: false, sigkilled: false, oomKilled: false, fetchRefused: false };
 
@@ -21,6 +21,18 @@ for (const [name, seen, hit] of [
 ] as const) {
   test(`limit: ${name}`, () => assert.equal(limitHit({ ...quiet, ...seen }), hit));
 }
+
+// The eval cgroup's own count decides where it can be read; where systemd took back a cgroup it never
+// delegated, the eval's memory.events is gone (-1) and the whole cgroup's count rising decides.
+test("an eval cgroup's OOM count unreadable falls back to the whole cgroup's", () => {
+  assert.equal(oomCounted(-1, 3, 4), true);
+  assert.equal(oomCounted(-1, 3, 3), false);
+  assert.equal(oomCounted(-1, -1, 4), null);
+  assert.equal(oomCounted(-1, 3, -1), null);
+  // Readable, the eval's own count wins: a concurrent eval's kill raising the whole count is not this one's.
+  assert.equal(oomCounted(0, 3, 4), false);
+  assert.equal(oomCounted(1, 3, 3), true);
+});
 
 test("limit_hit's values are the schema's", () => {
   const schema = JSON.parse(readFileSync(new URL("../schemas/eval-result.json", import.meta.url), "utf8"));

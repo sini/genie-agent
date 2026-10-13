@@ -133,9 +133,9 @@ test("the jail environment is exactly the allowlist, carrying nothing of the thr
 });
 
 // Each limit triggered for real. The egress and oom cells run the runner in a child process under a
-// narrower host: a network namespace with no interface, and a memory-capped systemd scope.
-const child = (argv: string[], attr: string, localFlake?: string): EvalResult => {
-  const r = spawnSync(argv[0], [...argv.slice(1), "node", fixture("child.ts"), attr, ...(localFlake ? [localFlake] : [])], {
+// narrower host: a network namespace with no interface, and a delegated systemd scope.
+const child = (argv: string[], attr: string, ...rest: string[]): EvalResult & { memory_max?: string[] } => {
+  const r = spawnSync(argv[0], [...argv.slice(1), "node", fixture("child.ts"), attr, ...rest], {
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
@@ -157,9 +157,14 @@ test("a fetch the network refuses is limit egress", () => {
   assert.equal(r.limit_hit, "egress", r.stderr_tail);
 });
 
-const scope = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"];
+// The cap is the eval's own cgroup's, set by the runner, so the OOM killer never has the runner to pick:
+// a cap on the runner's cgroup as well let a second OOM kill it while the dead eval's memory was still
+// charged. The scope's 2G is a backstop for a runner that sets no cap, never reached by a capped eval.
+const scope = ["systemd-run", "--user", "--scope", "-q", "-p", "Delegate=yes", "-p", "MemoryMax=2G", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"];
+const MEMORY_MAX = String(512 * 2 ** 20);
 test("an OOM kill under a memory cap is limit oom", { skip: spawnSync(scope[0], [...scope.slice(1), "true"]).status !== 0 && "no systemd user scope" }, () => {
-  const r = child(scope, "oom", fixture("limits"));
+  const r = child(scope, "oom", fixture("limits"), MEMORY_MAX);
+  assert.deepEqual(r.memory_max, [MEMORY_MAX]);
   assert.equal(r.exit, 137);
   assert.equal(r.limit_hit, "oom");
 });

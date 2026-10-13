@@ -454,6 +454,7 @@
                   grep -qx "ok [0-9]* - limit: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 grep -qx "ok [0-9]* - limit_hit's values are the schema's" $TMPDIR/tap || { echo "missing cell: the schema's values"; exit 1; }
+                grep -qx "ok [0-9]* - an eval cgroup's OOM count unreadable falls back to the whole cgroup's" $TMPDIR/tap || { echo "missing cell: the whole cgroup's fallback"; exit 1; }
                 touch $out
               '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process

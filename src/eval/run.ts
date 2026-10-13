@@ -37,6 +37,10 @@ export interface RunOptions {
   // The remote builders a trusted eval builds its IFD on (design §5.3), in Nix's `builders` syntax:
   // the launcher's deployment config, never the request. Unset, a trusted eval builds in its own store.
   builders?: string;
+  // Bytes. The eval's own cgroup's memory.max, so an eval's OOM kill bounds the eval and never the runner
+  // that reports on it. It needs a cgroup per eval (below): without one the runner refuses to run rather
+  // than run the eval uncapped or capped together with itself.
+  memoryMax?: number;
 }
 
 export const TAIL_CHARS = 4096;
@@ -140,6 +144,10 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   const whole = cg ? cgroupParent : null;
   const oomBefore = oomKills(whole);
   try {
+    if (options.memoryMax !== undefined) {
+      if (!cg) throw new Error("memoryMax needs a cgroup per eval, and this runner's cgroup is not delegated to it");
+      writeFileSync(`${cg}/memory.max`, String(options.memoryMax));
+    }
     // In its own cgroup, bwrap is moved there before it runs, so every process of the eval is in it.
     const [command, args] = cg
       ? [which("sh"), ["-c", 'echo 0 > "$0/cgroup.procs" && exec "$@"', cg, which("bwrap"), ...bwrap]]
@@ -167,7 +175,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
           // Only this runner's own timeout sets `killed`; a kill from anywhere else leaves it false.
           deadline: child.killed,
           sigkilled,
-          oomKilled: evalOoms >= 0 ? evalOoms > 0 : oomBefore < 0 || oomAfter < 0 ? null : oomAfter > oomBefore,
+          oomKilled: oomCounted(evalOoms, oomBefore, oomAfter),
           fetchRefused: exit !== 0 && fetchRefused(stderr),
         });
         resolve({ exit, stdout_tail: stdout, stderr_tail: stderr, limit_hit });
@@ -201,6 +209,11 @@ export interface LimitObservation {
 // A SIGKILL that is neither the deadline nor a counted OOM kill is unknown: never oom, never none.
 export const limitHit = (o: LimitObservation): EvalResult["limit_hit"] =>
   o.deadline ? "timeout" : o.sigkilled ? (o.oomKilled ? "oom" : "unknown") : o.fetchRefused ? "egress" : "none";
+
+// Whether the OOM killer killed a process of the eval: by the eval cgroup's own count where it can be
+// read (-1 otherwise), else by the whole cgroup's rising; null when neither can be read.
+export const oomCounted = (evalOoms: number, before: number, after: number): boolean | null =>
+  evalOoms >= 0 ? evalOoms > 0 : before < 0 || after < 0 ? null : after > before;
 
 // Nix reports a failed download as curl's message and code; 6, 7 and 28 are the network refusing it
 // (no name, no connection, no answer), where an HTTP error is the server's.
