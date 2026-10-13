@@ -41,6 +41,8 @@ export interface RunOptions {
   // that reports on it. It needs a cgroup per eval (below): without one the runner refuses to run rather
   // than run the eval uncapped or capped together with itself.
   memoryMax?: number;
+  // Optional CA bundle file override. Tests only.
+  caBundle?: string;
 }
 
 export const TAIL_CHARS = 4096;
@@ -93,9 +95,36 @@ export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string
   ];
 }
 
+// Candidate locations for the CA certificate bundle across NixOS, standard Linux, and container images.
+export const CA_BUNDLE_CANDIDATES = [
+  process.env.NIX_SSL_CERT_FILE,
+  process.env.SSL_CERT_FILE,
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/ssl/certs/ca-bundle.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+];
+
+// Resolves the CA bundle to the real target file (following symlinks into /nix/store or /etc/static),
+// so bubblewrap can mount the resolved file directly without needing /etc/static in the jail.
+export function resolveCaBundle(override?: string): string {
+  const candidates = override ? [override] : CA_BUNDLE_CANDIDATES;
+  for (const c of candidates) {
+    if (c && existsSync(c)) {
+      try {
+        return realpathSync(c);
+      } catch {
+        return c;
+      }
+    }
+  }
+  return "/etc/ssl/certs/ca-certificates.crt";
+}
+
 // The whole environment of bwrap and of the Nix it runs: built from nothing, never from process.env, so
 // nothing of the thread reaches the evaluation. Every path is the throwaway's or the jail's own.
-const JAIL_ENV: Record<string, string> = {
+export const JAIL_ENV: Record<string, string> = {
   // Nix reads its user registry and config under HOME and caches fetches under XDG_CACHE_HOME.
   HOME: "/work/home",
   XDG_CACHE_HOME: "/work/cache",
@@ -107,8 +136,8 @@ const JAIL_ENV: Record<string, string> = {
   NIX_STORE_DIR: "/work/nix/store",
   NIX_STATE_DIR: "/work/nix/var",
   NIX_LOG_DIR: "/work/nix/log",
-  // TLS for fetching the github coordinate.
-  NIX_SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+  // TLS for fetching the github coordinate: the resolved target file, not a symlink into /etc/static.
+  NIX_SSL_CERT_FILE: resolveCaBundle(),
 };
 
 export async function runEval(launch: Launch, options: RunOptions = {}): Promise<EvalResult> {
@@ -119,6 +148,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   }
   const flakeRef = options.localFlake ? "path:/src" : `github:${request.repo}/${request.rev}`;
   const nix = which("nix");
+  const caBundle = resolveCaBundle(options.caBundle);
   const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-`);
   // ponytail: the whole host store is bound read-only for the nix binary's closure; bind only that
   // closure if this runner leaves the gVisor Job.
@@ -128,7 +158,10 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     "--die-with-parent",
     "--ro-bind", "/nix/store", "/nix/store",
     "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
-    "--ro-bind-try", "/etc/ssl/certs", "/etc/ssl/certs",
+    // E1.1: bind the resolved CA bundle file, not the /etc/ssl/certs symlink into /etc/static.
+    "--ro-bind-try", caBundle, caBundle,
+    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
+    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
     "--proc", "/proc",
     "--dev", "/dev",
     "--tmpfs", "/tmp",
@@ -154,7 +187,10 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
       : [which("bwrap"), bwrap];
     return await new Promise<EvalResult>((resolve, reject) => {
       const child = spawn(command, args, {
-        env: JAIL_ENV,
+        env: {
+          ...JAIL_ENV,
+          NIX_SSL_CERT_FILE: caBundle,
+        },
         stdio: ["ignore", "pipe", "pipe"],
         timeout: options.timeoutMs ?? 120_000,
         killSignal: "SIGKILL",

@@ -58,7 +58,9 @@
           "an eval past the runner's timeout is limit timeout" \
           'a fetch the network refuses is limit egress' \
           "a fetch the network drops is limit egress before the runner's deadline" \
-          'an eval SIGKILLed from outside with no OOM kill is limit unknown'; do
+          'an eval SIGKILLed from outside with no OOM kill is limit unknown' \
+          'the resolved CA bundle is a real file, not a symlink into /etc/static' \
+          'a TLS fetch inside the jail succeeds with the resolved CA bundle'; do
           sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
         done
         # Skipped where there is no systemd user scope to delegate, but never absent.

@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { effectiveTier, runEval, type EvalResult, type Tier } from "../src/eval/run.ts";
+import { effectiveTier, resolveCaBundle, runEval, type EvalResult, type Tier } from "../src/eval/run.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/eval/${name}`, import.meta.url));
 const run = (name: string, attr: string, trusted: "yes" | "no", sender_tier: Tier) =>
@@ -84,7 +84,7 @@ const ALLOWLIST = {
   NIX_STORE_DIR: "/work/nix/store",
   NIX_STATE_DIR: "/work/nix/var",
   NIX_LOG_DIR: "/work/nix/log",
-  NIX_SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+  NIX_SSL_CERT_FILE: resolveCaBundle(),
 };
 
 // Whether pid is a descendant of this test process, by its parent chain.
@@ -214,4 +214,19 @@ test("the clamp: trusted only on request yes and a trusted sender tier", () => {
   assert.equal(effectiveTier({ request, sender_tier: "trusted" }), "trusted");
   assert.equal(effectiveTier({ request, sender_tier: "public" }), "public");
   assert.equal(effectiveTier({ request: { ...request, trusted: "no" }, sender_tier: "trusted" }), "public");
+});
+
+test("the resolved CA bundle is a real file, not a symlink into /etc/static", () => {
+  const ca = resolveCaBundle();
+  assert.equal(existsSync(ca), true, `CA bundle file ${ca} must exist`);
+  const st = lstatSync(ca);
+  assert.equal(st.isFile(), true, `CA bundle file ${ca} must be a regular file, not a symlink`);
+  assert.equal(ca.startsWith("/etc/static"), false, `CA bundle file ${ca} must not point to unmounted /etc/static`);
+});
+
+test("a TLS fetch inside the jail succeeds with the resolved CA bundle", async () => {
+  const r = await run("tls", "fetch", "no", "public");
+  assert.equal(r.exit, 0, r.stderr_tail);
+  assert.match(r.stdout_tail.trim(), /^"\/work\/nix\/store\/[a-z0-9]+-example\.com"$/);
+  assert.equal(r.limit_hit, "none");
 });
