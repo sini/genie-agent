@@ -513,8 +513,9 @@
               '';
           # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
           # through the lifecycle, a repeated 🔍 delivers once, and the package sent validates with
-          # the supervisor's thread id, routed by sender_tier alone (C6). Fake xmsg with X10's
-          # idempotency; identity guard; a fixed route except in the routing cells.
+          # the supervisor's thread id, routed by sender_tier alone (C6), after S5's guard screens
+          # every string of the package in a fresh envelope (oracle 18). Fake xmsg with X10's
+          # idempotency; identity guard and a fixed route except in the guard and routing cells.
           escalation =
             pkgs.runCommand "genie-agent-escalation"
               {
@@ -523,6 +524,7 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/escalation
+                    ./src/guard/verdict.ts
                     ./src/lifecycle
                     ./src/mirror
                     ./src/state
@@ -554,7 +556,12 @@
                   'a trusted thread routes to @trusted' \
                   'an odd or absent tier routes to @public' \
                   'the destinations are configuration' \
-                  "the default destinations are the redesign's one-@ addresses"; do
+                  "the default destinations are the redesign's one-@ addresses" \
+                  'an injection in eval_transcript is rejected: nothing is sent and the thread is not escalated' \
+                  "a rewrite sends the guard's cleaned_text, not the injection" \
+                  'a clean package is screened field by field and sent unchanged' \
+                  'the guard unavailable, throwing or malformed refuses the package' \
+                  'each check is a fresh session: no history, no earlier thread text, one field per envelope'; do
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out
