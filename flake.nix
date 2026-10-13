@@ -640,6 +640,40 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The gist action through the broker against a stub GitHub: one POST /gists with the redacted
+          # content and the Bearer token, acting with its html_url; a failure is not acted on, once,
+          # and the token reaches no reason and no output.
+          gist =
+            pkgs.runCommand "genie-agent-gist"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/broker
+                    ./src/guard
+                    ./src/dispatcher/xmsg.ts
+                    ./src/redactor
+                    ./src/tier1/schema.ts
+                    ./schemas/proposal.json
+                    ./tests/gist.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/gist.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'a gist proposal is exactly one POST /gists with the redacted content and the Bearer token' \
+                  'a 403 or 500 is not acted on, once, and the reason never carries the token' \
+                  'a 2xx without html_url is not acted on'; do
+                  grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The archive writer against a stub S3: one PUT per archive holding the transcript (pi's
           # session file), verdicts, escalation and actions, keyed by tier; a failed PUT rejects.
           archive =

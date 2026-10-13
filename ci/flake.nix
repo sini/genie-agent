@@ -85,6 +85,9 @@
               checks.tier = genie-agent.checks.${system}.tier;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
               checks.broker = genie-agent.checks.${system}.broker;
+              # A gist proposal is one POST /gists, redacted, with the Bearer token; a failure is not acted
+              # on, once, and never carries the token.
+              checks.gist = genie-agent.checks.${system}.gist;
               # One PUT per archive with all four sections, the transcript pi's session file, keyed by
               # tier; a failed PUT rejects.
               checks.archive = genie-agent.checks.${system}.archive;
