@@ -135,7 +135,10 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     ...nixArgv(launch, flakeRef, options.builders),
   ];
   const cg = evalCgroup();
-  const oomBefore = cg ? 0 : oomKills();
+  // The whole cgroup's count: the only one without an eval cgroup, and the fallback when systemd takes
+  // back the controllers of a cgroup it writes but never delegated, which removes the eval's memory.events.
+  const whole = cg ? cgroupParent : null;
+  const oomBefore = oomKills(whole);
   try {
     // In its own cgroup, bwrap is moved there before it runs, so every process of the eval is in it.
     const [command, args] = cg
@@ -158,12 +161,13 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
         const exit = code ?? 124;
         // bwrap reports a command killed by SIGKILL as 128 + 9.
         const sigkilled = signal === "SIGKILL" || code === 137;
-        const oomAfter = oomKills(cg);
+        const evalOoms = cg ? oomKills(cg) : -1;
+        const oomAfter = oomKills(whole);
         const limit_hit = limitHit({
           // Only this runner's own timeout sets `killed`; a kill from anywhere else leaves it false.
           deadline: child.killed,
           sigkilled,
-          oomKilled: oomBefore < 0 || oomAfter < 0 ? null : oomAfter > oomBefore,
+          oomKilled: evalOoms >= 0 ? evalOoms > 0 : oomBefore < 0 || oomAfter < 0 ? null : oomAfter > oomBefore,
           fetchRefused: exit !== 0 && fetchRefused(stderr),
         });
         resolve({ exit, stdout_tail: stdout, stderr_tail: stderr, limit_hit });
@@ -219,7 +223,8 @@ const oomKills = (cg?: string | null): number => {
 // A fresh cgroup for one eval, under this process's own when that is delegated to it (systemd
 // Delegate=yes); null otherwise: a session scope, a container's read-only cgroupfs. cgroup v2 admits
 // no process beside a child with controllers, so this process first moves to a leaf of its own, and
-// back if the memory controller still cannot be enabled. Decided once per process.
+// back if the memory controller still cannot be enabled. Decided once per process, by writing: a systemd
+// cgroup the user owns but was not delegated passes too, and systemd may disable its controllers mid-eval.
 let cgroupParent: string | null | undefined;
 const evalCgroup = (): string | null => {
   if (cgroupParent === undefined) {
