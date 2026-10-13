@@ -177,7 +177,7 @@ export async function replayResume(
   if (archived.transcript) {
     if (store) {
       const sessionFile = `${store.dir(thread)}/session/thread.jsonl`;
-      if (existsSync(sessionFile)) rmSync(sessionFile, { force: true });
+      if (existsSync(sessionFile)) rmSync(sessionFile, { recursive: false, force: true });
     }
     await seedSession(supervisor, thread, { transcript: archived.transcript }, guard);
   }

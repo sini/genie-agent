@@ -171,7 +171,7 @@ export class ThreadStateStore {
 
   clearTombstone(thread: string): void {
     const f = this.tombstonePath(thread);
-    if (existsSync(f)) rmSync(f, { force: true });
+    if (existsSync(f)) rmSync(f, { recursive: false, force: true });
   }
 }
 
