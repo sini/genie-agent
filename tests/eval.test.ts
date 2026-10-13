@@ -3,9 +3,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { effectiveTier, runEval, type Tier } from "../src/eval/run.ts";
+import { effectiveTier, runEval, type EvalResult, type Tier } from "../src/eval/run.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/eval/${name}`, import.meta.url));
 const run = (name: string, attr: string, trusted: "yes" | "no", sender_tier: Tier) =>
@@ -129,6 +130,38 @@ test("the jail environment is exactly the allowlist, carrying nothing of the thr
   } finally {
     delete process.env.GENIE_THREAD_SECRET;
   }
+});
+
+// Each limit triggered for real. The egress and oom cells run the runner in a child process under a
+// narrower host: a network namespace with no interface, and a memory-capped systemd scope.
+const child = (argv: string[], attr: string, localFlake?: string): EvalResult => {
+  const r = spawnSync(argv[0], [...argv.slice(1), "node", fixture("child.ts"), attr, ...(localFlake ? [localFlake] : [])], {
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+
+test("an eval past the runner's timeout is limit timeout", async () => {
+  const r = await runEval({ request: { repo: "local/fixture", rev: "limits", attr: "spin", trusted: "no" }, sender_tier: "public" }, {
+    localFlake: fixture("limits"),
+    timeoutMs: 3_000,
+  });
+  assert.equal(r.exit, 124);
+  assert.equal(r.limit_hit, "timeout");
+});
+
+test("a fetch the network refuses is limit egress", () => {
+  const r = child(["unshare", "-cn"], "lib");
+  assert.notEqual(r.exit, 0);
+  assert.equal(r.limit_hit, "egress", r.stderr_tail);
+});
+
+const scope = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"];
+test("an OOM kill under a memory cap is limit oom", { skip: spawnSync(scope[0], [...scope.slice(1), "true"]).status !== 0 && "no systemd user scope" }, () => {
+  const r = child(scope, "oom", fixture("limits"));
+  assert.equal(r.exit, 137);
+  assert.equal(r.limit_hit, "oom");
 });
 
 test("a non-github coordinate is refused before nix runs", async () => {

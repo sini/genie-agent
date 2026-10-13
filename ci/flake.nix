@@ -66,6 +66,8 @@
               checks.eval-lock = genie-agent.checks.${system}.eval-lock;
               # Only the effective tier opens IFD and builders; the untrusted argv is E1's.
               checks.eval-argv = genie-agent.checks.${system}.eval-argv;
+              # limit_hit: a deadline kill is timeout, an OOM kill oom, a refused fetch egress, else none.
+              checks.eval-limits = genie-agent.checks.${system}.eval-limits;
               # A thread's transcript, tier and eval cache survive a restart, on its own paths.
               checks.state = genie-agent.checks.${system}.state;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.

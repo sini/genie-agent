@@ -1,7 +1,7 @@
 // The local eval runner: one launch (an eval-request and its sender tier) evaluated by Nix inside bubblewrap, starting from an
 // empty throwaway store, and reported as an eval-result.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 
 export type Tier = "public" | "trusted";
 
@@ -128,6 +128,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     nix,
     ...nixArgv(launch, flakeRef, options.builders),
   ];
+  const oomBefore = oomKills();
   try {
     return await new Promise<EvalResult>((resolve, reject) => {
       const child = spawn(which("bwrap"), bwrap, {
@@ -141,10 +142,19 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
       child.stdout.on("data", (d) => (stdout = tail(stdout + d)));
       child.stderr.on("data", (d) => (stderr = tail(stderr + d)));
       child.on("error", reject);
-      // A killed child has no exit code; 124 is timeout(1)'s. E2 classifies limit_hit.
-      child.on("close", (code) =>
-        resolve({ exit: code ?? 124, stdout_tail: stdout, stderr_tail: stderr, limit_hit: "none" }),
-      );
+      // A killed child has no exit code; 124 is timeout(1)'s.
+      child.on("close", (code, signal) => {
+        const exit = code ?? 124;
+        // bwrap reports a command killed by SIGKILL as 128 + 9.
+        const sigkilled = signal === "SIGKILL" || code === 137;
+        const limit_hit = limitHit({
+          // Only this runner's own timeout sets `killed`; a kill from anywhere else leaves it false.
+          deadline: child.killed,
+          oomKilled: sigkilled && oomKills() > oomBefore,
+          fetchRefused: exit !== 0 && fetchRefused(stderr),
+        });
+        resolve({ exit, stdout_tail: stdout, stderr_tail: stderr, limit_hit });
+      });
     });
   } finally {
     // Store paths are read-only; make them writable so the store can be deleted.
@@ -152,3 +162,36 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+// What a backend observed of one finished eval, from which limit_hit is classified. The local runner
+// fills it below; the k8s Job (E3) fills it from the Job's deadline, the pod's OOMKilled reason and the
+// same Nix fetch error.
+export interface LimitObservation {
+  // The backend's own deadline killed the eval.
+  deadline: boolean;
+  // The kernel's OOM killer killed it.
+  oomKilled: boolean;
+  // A fetch Nix needed failed for want of the network.
+  fetchRefused: boolean;
+}
+
+export const limitHit = (o: LimitObservation): EvalResult["limit_hit"] =>
+  o.deadline ? "timeout" : o.oomKilled ? "oom" : o.fetchRefused ? "egress" : "none";
+
+// Nix reports a failed download as curl's message and code; 6, 7 and 28 are the network refusing it
+// (no name, no connection, no answer), where an HTTP error is the server's.
+export const fetchRefused = (stderr: string): boolean => /unable to download '[^']*': .*\((6|7|28)\)/.test(stderr);
+
+// The OOM kills so far in this process's cgroup (v2), which bwrap and Nix inherit. -1 when unreadable,
+// so no eval is classified oom without the counter.
+// ponytail: the count is the whole cgroup's, so a concurrent eval's OOM kill can be read as this one's
+// when this one was also SIGKILLed by someone other than its own timeout; a cgroup per eval removes it.
+const oomKills = (): number => {
+  try {
+    const cg = readFileSync("/proc/self/cgroup", "utf8").match(/^0::(.*)$/m)?.[1];
+    const events = readFileSync(`/sys/fs/cgroup${cg}/memory.events`, "utf8");
+    return Number(events.match(/^oom_kill (\d+)$/m)?.[1] ?? -1);
+  } catch {
+    return -1;
+  }
+};

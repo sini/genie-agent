@@ -7,7 +7,8 @@ declare module "node:child_process" {
     stdout: Readable;
     stderr: Readable;
     on(event: "error", listener: (err: Error) => void): ChildProcess;
-    on(event: "close", listener: (code: number | null) => void): ChildProcess;
+    on(event: "close", listener: (code: number | null, signal: string | null) => void): ChildProcess;
+    killed: boolean;
   }
   export function spawn(
     command: string,
@@ -18,6 +19,7 @@ declare module "node:child_process" {
 declare module "node:fs" {
   export function existsSync(path: string): boolean;
   export function mkdtempSync(prefix: string): string;
+  export function readFileSync(path: string, encoding: "utf8"): string;
   export function realpathSync(path: string): string;
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
 }

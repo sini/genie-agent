@@ -386,6 +386,31 @@
                 [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # limit_hit from typed observations (plan E2): a deadline kill is timeout, an OOM kill oom, a
+          # fetch the network refuses egress, a normal eval none. The real kills are process-plane cells.
+          eval-limits =
+            pkgs.runCommand "genie-agent-eval-limits"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/eval
+                    ./tests/eval-limits.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/eval-limits.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in 'a normal eval is none' 'a deadline kill is timeout' 'an OOM kill is oom' 'a refused fetch is egress'; do
+                  grep -qx "ok [0-9]* - limit: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process
           # and a fresh store over the same paths, and a thread id cannot leave its root.
           state =

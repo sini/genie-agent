@@ -30,6 +30,8 @@
             pkgs.gnused
             pkgs.nodejs
             pkgs.bubblewrap
+            # unshare: the egress cell's network namespace with no interface.
+            pkgs.util-linux
           ]
         }:$PATH
         echo "evaluator: $(nix-instantiate --version | sed -n 1p)"
@@ -50,7 +52,9 @@
           'impure file fails under pure-eval, trusted or not' \
           '<nixpkgs> fails under pure-eval' \
           'an indirect flake reference resolves through no registry' \
-          'the jail environment is exactly the allowlist, carrying nothing of the thread'; do
+          'the jail environment is exactly the allowlist, carrying nothing of the thread' \
+          "an eval past the runner's timeout is limit timeout" \
+          'a fetch the network refuses is limit egress'; do
           sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
         done
       '';
