@@ -61,6 +61,8 @@ export function nixArgv(launch: Launch, flakeRef: string): string[] {
     builders: "",
     substituters: "",
     "accept-flake-config": "false",
+    // No indirect flake reference resolves: the global registry is a moving URL.
+    "flake-registry": "",
   };
   const options = Object.entries(settings).flatMap(([k, v]) => ["--option", k, v]);
   const command =
@@ -75,6 +77,24 @@ export function nixArgv(launch: Launch, flakeRef: string): string[] {
     "--no-write-lock-file",
   ];
 }
+
+// The whole environment of bwrap and of the Nix it runs: built from nothing, never from process.env, so
+// nothing of the thread reaches the evaluation. Every path is the throwaway's or the jail's own.
+const JAIL_ENV: Record<string, string> = {
+  // Nix reads its user registry and config under HOME and caches fetches under XDG_CACHE_HOME.
+  HOME: "/work/home",
+  XDG_CACHE_HOME: "/work/cache",
+  // No search path: <nixpkgs> names nothing.
+  NIX_PATH: "",
+  // No nix.conf and no system registry: the conf dir is empty.
+  NIX_CONF_DIR: "/work/conf",
+  // The throwaway store.
+  NIX_STORE_DIR: "/work/nix/store",
+  NIX_STATE_DIR: "/work/nix/var",
+  NIX_LOG_DIR: "/work/nix/log",
+  // TLS for fetching the github coordinate.
+  NIX_SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+};
 
 export async function runEval(launch: Launch, options: RunOptions = {}): Promise<EvalResult> {
   const { request } = launch;
@@ -91,7 +111,6 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     "--unshare-all",
     "--share-net",
     "--die-with-parent",
-    "--clearenv",
     "--ro-bind", "/nix/store", "/nix/store",
     "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
     "--ro-bind-try", "/etc/ssl/certs", "/etc/ssl/certs",
@@ -101,20 +120,13 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     // The throwaway store sits at a fixed jail path, so it never nests inside a host build dir.
     "--bind", tmp, "/work",
     ...(options.localFlake ? ["--ro-bind", options.localFlake, "/src"] : []),
-    "--setenv", "HOME", "/work/home",
-    "--setenv", "XDG_CACHE_HOME", "/work/cache",
-    "--setenv", "NIX_PATH", "",
-    "--setenv", "NIX_CONF_DIR", "/work/conf",
-    "--setenv", "NIX_STORE_DIR", "/work/nix/store",
-    "--setenv", "NIX_STATE_DIR", "/work/nix/var",
-    "--setenv", "NIX_LOG_DIR", "/work/nix/log",
-    "--setenv", "NIX_SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt",
     nix,
     ...nixArgv(launch, flakeRef),
   ];
   try {
     return await new Promise<EvalResult>((resolve, reject) => {
       const child = spawn(which("bwrap"), bwrap, {
+        env: JAIL_ENV,
         stdio: ["ignore", "pipe", "pipe"],
         timeout: options.timeoutMs ?? 120_000,
         killSignal: "SIGKILL",

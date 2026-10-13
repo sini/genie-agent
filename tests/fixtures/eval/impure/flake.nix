@@ -9,5 +9,8 @@
       assert home != "";
       home;
     file = builtins.readFile "/dev/null";
+    nixpath = import <nixpkgs>;
+    # Read whether or not evaluation is pure; pure-eval alone makes it "".
+    secret = builtins.getEnv "GENIE_THREAD_SECRET";
   };
 }

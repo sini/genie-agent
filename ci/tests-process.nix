@@ -39,8 +39,18 @@
         rc=0
         ${lib.getExe' pkgs.util-linux "unshare"} -c node --test --test-reporter=tap tests/eval.test.ts > "$tap" || rc=$?
         cat "$tap"
-        # node counts a file with no tests as one passing test, so the run must show a named cell.
-        [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - request.trusted cannot raise a public tier$' "$tap" && grep -q '^# fail 0$' "$tap" || exit 1
+        # node counts a file with no tests as one passing test, so the run must show its named cells.
+        [ "$rc" -eq 0 ] && grep -q '^# fail 0$' "$tap" || exit 1
+        for cell in \
+          'request.trusted cannot raise a public tier' \
+          'a plain flake evaluates' \
+          'impure env fails under pure-eval, trusted or not' \
+          'impure file fails under pure-eval, trusted or not' \
+          '<nixpkgs> fails under pure-eval' \
+          'an indirect flake reference resolves through no registry' \
+          'the jail environment is exactly the allowlist, carrying nothing of the thread'; do
+          sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
+        done
       '';
     };
 }

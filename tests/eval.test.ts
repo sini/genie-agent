@@ -2,6 +2,8 @@
 // Run with `node --test tests/eval.test.ts`; needs nix and bwrap on PATH.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { effectiveTier, runEval, type Tier } from "../src/eval/run.ts";
 
@@ -58,6 +60,76 @@ for (const [attr, refusal] of [
     }
   });
 }
+
+test("<nixpkgs> fails under pure-eval", async () => {
+  const r = await run("impure", "nixpath", "no", "public");
+  assert.notEqual(r.exit, 0, r.stdout_tail);
+  assert.match(r.stderr_tail, /<nixpkgs>.*pure eval(uation)? mode|was not found in the Nix search path/);
+});
+
+test("an indirect flake reference resolves through no registry", async () => {
+  const r = await run("registry", "resolved", "no", "public");
+  assert.notEqual(r.exit, 0, r.stdout_tail);
+  assert.match(r.stderr_tail, /cannot find flake 'flake:nixpkgs' in the flake registries/);
+});
+
+// The jail's environment, written out here rather than read from the runner, so a widened runner
+// cannot widen what this cell expects.
+const ALLOWLIST = {
+  HOME: "/work/home",
+  XDG_CACHE_HOME: "/work/cache",
+  NIX_PATH: "",
+  NIX_CONF_DIR: "/work/conf",
+  NIX_STORE_DIR: "/work/nix/store",
+  NIX_STATE_DIR: "/work/nix/var",
+  NIX_LOG_DIR: "/work/nix/log",
+  NIX_SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+};
+
+// Whether pid is a descendant of this test process, by its parent chain.
+const descends = (pid: string): boolean => {
+  for (let p = pid; Number(p) > 1; ) {
+    p = readFileSync(`/proc/${p}/stat`, "utf8").split(") ")[1].split(" ")[1];
+    if (Number(p) === process.pid) return true;
+  }
+  return false;
+};
+
+test("the jail environment is exactly the allowlist, carrying nothing of the thread", async () => {
+  const marker = randomUUID();
+  process.env.GENIE_THREAD_SECRET = marker;
+  try {
+    // getEnv is "" under pure-eval whatever the environment holds, so read it from /proc as well:
+    // every descendant whose argv names the fixture attribute, nix and bwrap both, while it runs.
+    const pending = run("plain", "busy", "no", "public");
+    const envs = new Map<string, string[]>();
+    let done = false;
+    pending.finally(() => (done = true));
+    while (!done) {
+      for (const pid of readdirSync("/proc").filter((d) => /^\d+$/.test(d))) {
+        try {
+          if (!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("path:/src#busy") || !descends(pid)) continue;
+          const exe = readlinkSync(`/proc/${pid}/exe`);
+          envs.set(`${pid} ${exe}`, readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter(Boolean));
+        } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const r = await pending;
+    assert.equal(r.exit, 0, r.stderr_tail);
+    assert.ok([...envs.keys()].some((k) => k.endsWith("/bin/nix")), `nix never seen: ${[...envs.keys()]}`);
+    for (const [proc, env] of envs) {
+      // bwrap sets PWD to the jail's working directory.
+      const vars = Object.fromEntries(env.filter((e) => !e.startsWith("PWD=")).map((e) => e.split(/=(.*)/s, 2)));
+      assert.deepEqual(vars, ALLOWLIST, proc);
+    }
+    const s = await run("impure", "secret", "no", "public");
+    assert.equal(s.exit, 0, s.stderr_tail);
+    assert.ok(!s.stdout_tail.includes(marker), s.stdout_tail);
+  } finally {
+    delete process.env.GENIE_THREAD_SECRET;
+  }
+});
 
 test("a non-github coordinate is refused before nix runs", async () => {
   await assert.rejects(
