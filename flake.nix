@@ -503,7 +503,8 @@
               '';
           # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
           # through the lifecycle, a repeated 🔍 delivers once, and the package sent validates with
-          # the supervisor's thread id. Fake xmsg with X10's idempotency; identity guard; fixed route.
+          # the supervisor's thread id, routed by sender_tier alone (C6). Fake xmsg with X10's
+          # idempotency; identity guard; a fixed route except in the routing cells.
           escalation =
             pkgs.runCommand "genie-agent-escalation"
               {
@@ -538,7 +539,11 @@
                   'a confident draft does not send until 🔍' \
                   'a draft at exactly the threshold does not send until 🔍' \
                   '🔍 arriving twice sends exactly once' \
-                  "the package validates against schemas/escalation.json, thread_id the supervisor's"; do
+                  "the package validates against schemas/escalation.json, thread_id the supervisor's" \
+                  'a public thread whose package and draft claim trust routes to @public' \
+                  'a trusted thread routes to @trusted' \
+                  'an odd or absent tier routes to @public' \
+                  'the destinations are configuration'; do
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out
