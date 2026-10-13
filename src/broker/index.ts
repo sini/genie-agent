@@ -45,6 +45,32 @@ export interface Action {
 
 const schema = load("proposal");
 
+// What leaves the pod, in the outbound order (design §4 step 5, §5.6; owner-ruled arm A): `build`
+// redacts every string that will leave through the scrub it is handed, the question is redacted too,
+// and guard-out then judges exactly those bytes, so no credential enters its context and what it
+// passed is what is published. Resolves to the redacted value guard-out passed, or why it did not.
+export async function outbound<T>(
+  question: string,
+  build: (scrub: (s: string) => string) => T,
+  guard: NinferOut,
+  secretFileHashes?: string[],
+): Promise<{ redactions: string[] } & ({ value: T } | { reason: string })> {
+  const redactions: string[] = [];
+  const scrub = (s: string) => {
+    const r = redact(s, { secretFileHashes });
+    redactions.push(...r.hits.map((h) => h.kind));
+    return r.text;
+  };
+  const value = build(scrub);
+  try {
+    const { verdict } = await reviewOut({ question: scrub(question), answer: JSON.stringify(value, null, 2) }, guard);
+    if (verdict.verdict !== "pass") return { redactions, reason: `guard-out: ${verdict.reason}` };
+  } catch (e) {
+    return { redactions, reason: `guard-out unavailable: ${e instanceof Error ? e.message : e}` };
+  }
+  return { redactions, value };
+}
+
 export async function broker(thread: string, raw: string, c: Config): Promise<Action> {
   const redactions: string[] = [];
   const done = (acted: boolean, reason: string, url?: string): Action => ({ thread, acted, reason, redactions, ...(url ? { url } : {}) });
@@ -58,30 +84,23 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   const bad = errors(schema, value);
   if (bad.length) return done(false, `not a proposal: ${bad.join("; ")}`);
 
-  const scrub = (s: string) => {
-    const r = redact(s, { secretFileHashes: c.secretFileHashes });
-    redactions.push(...r.hits.map((h) => h.kind));
-    return r.text;
-  };
   const v = value as Proposal;
-  const p: Proposal = {
-    kind: v.kind,
-    ...(v.repo === undefined ? {} : { repo: scrub(v.repo) }),
-    ...(v.branch === undefined ? {} : { branch: scrub(v.branch) }),
-    files: Object.fromEntries(Object.entries(v.files).map(([k, f]) => [scrub(k), scrub(f)])),
-    title: scrub(v.title),
-    body: scrub(v.body),
-  };
-
-  try {
-    const { verdict } = await reviewOut(
-      { question: `genie-bot is about to publish this ${p.kind} on GitHub.`, answer: JSON.stringify(p, null, 2) },
-      c.guard,
-    );
-    if (verdict.verdict !== "pass") return done(false, `guard-out: ${verdict.reason}`);
-  } catch (e) {
-    return done(false, `guard-out unavailable: ${e instanceof Error ? e.message : e}`);
-  }
+  const out = await outbound(
+    `genie-bot is about to publish this ${v.kind} on GitHub.`,
+    (scrub): Proposal => ({
+      kind: v.kind,
+      ...(v.repo === undefined ? {} : { repo: scrub(v.repo) }),
+      ...(v.branch === undefined ? {} : { branch: scrub(v.branch) }),
+      files: Object.fromEntries(Object.entries(v.files).map(([k, f]) => [scrub(k), scrub(f)])),
+      title: scrub(v.title),
+      body: scrub(v.body),
+    }),
+    c.guard,
+    c.secretFileHashes,
+  );
+  redactions.push(...out.redactions);
+  if (!("value" in out)) return done(false, out.reason);
+  const p = out.value;
 
   let token: string;
   try {

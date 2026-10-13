@@ -733,8 +733,9 @@
               '';
           # The composition root (plan C11) end to end over fakes: an inbound line reaches pi with its tier
           # observed, a guard-in reject never does, eval runs at the thread's stored tier, a draft reaches
-          # Post and a forced one xmsg at C6's address, and a close archives once. Fake Intake, Post,
-          # GuardClient and XmsgSend; the fake pi as tier1Launch starts it; a stub S3; git daemon.
+          # Post only redacted then passed by guard-out (else a withheld notice) and a forced one xmsg at
+          # C6's address, and a close archives once. Fake Intake, Post, GuardClient and XmsgSend; the
+          # fake pi as tier1Launch starts it; a stub ninfer for guard-out; a stub S3; git daemon.
           root =
             pkgs.runCommand "genie-agent-root"
               {
@@ -765,6 +766,8 @@
                   'a guard-in reject never prompts, and the bot posts a refusal' \
                   "eval runs at the thread's tier from P2's state, never the request's" \
                   "a draft reply reaches Post, and a forced one reaches XmsgSend at C6's address" \
+                  "a reply is redacted then guard-out'd before Post" \
+                  'a guard-out block posts the withheld notice, never the draft' \
                   'a close archives exactly once'; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done

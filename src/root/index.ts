@@ -10,7 +10,7 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { archiver, type S3Config } from "../archive/index.ts";
 import { gist } from "../broker/gist.ts";
-import { broker } from "../broker/index.ts";
+import { broker, outbound } from "../broker/index.ts";
 import { escalationGuard } from "../escalation/guard.ts";
 import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts";
 import { router } from "../escalation/route.ts";
@@ -66,7 +66,9 @@ export interface Config {
   experts?: Record<Tier, string>;
 }
 
+// Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
+export const WITHHELD = "I drafted an answer, but my output check withheld it. Please rephrase your question.";
 
 const repo = new URL("../../", import.meta.url);
 const secret = (file: string) => readFileSync(file, "utf8").trim();
@@ -138,9 +140,18 @@ export function main(configFile: string, io: Io, run?: Runner) {
         throw new Error("recall is not available yet");
       },
       escalate: (pkg) => escalation.escalate(t, pkg as Package),
-      reply: async (draft) => {
-        await io.post.post(t, draft as Draft);
-        return { escalated: await escalation.reply(t, draft as Draft) };
+      // The draft leaves only as redacted and passed by guard-out. A withheld draft is neither posted
+      // nor escalated: guard-out judged it unfit to leave the pod, and xmsg is a way out too.
+      reply: async (raw) => {
+        const d = raw as Draft;
+        const out = await outbound(context(t).cleaned_question, (scrub): Draft => ({ ...d, answer: scrub(d.answer), gaps: d.gaps.map(scrub) }), guardOut);
+        if (!("value" in out)) {
+          console.error(`thread ${t}: reply withheld: ${out.reason}`);
+          await io.post.post(t, WITHHELD);
+          return { posted: false, reason: out.reason };
+        }
+        await io.post.post(t, out.value);
+        return { posted: true, escalated: await escalation.reply(t, out.value) };
       },
       propose: (p) => broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act: gist(c.broker.githubApi) }),
       clone: (url) => worktreeFor(c.mirror, url, t),

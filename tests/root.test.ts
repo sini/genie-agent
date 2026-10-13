@@ -6,6 +6,7 @@
 // git on PATH.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -14,7 +15,7 @@ import type { XmsgSend } from "../src/escalation/index.ts";
 import { EXPERTS } from "../src/escalation/route.ts";
 import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
-import { type Inbound, main, REFUSAL } from "../src/root/index.ts";
+import { type Inbound, main, REFUSAL, WITHHELD } from "../src/root/index.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-root-test-`);
@@ -31,6 +32,19 @@ const puts: string[] = [];
 const s3 = createServer((req, res) => (puts.push(`${req.method} ${req.url}`), req.resume(), res.writeHead(status).end()));
 await new Promise<void>((r) => s3.listen(0, "127.0.0.1", r));
 
+// guard-out on ninfer: blocks any review holding BLOCK, passes the rest, and keeps every request body.
+const reviews: string[] = [];
+const ninfer = createServer((req, res) => {
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", () => {
+    reviews.push(body);
+    const content = JSON.stringify({ verdict: body.includes("BLOCK") ? "block" : "pass", reason: body.includes("BLOCK") ? "leak" : "clean" });
+    res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }));
+  });
+});
+await new Promise<void>((r) => ninfer.listen(0, "127.0.0.1", r));
+
 // The fixture repository for clone, served by git daemon.
 const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
 const sh = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { env, encoding: "utf8" });
@@ -38,7 +52,7 @@ sh("init", "-q", "-b", "main", `${tmp}/served/fixture`);
 sh("-C", `${tmp}/served/fixture`, "commit", "-q", "--allow-empty", "-m", "c");
 const port = 20000 + (process.pid % 20000);
 const daemon = spawn("git", ["daemon", "--export-all", "--listen=127.0.0.1", `--port=${port}`, `--base-path=${tmp}/served`, `${tmp}/served`], { stdio: ["ignore", "ignore", "inherit"] });
-after(() => (daemon.kill(), s3.close()));
+after(() => (daemon.kill(), s3.close(), ninfer.close()));
 
 writeFileSync(
   `${tmp}/config.json`,
@@ -50,7 +64,7 @@ writeFileSync(
     model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${tmp}/model-key` },
     tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
     s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${tmp}/s3-key` },
-    broker: { tokenFile: `${tmp}/token-key`, guardOut: { base: "http://127.0.0.1:1/v1", model: "m" } },
+    broker: { tokenFile: `${tmp}/token-key`, guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" } },
   }),
 );
 
@@ -122,6 +136,28 @@ test("oracle: a draft reply reaches Post, and a forced one reaches XmsgSend at C
   const pkg = JSON.parse(sends[0].text);
   assert.equal(pkg.cleaned_question, "does my flake eval?");
   assert.equal(pkg.eval_transcript.length, 1);
+});
+
+test("oracle: a reply is redacted then guard-out'd before Post", async () => {
+  // A github-token shape, generated per run.
+  const token = `ghp_${randomBytes(27).toString("base64").replace(/[+/=]/g, "x")}`;
+  reviews.length = 0;
+  assert.equal((await host("p", "reply", { ...draft(false), answer: `use ${token}` })).ok.posted, true);
+  const [, posted] = posts.at(-1) as [string, { answer: string }];
+  assert.ok(!posted.answer.includes(token) && posted.answer.includes("[redacted:"), posted.answer);
+  assert.equal(reviews.length, 1);
+  assert.ok(!reviews[0].includes(token) && reviews[0].includes("[redacted:"));
+  // guard-out judged the bytes that were posted.
+  assert.ok(JSON.parse(reviews[0]).messages.at(-1).content.includes(JSON.stringify(JSON.stringify(posted, null, 2))));
+});
+
+test("oracle: a guard-out block posts the withheld notice, never the draft", async () => {
+  const before = sends.length;
+  assert.equal((await host("p", "reply", { ...draft(true), answer: "BLOCK me" })).ok.posted, false);
+  assert.deepEqual(posts.at(-1), ["p", WITHHELD]);
+  assert.ok(!JSON.stringify(posts).includes("BLOCK me"));
+  // Withheld drafts are not escalated either.
+  assert.equal(sends.length, before);
 });
 
 test("clone reaches the mirror, screen the guard as web, and recall refuses", async () => {
