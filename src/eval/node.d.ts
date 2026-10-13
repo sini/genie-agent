@@ -21,4 +21,7 @@ declare module "node:fs" {
   export function realpathSync(path: string): string;
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
 }
-declare var process: { env: Record<string, string | undefined> };
+interface Process {
+  env: Record<string, string | undefined>;
+}
+declare var process: Process;

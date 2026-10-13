@@ -2,10 +2,12 @@
 // `git daemon` on 127.0.0.1. Run with `node --test tests/mirror.test.ts`; needs git on PATH.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { dirname } from "node:path";
 import { after, before, test } from "node:test";
-import { git, MirrorRefused, mirrorKey, worktreeFor, type Runner } from "../src/mirror/index.ts";
+import { diskBytes, git, MirrorOverCap, MirrorRefused, mirrorKey, worktreeFor, type Runner } from "../src/mirror/index.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-mirror-test-`);
 const served = `${tmp}/served`;
@@ -22,8 +24,13 @@ function fixture(name: string): string {
   sh(["clone", "-q", `${served}/${name}.git`, `${tmp}/work-${name}`]);
   return commit(name);
 }
-function commit(name: string): string {
+function commit(name: string, blobBytes = 0): string {
   const work = `${tmp}/work-${name}`;
+  if (blobBytes) {
+    // Random, so the pack cannot compress it below its size.
+    writeFileSync(`${work}/blob`, randomBytes(blobBytes));
+    sh(["add", "blob"], work);
+  }
   sh(["commit", "-q", "--allow-empty", "-m", "c"], work);
   sh(["push", "-q", "origin", "HEAD:main"], work);
   return sh(["rev-parse", "HEAD"], work);
@@ -60,13 +67,13 @@ after(() => {
 });
 
 // A fresh mirror and worktree root, and a runner that records every git argv before running it.
-function setup() {
+function setup(fetchCap?: number) {
   const root = mkdtempSync(`${tmp}/case-`);
-  const cfg = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees` };
+  const cfg = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees`, fetchCap };
   const calls: string[][] = [];
-  const run: Runner = (args) => {
+  const run: Runner = (args, signal) => {
     calls.push(args);
-    return git(args);
+    return git(args, signal);
   };
   const clones = () => calls.filter((a) => a.includes("--mirror")).length;
   const mirrors = () => readdirSync(cfg.mirrorRoot).filter((d) => !d.startsWith("."));
@@ -149,4 +156,54 @@ test("a second call fetches, and the same worktree advances to the new head", as
   assert.equal(b.rev, second);
   assert.equal(head(b.path), second);
   assert.equal(clones(), 1);
+});
+
+const MiB = 1024 ** 2;
+const cap = 4 * MiB;
+const big = 64 * MiB;
+
+// A runner that records the bytes git left in the directory it wrote, measured once git has
+// exited and before the fetcher removes it.
+function landing(run: Runner) {
+  const landed: number[] = [];
+  const measured: Runner = (args, signal) => {
+    const wrote = args[0] === "clone" ? dirname(args.at(-1)!) : args[0] === "-C" && args[2] === "fetch" ? args[1] : "";
+    return run(args, signal).finally(() => wrote && landed.push(diskBytes(wrote)));
+  };
+  return { landed, measured };
+}
+
+// Killed while git ran: had it run to the end, the whole 64 MiB blob would have landed.
+function overCap(landed: number[]) {
+  return (e: unknown) => {
+    assert.ok(e instanceof MirrorOverCap, String(e));
+    const peak = landed.at(-1)!;
+    assert.ok(peak > cap && peak < big / 2, `${peak} bytes landed`);
+    console.log(`# overshoot ${peak - cap} bytes landed past a ${cap}-byte cap`);
+    return true;
+  };
+}
+
+test("oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored", async () => {
+  fixture("huge");
+  commit("huge", big);
+  const small = fixture("small");
+  const { cfg, run, mirrors } = setup(cap);
+  const { landed, measured } = landing(run);
+  await assert.rejects(worktreeFor(cfg, `${base}/huge`, "t", measured), overCap(landed));
+  assert.deepEqual(readdirSync(cfg.mirrorRoot), []);
+  const { rev } = await worktreeFor(cfg, `${base}/small`, "t", run);
+  assert.equal(rev, small);
+  assert.deepEqual(mirrors(), [mirrorKey(`${base}/small`)]);
+});
+
+test("a fetch that takes a mirror past its cap removes the mirror", async () => {
+  fixture("growing");
+  const { cfg, run, mirrors } = setup(cap);
+  const { landed, measured } = landing(run);
+  await worktreeFor(cfg, `${base}/growing`, "t", measured);
+  assert.equal(mirrors().length, 1);
+  commit("growing", big);
+  await assert.rejects(worktreeFor(cfg, `${base}/growing`, "t", measured), overCap(landed));
+  assert.deepEqual(readdirSync(cfg.mirrorRoot), []);
 });

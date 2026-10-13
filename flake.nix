@@ -259,8 +259,9 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
-          # The mirror fetcher's gating oracle: two threads on one repo share one clone, and a refused
-          # URL starts no git process. Fixtures are served by a git daemon on the sandbox's loopback.
+          # The mirror fetcher's gating oracle: two threads on one repo share one clone, a refused URL
+          # starts no git process, and a fetch past the per-repo cap is killed and leaves no mirror.
+          # Fixtures are served by a git daemon on the sandbox's loopback.
           mirror =
             pkgs.runCommand "genie-agent-mirror"
               {
@@ -281,7 +282,7 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes a mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's

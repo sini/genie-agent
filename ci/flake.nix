@@ -52,7 +52,8 @@
               # Any guard-in reply outside schemas/verdict.json parses to a reject, and genie-guard
               # relays a verdict or an error, never the model's text.
               checks.guard = genie-agent.checks.${system}.guard;
-              # Two threads on one repo share one mirror clone, and a refused URL runs no git.
+              # Two threads on one repo share one mirror clone, a refused URL runs no git, and a fetch
+              # past the per-repo cap is killed and leaves no mirror.
               checks.mirror = genie-agent.checks.${system}.mirror;
               # Tier 1 has exactly twelve tools, confined to its worktrees and public addresses, and
               # sees web content only through a guard verdict.
