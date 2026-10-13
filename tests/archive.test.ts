@@ -73,7 +73,16 @@ async function s3stub(status?: number) {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as { port: number };
-  return { endpoint: `http://127.0.0.1:${port}`, requests, storage, close: () => server.close() };
+  server.unref();
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    requests,
+    storage,
+    close: () => {
+      server.closeAllConnections?.();
+      server.close();
+    },
+  };
 }
 
 const tmp = mkdtempSync(`${tmpdir()}/genie-archive-test-`);
@@ -351,11 +360,15 @@ test("oracle: Lifecycle resumes an expired thread on message, routed through see
       replayResume: (th) => replayResume({ supervisor: s, thread: th, s3: config(s3.endpoint), guard, store: gcStore }),
     });
 
-    await lifecycle.message(id, "next turn after gc");
-    const msgs = await messages(s, id);
-    assert.match(msgs, /prior turn/);
-    assert.match(msgs, /next turn after gc/);
-    assert.ok(guardClient.seen.some((e) => e.content.text.includes("prior turn")));
+    try {
+      await lifecycle.message(id, "next turn after gc");
+      const msgs = await messages(s, id);
+      assert.match(msgs, /prior turn/);
+      assert.match(msgs, /next turn after gc/);
+      assert.ok(guardClient.seen.some((e) => e.content.text.includes("prior turn")));
+    } finally {
+      lifecycle.stop();
+    }
   } finally {
     await s.shutdown();
     s3.close();

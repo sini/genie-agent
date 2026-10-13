@@ -8,7 +8,7 @@
 //
 // xmsg and Matrix enter only through the seams below; GA builds their real adapters.
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { archiver, type S3Config } from "../archive/index.ts";
+import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { gist } from "../broker/gist.ts";
 import { broker, byKind, outbound } from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
@@ -24,6 +24,7 @@ import { type MirrorConfig, worktreeFor } from "../mirror/index.ts";
 import { ThreadStateStore, type Tier } from "../state/index.ts";
 import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
 import { Supervisor } from "../supervisor/index.ts";
+import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
 import { tier1Launch } from "../tier1/launch.ts";
@@ -176,7 +177,14 @@ export function main(configFile: string, io: Io, run?: Runner) {
       await archive(thread).catch((e) => console.error(`archive ${thread}: ${e}`));
     }
   }
-  const lifecycle: Lifecycle = new ArchivingLifecycle({ supervisor, store, mirror: c.mirror, deeper: (t) => escalation.deeper(t) });
+  const guard = seedGuard(io.guard);
+  const lifecycle: Lifecycle = new ArchivingLifecycle({
+    supervisor,
+    store,
+    mirror: c.mirror,
+    deeper: (t) => escalation.deeper(t),
+    replayResume: (t) => replayResume({ supervisor, thread: t, s3: c.s3, guard, store }),
+  });
   const gc = new Gc({ store, mirror: c.mirror, archive });
 
   // C7 reads the raw envelope before guard-in; a reject is answered with a refusal and never

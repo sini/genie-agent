@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, test } from "node:test";
@@ -30,7 +30,33 @@ for (const f of ["model", "s3", "token"]) writeFileSync(`${tmp}/${f}-key`, "k\n"
 // A stub S3 that answers every request with `status` and records it.
 let status = 200;
 const puts: string[] = [];
-const s3 = createServer((req, res) => (puts.push(`${req.method} ${req.url}`), req.resume(), res.writeHead(status).end()));
+const s3Storage = new Map<string, string>();
+const s3 = createServer((req, res) => {
+  puts.push(`${req.method} ${req.url}`);
+  if (req.method === "PUT") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      s3Storage.set(req.url!, body);
+      res.writeHead(status).end();
+    });
+  } else if (req.method === "GET") {
+    req.resume();
+    if (status !== 200) {
+      res.writeHead(status).end();
+      return;
+    }
+    const body = s3Storage.get(req.url!);
+    if (body !== undefined) {
+      res.writeHead(200, { "content-type": "application/json" }).end(body);
+    } else {
+      res.writeHead(404).end();
+    }
+  } else {
+    req.resume();
+    res.writeHead(status).end();
+  }
+});
 await new Promise<void>((r) => s3.listen(0, "127.0.0.1", r));
 
 // guard-out on ninfer: blocks any review holding BLOCK, passes the rest, and keeps every request body.
@@ -280,6 +306,33 @@ test("oracle: an idle close at 24 h archives once through the timers", async () 
   assert.equal(root.store.read(thread)?.status, "closed");
   assert.deepEqual(puts, [`PUT /genie-transcripts/tier1/trusted/${thread}.json`]);
 });
+
+test("oracle: an expired thread collected by GC resumes on a new message with its transcript replayed through the root", async () => {
+  status = 200;
+  const thread = "exp_resume";
+  await inbound({ thread, envelope: envelope(ALICE, "turn 1 before gc") });
+  assert.ok(prompts().includes("turn 1 before gc"));
+
+  await root.supervisor.teardown(thread);
+  const oldActive = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
+  root.store.write({ ...root.store.read(thread)!, last_active: oldActive });
+  await root.gc.sweep();
+  assert.equal(existsSync(`${root.store.stateRoot}/${thread}`), false);
+
+  await inbound({ thread, envelope: envelope(ALICE, "turn 2 after gc") });
+
+  const pid = root.supervisor.pid(thread);
+  assert.ok(pid !== undefined, "pi was launched for resumed thread");
+  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.type === "prompt")
+    .map((r) => r.message);
+  assert.deepEqual(threadPrompts, ["turn 1 before gc", "turn 2 after gc"]);
+  assert.equal(root.store.read(thread)?.status, "active");
+});
+
 
 test("oracle: main launches real pi against a stub model", async () => {
   const model = await stubModel();

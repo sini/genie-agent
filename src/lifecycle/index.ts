@@ -71,7 +71,8 @@ export class Lifecycle {
   async message(thread: string, text: string): Promise<void> {
     const { store, supervisor } = this.o;
     let st = store.read(thread);
-    if (!st && this.o.replayResume && supervisor.pid(thread) === undefined) {
+    const sessionFile = `${store.dir(thread)}/session/thread.jsonl`;
+    if ((!st || !existsSync(sessionFile)) && this.o.replayResume && supervisor.pid(thread) === undefined) {
       await this.o.replayResume(thread);
       st = store.read(thread);
     }
