@@ -823,6 +823,8 @@
                   "a proposal through the root's Host reaches the right act" \
                   "an idle close at 24 h archives once through the timers" \
                   "an expired thread collected by GC resumes on a new message with its transcript replayed through the root" \
+                  "a new thread with S3 down still starts" \
+                  "a tombstoned thread with S3 down is refused, not resumed fresh" \
                   "main launches real pi against a stub model"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done

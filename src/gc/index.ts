@@ -51,12 +51,13 @@ export class Gc {
   // Collects every expired thread; one that fails is logged and left for the next sweep.
   async sweep(): Promise<void> {
     const { stateRoot } = this.o.store;
-    for (const thread of existsSync(stateRoot) ? readdirSync(stateRoot) : []) {
+    for (const thread of existsSync(stateRoot) ? readdirSync(stateRoot).filter((t) => !t.startsWith(".")) : []) {
       await this.collect(thread).catch((e) => console.error(`gc ${thread}: ${e}`));
     }
   }
 
   private isExpired(thread: string): boolean {
+    if (thread.startsWith(".")) return false;
     // A directory with no state.json carries no age and is left alone.
     if (!existsSync(`${this.o.store.stateRoot}/${thread}/state.json`)) return false;
     return expired(this.o.store.read(thread)!.last_active, this.clock, this.o.ttlMs);
@@ -64,6 +65,8 @@ export class Gc {
 
   private async collect(thread: string): Promise<void> {
     if (!this.isExpired(thread)) return;
+    const st = this.o.store.read(thread);
+    const tier = st?.sender_tier ?? "public";
     await this.o.archive(thread);
     await removeWorktrees(this.o.mirror, thread);
     // A message that arrived during the awaits made the thread live again: keep its state.
@@ -75,5 +78,6 @@ export class Gc {
     if (existsSync(store)) execFileSync("chmod", ["-R", "u+w", store]);
     rmSync(store, { recursive: true, force: true });
     rmSync(`${this.o.store.stateRoot}/${thread}`, { recursive: true, force: true });
+    this.o.store.setTombstone(thread, { archived: true, tier });
   }
 }

@@ -5,9 +5,14 @@
 // thread's conversation (design row 21) and there is no second transcript format. The thread's Nix
 // store, mounted only into its eval Jobs, is a separate root, so state is never inside it.
 // Collection is P3's, src/gc, and the archive P4's; parking and closing are C4's, src/lifecycle.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 
 export type Tier = "public" | "trusted";
+
+export interface Tombstone {
+  archived: true;
+  tier: Tier;
+}
 
 // One record of schemas/thread-state.json.
 export interface ThreadState {
@@ -146,6 +151,31 @@ export class ThreadStateStore {
     const cache = readJson<Record<string, unknown>>(`${d}/cache.json`) ?? {};
     cache[cacheKey(key)] = value;
     writeAtomic(d, "cache.json", JSON.stringify(cache));
+  }
+
+  // A local tombstone left by GC collection (plan P5, design §6): marks an archived thread so only
+  // tombstoned threads replay from S3. Supports tombstone under .tombstones, storeRoot, or stateRoot.
+  tombstone(thread: string): Tombstone | undefined {
+    return (
+      readJson<Tombstone>(`${this.stateRoot}/.tombstones/${checkThread(thread)}.json`) ??
+      readJson<Tombstone>(`${this.storeRoot}/${checkThread(thread)}/tombstone.json`) ??
+      readJson<Tombstone>(`${this.stateRoot}/${checkThread(thread)}/tombstone.json`)
+    );
+  }
+
+  setTombstone(thread: string, tombstone: Tombstone): void {
+    const d = `${this.stateRoot}/.tombstones`;
+    mkdirSync(d, { recursive: true, mode: 0o700 });
+    writeAtomic(d, `${checkThread(thread)}.json`, JSON.stringify(tombstone));
+  }
+
+  clearTombstone(thread: string): void {
+    const f0 = `${this.stateRoot}/.tombstones/${checkThread(thread)}.json`;
+    if (existsSync(f0)) rmSync(f0, { force: true });
+    const f1 = `${this.storeRoot}/${checkThread(thread)}/tombstone.json`;
+    if (existsSync(f1)) rmSync(f1, { force: true });
+    const f2 = `${this.stateRoot}/${checkThread(thread)}/tombstone.json`;
+    if (existsSync(f2)) rmSync(f2, { force: true });
   }
 }
 

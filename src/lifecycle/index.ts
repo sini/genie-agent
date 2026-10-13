@@ -67,15 +67,17 @@ export class Lifecycle {
   }
 
   // A user message in the thread. A parked thread is resumed: pi starts on its session and is sent
-  // the messages it never answered before this one. An expired thread with an archive is replayed first.
+  // the messages it never answered before this one. An expired thread with a tombstone is replayed from the archive first.
   async message(thread: string, text: string): Promise<void> {
     const { store, supervisor } = this.o;
-    let st = store.read(thread);
-    const sessionFile = `${store.dir(thread)}/session/thread.jsonl`;
-    if ((!st || !existsSync(sessionFile)) && this.o.replayResume && supervisor.pid(thread) === undefined) {
-      await this.o.replayResume(thread);
-      st = store.read(thread);
+    const tombstone = store.tombstone?.(thread);
+    if (tombstone && supervisor.pid(thread) === undefined) {
+      if (!this.o.replayResume) throw new Error(`thread ${thread}: tombstoned but replayResume is not configured`);
+      const res = await this.o.replayResume(thread);
+      if (!res) throw new Error(`thread ${thread}: tombstoned but archive not found`);
+      store.clearTombstone?.(thread);
     }
+    let st = store.read(thread);
     if (st?.status === "closed") throw new Error(`thread ${thread}: closed`);
     const now = new Date(this.clock.now()).toISOString();
     // A new thread enters at the public tier; C7 owns raising it.

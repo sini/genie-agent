@@ -183,7 +183,7 @@ export function main(configFile: string, io: Io, run?: Runner) {
     store,
     mirror: c.mirror,
     deeper: (t) => escalation.deeper(t),
-    replayResume: (t) => replayResume({ supervisor, thread: t, s3: c.s3, guard, store }),
+    replayResume: (t) => replayResume({ supervisor, thread: t, s3: c.s3, guard, store, tier: store.tombstone(t)?.tier }),
   });
   const gc = new Gc({ store, mirror: c.mirror, archive });
 

@@ -148,26 +148,28 @@ export interface ReplayResumeOptions {
   supervisor: Supervisor;
   thread: string;
   s3: S3Config;
-  guard?: SeedGuard;
+  guard: SeedGuard;
   store?: ThreadStateStore;
   tier?: Tier;
 }
 
 // Replay-resume of an expired thread from the archive (plan P5, design §6).
 // Restores the transcript by reading the archive and routing through S6's seedSession.
-// If guard is supplied, every replayed turn passes through the seed guard before the session sees it.
+// Every replayed turn passes through the seed guard before the session sees it (S6).
 // If store is supplied, restores the thread state directory.
 export async function replayResume(
   supervisorOrOptions: Supervisor | ReplayResumeOptions,
   threadOrUndefined?: string,
-  options?: { s3: S3Config; guard?: SeedGuard; store?: ThreadStateStore; tier?: Tier },
+  options?: { s3: S3Config; guard: SeedGuard; store?: ThreadStateStore; tier?: Tier },
 ): Promise<ArchivedThread | null> {
   const supervisor = "supervisor" in supervisorOrOptions ? supervisorOrOptions.supervisor : supervisorOrOptions;
   const thread = "supervisor" in supervisorOrOptions ? supervisorOrOptions.thread : threadOrUndefined!;
   const s3 = "supervisor" in supervisorOrOptions ? supervisorOrOptions.s3 : options!.s3;
-  const guard = "supervisor" in supervisorOrOptions ? supervisorOrOptions.guard : options?.guard;
+  const guard = "supervisor" in supervisorOrOptions ? supervisorOrOptions.guard : options!.guard;
   const store = "supervisor" in supervisorOrOptions ? supervisorOrOptions.store : options?.store;
   const tier = "supervisor" in supervisorOrOptions ? supervisorOrOptions.tier : options?.tier;
+
+  if (!guard) throw new Error("replayResume: guard is required");
 
   const archived = await readArchive(s3, thread, tier);
   if (!archived) return null;

@@ -331,6 +331,44 @@ test("oracle: an expired thread collected by GC resumes on a new message with it
     .map((r) => r.message);
   assert.deepEqual(threadPrompts, ["turn 1 before gc", "turn 2 after gc"]);
   assert.equal(root.store.read(thread)?.status, "active");
+  assert.equal(root.store.tombstone(thread), undefined);
+});
+
+test("oracle: a new thread with S3 down still starts", async () => {
+  status = 500;
+  const thread = "new_s3_down";
+  await inbound({ thread, envelope: envelope(ALICE, "hello while s3 is down") });
+  assert.ok(prompts().includes("hello while s3 is down"));
+  assert.equal(root.store.read(thread)?.status, "active");
+  assert.equal(root.store.tombstone(thread), undefined);
+  status = 200;
+});
+
+test("oracle: a tombstoned thread with S3 down is refused, not resumed fresh", async () => {
+  status = 200;
+  const thread = "exp_s3_down";
+  await inbound({ thread, envelope: envelope(ALICE, "turn before gc for s3 down") });
+  assert.ok(prompts().includes("turn before gc for s3 down"));
+
+  await root.supervisor.teardown(thread);
+  const oldActive = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
+  root.store.write({ ...root.store.read(thread)!, last_active: oldActive });
+  await root.gc.sweep();
+  assert.equal(existsSync(`${root.store.stateRoot}/${thread}`), false);
+  assert.ok(root.store.tombstone(thread) !== undefined, "tombstone was written by GC");
+
+  // Garage S3 goes down
+  status = 500;
+
+  // New message to the tombstoned thread while S3 is down
+  await inbound({ thread, envelope: envelope(ALICE, "turn after gc while s3 is down") });
+
+  // Pi process was NOT launched fresh, and prompt was refused / not accepted
+  assert.equal(root.supervisor.pid(thread), undefined);
+  assert.equal(prompts().includes("turn after gc while s3 is down"), false);
+  // Tombstone remains intact so history is not lost
+  assert.ok(root.store.tombstone(thread) !== undefined, "tombstone is preserved for retry");
+  status = 200;
 });
 
 
