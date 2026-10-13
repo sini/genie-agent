@@ -85,9 +85,10 @@ after(() => root.stop());
 
 const ALICE = "matrix alice at example.org"; // trusted
 const BOB = "matrix bob at example.org"; // public
+const idOf = (s: string) => (s === ALICE ? "@alice:example.org" : "@bob:example.org");
 const tierOf = (s: string) => (s === ALICE ? "trusted" : "public");
 const envelope = (sender: string, text: string) =>
-  `[matrix] room=#support:example.org thread=$root user=${sender} (public)\n\n<request>\n${JSON.stringify({ sender, tier: tierOf(sender), text })}\n</request>`;
+  `[matrix] room=#support:example.org thread=$root user=${sender} (public)\n\n<request>\n${JSON.stringify({ sender, sender_id: idOf(sender), tier: tierOf(sender), text })}\n</request>`;
 const inbound = async (...items: Inbound[]) => (batches.push(items), root.run());
 // Every prompt any fake pi received.
 const prompts = () =>
