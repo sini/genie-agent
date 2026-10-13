@@ -26,6 +26,14 @@ export interface EscalationRecord {
   body?: string;
 }
 
+// The thread tier's state beside sender_tier (C7, src/tier): the senders whose text the thread has
+// carried, those present at its last `!trust`, and the tier of the thread's first sender.
+export interface TrustState {
+  initiator: Tier;
+  participants: string[];
+  sanctioned: string[];
+}
+
 export interface CacheKey {
   repo: string;
   rev: string;
@@ -117,6 +125,14 @@ export class ThreadStateStore {
 
   setEscalation(thread: string, rec: EscalationRecord): void {
     writeAtomic(this.dir(thread), "escalation.json", JSON.stringify(rec));
+  }
+
+  trust(thread: string): TrustState | undefined {
+    return readJson<TrustState>(`${this.dir(thread)}/trust.json`);
+  }
+
+  setTrust(thread: string, trust: TrustState): void {
+    writeAtomic(this.dir(thread), "trust.json", JSON.stringify(trust));
   }
 
   cacheGet(thread: string, key: CacheKey): unknown {

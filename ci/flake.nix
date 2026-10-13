@@ -81,6 +81,8 @@
               checks.escalation = genie-agent.checks.${system}.escalation;
               # Kept at 95 h idle, archived then gone at 97 h, mirrors unpinned; a failed archive keeps all.
               checks.gc = genie-agent.checks.${system}.gc;
+              # The thread's tier falls on a public line and rises only on a trusted `!trust`.
+              checks.tier = genie-agent.checks.${system}.tier;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
               checks.broker = genie-agent.checks.${system}.broker;
               # One PUT per archive with all four sections, the transcript pi's session file, keyed by

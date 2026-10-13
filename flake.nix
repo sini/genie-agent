@@ -543,6 +543,42 @@
                 done
                 touch $out
               '';
+          # The thread's tier from the envelope's per-line tags: falls on a public line, rises only on a
+          # trusted `!trust`, kept by the participants it sanctioned, blind to a trusted bootstrap's background.
+          tier =
+            pkgs.runCommand "genie-agent-tier"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/lifecycle
+                    ./src/mirror
+                    ./src/state
+                    ./src/supervisor
+                    ./src/tier
+                    ./tests/tier.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/tier.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'a public originator ⇒ public from its first message' \
+                  'a trusted thread with a public reply ⇒ public, and stays public after further trusted lines' \
+                  'a trusted mention or 🔍 on a public thread ⇒ still public' \
+                  '!trust from a trusted sender ⇒ trusted; a participant present at it keeps it, a new public participant lowers it' \
+                  '!trust from a public sender ⇒ unchanged' \
+                  'background lines on a trusted-initiated bootstrap do not lower it' \
+                  'a public line whose text claims trusted ⇒ public'; do
+                  sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # A thread's collection over a fake clock: kept at 95 h idle, archived then gone at 97 h
           # (state, read-only store, worktrees) whatever its status, nothing removed on a failed archive.
           gc =
