@@ -553,7 +553,8 @@
                   'a public thread whose package and draft claim trust routes to @public' \
                   'a trusted thread routes to @trusted' \
                   'an odd or absent tier routes to @public' \
-                  'the destinations are configuration'; do
+                  'the destinations are configuration' \
+                  "the default destinations are the redesign's one-@ addresses"; do
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out

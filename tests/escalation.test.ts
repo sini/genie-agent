@@ -157,3 +157,8 @@ test("oracle: the destinations are configuration", async () => {
   await esc.escalate(thread, claimsTrust);
   assert.equal(xmsg.delivered[0].to, "expert-t");
 });
+
+test("oracle: the default destinations are the redesign's one-@ addresses", () => {
+  assert.deepEqual(EXPERTS, { trusted: "genie-expert@genie-trusted.bitstream", public: "genie-expert@genie-public.bitstream" });
+  for (const a of Object.values(EXPERTS)) assert.equal(a.split("@").length, 2, a);
+});

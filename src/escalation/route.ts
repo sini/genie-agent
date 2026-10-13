@@ -4,12 +4,13 @@
 // or no state at all, routes to `@public`: an unreadable tier fails toward the lower one.
 import type { ThreadState, Tier } from "../state/index.ts";
 
-// Each tier's expert is `svc:genie-expert` on that tier's own xmsg node (§5.8, row 19), reached
-// through the pod's peers file. The xmsg addressing redesign rewrites these names (GA), so they are
-// configuration; defaulted, reversible.
+// Each tier's expert is the service `genie-expert` on that tier's own xmsg node (§5.8, row 19),
+// written in the addressing redesign's form: no kind prefix (A11), the node named `<user>.<host>`
+// (A9), and at most one `@` (B4). The live xmsg client speaks the old `svc:` form until GA, so these
+// are configuration; defaulted, reversible.
 export const EXPERTS: Record<Tier, string> = {
-  trusted: "svc:genie-expert@genie-trusted",
-  public: "svc:genie-expert@genie-public",
+  trusted: "genie-expert@genie-trusted.bitstream",
+  public: "genie-expert@genie-public.bitstream",
 };
 
 export function router(to: Record<Tier, string> = EXPERTS): (state: ThreadState | undefined) => string {
