@@ -731,6 +731,45 @@
                 done
                 touch $out
               '';
+          # The composition root (plan C11) end to end over fakes: an inbound line reaches pi with its tier
+          # observed, a guard-in reject never does, eval runs at the thread's stored tier, a draft reaches
+          # Post and a forced one xmsg at C6's address, and a close archives once. Fake Intake, Post,
+          # GuardClient and XmsgSend; the fake pi as tier1Launch starts it; a stub S3; git daemon.
+          root =
+            pkgs.runCommand "genie-agent-root"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.git
+                ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src
+                    ./schemas
+                    ./skills
+                    ./prompts
+                    ./tests/root.test.ts
+                    ./tests/fixtures/supervisor
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/root.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  "one inbound line reaches pi's prompt with its tier observed" \
+                  'a guard-in reject never prompts, and the bot posts a refusal' \
+                  "eval runs at the thread's tier from P2's state, never the request's" \
+                  "a draft reply reaches Post, and a forced one reaches XmsgSend at C6's address" \
+                  'a close archives exactly once'; do
+                  grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''

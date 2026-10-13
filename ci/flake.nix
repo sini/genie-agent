@@ -92,6 +92,10 @@
               # One PUT per archive with all four sections, the transcript pi's session file, keyed by
               # tier; a failed PUT rejects.
               checks.archive = genie-agent.checks.${system}.archive;
+              # The composition root: an inbound line reaches pi with its tier observed and a guard-in
+              # reject never does; eval at the stored tier; a draft to Post, a forced one to xmsg at
+              # C6's address; a close archives once.
+              checks.root = genie-agent.checks.${system}.root;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is
