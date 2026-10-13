@@ -42,6 +42,7 @@ export interface LifecycleOptions {
   clock?: Clock;
   parkMs?: number;
   closeMs?: number;
+  replayResume?: (thread: string) => Promise<unknown>;
 }
 
 export class Lifecycle {
@@ -66,10 +67,14 @@ export class Lifecycle {
   }
 
   // A user message in the thread. A parked thread is resumed: pi starts on its session and is sent
-  // the messages it never answered before this one.
+  // the messages it never answered before this one. An expired thread with an archive is replayed first.
   async message(thread: string, text: string): Promise<void> {
     const { store, supervisor } = this.o;
-    const st = store.read(thread);
+    let st = store.read(thread);
+    if (!st && this.o.replayResume && supervisor.pid(thread) === undefined) {
+      await this.o.replayResume(thread);
+      st = store.read(thread);
+    }
     if (st?.status === "closed") throw new Error(`thread ${thread}: closed`);
     const now = new Date(this.clock.now()).toISOString();
     // A new thread enters at the public tier; C7 owns raising it.

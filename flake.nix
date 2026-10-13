@@ -742,8 +742,9 @@
                 done
                 touch $out
               '';
-          # The archive writer against a stub S3: one PUT per archive holding the transcript (pi's
-          # session file), verdicts, escalation and actions, keyed by tier; a failed PUT rejects.
+          # The archive writer and replay-resume (plans P4, P5): one PUT per archive holding the
+          # transcript, verdicts, escalation and actions, keyed by tier; an expired thread resumes
+          # with its transcript from the archive, every replayed turn screened by the seed guard.
           archive =
             pkgs.runCommand "genie-agent-archive"
               {
@@ -753,10 +754,13 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/archive
                     ./src/gc
+                    ./src/guard/verdict.ts
                     ./src/lifecycle
                     ./src/mirror
                     ./src/state
+                    ./src/supervisor
                     ./tests/archive.test.ts
+                    ./tests/fixtures/supervisor
                   ];
                 };
               }
@@ -770,7 +774,8 @@
                   "close ⇒ exactly one PUT holding all four sections, absent ones explicit, the transcript pi's session file" \
                   'a failed PUT rejects, so collection deletes nothing' \
                   "the key carries the thread's tier, and the two tiers never share a prefix" \
-                  "P3's collection of an expired thread, with this archiver, is exactly one PUT and then the thread is gone"; do
+                  "P3's collection of an expired thread, with this archiver, is exactly one PUT and then the thread is gone" \
+                  "a GC'd thread resumes with the same transcript, and every replayed turn passes the seed guard first"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out
