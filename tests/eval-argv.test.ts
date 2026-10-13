@@ -10,7 +10,8 @@ const BUILDERS = "ssh-ng://nix-remote-build@uplink x86_64-linux";
 const argv = (trusted: "yes" | "no", sender_tier: Tier, attr = "x") =>
   nixArgv({ request: { repo: "a/b", rev: "main", attr, trusted }, sender_tier }, "github:a/b/main", BUILDERS);
 
-// E1's argv as E9 left it, written out rather than derived from the runner, so a drifting runner
+// E1's argv as E9 left it plus E2.1's connect-timeout, written out rather than derived from the runner,
+// so a drifting runner
 // cannot move what this cell expects.
 const options = (ifd: string, builders: string) => [
   "--extra-experimental-features", "nix-command flakes",
@@ -20,6 +21,7 @@ const options = (ifd: string, builders: string) => [
   "--option", "substituters", "",
   "--option", "accept-flake-config", "false",
   "--option", "flake-registry", "",
+  "--option", "connect-timeout", "5",
 ];
 const UNTRUSTED = [...options("false", ""), "eval", "github:a/b/main#x", "--no-write-lock-file"];
 const UNTRUSTED_CHECKS = [...options("false", ""), "flake", "check", "--no-build", "github:a/b/main", "--no-write-lock-file"];

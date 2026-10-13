@@ -164,6 +164,39 @@ test("an OOM kill under a memory cap is limit oom", { skip: spawnSync(scope[0], 
   assert.equal(r.limit_hit, "oom");
 });
 
+// A network that drops packets rather than refusing them, as a CNP does: a default route over a veth
+// to an address nobody answers. Not lo alone: with no other interface up Nix decides it is offline:
+// one attempt, and a 1 s connect timeout when none is set. The namespace is root-mapped to make the link, then mapped
+// back, since bwrap refuses capabilities.
+const veth = "ip link add v0 type veth peer name v1 && ip addr add 10.0.0.1/24 dev v0 && ip link set v1 up && ip link set v0 up && ip route add default via 10.0.0.2";
+const drops = ["unshare", "-rn", "sh", "-c", `${veth} && g=$1 && shift && exec unshare -U --map-user="$0" --map-group="$g" "$@"`, String(process.getuid()), String(process.getgid())];
+test("a fetch the network drops is limit egress before the runner's deadline", () => {
+  const r = child(drops, "drop", fixture("limits"));
+  assert.equal(r.limit_hit, "egress", r.stderr_tail);
+  assert.match(r.stderr_tail, /Connection timed out after 5\d{3} milliseconds/);
+});
+
+const killed = (argv: string[], ...args: string[]): EvalResult => {
+  const r = spawnSync(argv[0], [...argv.slice(1), "node", fixture("kill.ts"), fixture("limits"), ...args], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+
+test("an eval SIGKILLed from outside with no OOM kill is limit unknown", () => {
+  const r = killed(["env"]);
+  assert.equal(r.exit, 137);
+  assert.equal(r.limit_hit, "unknown");
+});
+
+// The runner's cgroup delegated to it, as under a systemd service with Delegate=yes: each eval gets a
+// cgroup of its own, so the OOM kill of the eval beside it is not counted as this one's.
+const delegated = ["systemd-run", "--user", "--scope", "-q", "-p", "Delegate=yes", "-p", "MemoryMax=1G", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"];
+test("a concurrent eval's OOM kill is not this one's, in a delegated cgroup", { skip: spawnSync(delegated[0], [...delegated.slice(1), "true"]).status !== 0 && "no systemd user scope" }, () => {
+  const r = killed(delegated, "oom");
+  assert.equal(r.exit, 137);
+  assert.equal(r.limit_hit, "unknown");
+});
+
 test("a non-github coordinate is refused before nix runs", async () => {
   await assert.rejects(
     runEval({ request: { repo: "a/b/c", rev: "main", attr: "x", trusted: "no" }, sender_tier: "public" }),

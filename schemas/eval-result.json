@@ -24,7 +24,8 @@
         "none",
         "oom",
         "timeout",
-        "egress"
+        "egress",
+        "unknown"
       ]
     }
   }

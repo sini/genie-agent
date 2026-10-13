@@ -31,7 +31,7 @@ asker's configuration. Say which one it was before you blame their code.
 ## The result
 
 `{exit, stdout_tail, stderr_tail, limit_hit}`. The tails are the last 4096 characters of each
-stream. `limit_hit` is `none`, `oom`, `timeout` or `egress`. When it is not `none`, report the
+stream. `limit_hit` is `none`, `oom`, `timeout`, `egress` or `unknown`. When it is not `none`, report the
 limit that was hit as a finding, and add the unchecked claim to `gaps`.
 
 ## Secrets

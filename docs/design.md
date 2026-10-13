@@ -102,7 +102,7 @@ that re-enters a model context from storage or from an eval passes guard-in firs
    cleaned question. The recall passes guard-in before it seeds, because bank content is
    attacker-derived text re-entering a fresh context.
 3. **Work.** Tier 1 may call `eval {repo, rev, attr, trusted}` and receives
-   `{exit, stdout_tail, stderr_tail, limit_hit: none|oom|timeout|egress}`. The `trusted` argument
+   `{exit, stdout_tail, stderr_tail, limit_hit: none|oom|timeout|egress|unknown}`. The `trusted` argument
    is a **request**: the launcher runs a trusted Job only when the request is set **and** the
    thread's tier is trusted, so the model can lower trust but never raise it. Evals run one at a
    time per thread; a second request waits for the first Job to end.

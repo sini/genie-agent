@@ -32,6 +32,8 @@
             pkgs.bubblewrap
             # unshare: the egress cell's network namespace with no interface.
             pkgs.util-linux
+            # ip: the dropped-connection cell's route to nowhere.
+            pkgs.iproute2
           ]
         }:$PATH
         echo "evaluator: $(nix-instantiate --version | sed -n 1p)"
@@ -54,9 +56,14 @@
           'an indirect flake reference resolves through no registry' \
           'the jail environment is exactly the allowlist, carrying nothing of the thread' \
           "an eval past the runner's timeout is limit timeout" \
-          'a fetch the network refuses is limit egress'; do
+          'a fetch the network refuses is limit egress' \
+          "a fetch the network drops is limit egress before the runner's deadline" \
+          'an eval SIGKILLed from outside with no OOM kill is limit unknown'; do
           sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
         done
+        # Skipped where there is no systemd user scope to delegate, but never absent.
+        grep -q "^ok [0-9]* - a concurrent eval's OOM kill is not this one's, in a delegated cgroup\( # SKIP .*\)\?$" "$tap" ||
+          { echo "missing cell: the delegated cgroup's"; exit 1; }
       '';
     };
 }

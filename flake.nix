@@ -418,8 +418,8 @@
                 [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
-          # limit_hit from typed observations (plan E2): a deadline kill is timeout, an OOM kill oom, a
-          # fetch the network refuses egress, a normal eval none. The real kills are process-plane cells.
+          # limit_hit from typed observations (plan E2, E2.1): a deadline kill is timeout, an OOM kill oom,
+          # any other SIGKILL unknown, a fetch the network refuses egress, a normal eval none. The real kills are process-plane cells.
           eval-limits =
             pkgs.runCommand "genie-agent-eval-limits"
               {
@@ -428,6 +428,7 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./schemas/eval-result.json
                     ./tests/eval-limits.test.ts
                   ];
                 };
@@ -438,9 +439,11 @@
                 node --test --test-force-exit --test-reporter=tap tests/eval-limits.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
-                for cell in 'a normal eval is none' 'a deadline kill is timeout' 'an OOM kill is oom' 'a refused fetch is egress'; do
+                for cell in 'a normal eval is none' 'a deadline kill is timeout' 'an OOM kill is oom' 'a refused fetch is egress' \
+                  'a foreign SIGKILL with no OOM kill is unknown' 'a foreign SIGKILL with memory.events unreadable is unknown'; do
                   grep -qx "ok [0-9]* - limit: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -qx "ok [0-9]* - limit_hit's values are the schema's" $TMPDIR/tap || { echo "missing cell: the schema's values"; exit 1; }
                 touch $out
               '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process

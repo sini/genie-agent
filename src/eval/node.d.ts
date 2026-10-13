@@ -18,10 +18,13 @@ declare module "node:child_process" {
 }
 declare module "node:fs" {
   export function existsSync(path: string): boolean;
+  export function mkdirSync(path: string): void;
   export function mkdtempSync(prefix: string): string;
   export function readFileSync(path: string, encoding: "utf8"): string;
   export function realpathSync(path: string): string;
+  export function rmdirSync(path: string): void;
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
+  export function writeFileSync(path: string, data: string): void;
 }
 interface Process {
   env: Record<string, string | undefined>;
