@@ -468,6 +468,36 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: restart, then resume ⇒ the same transcript, tier and cache$' $TMPDIR/tap && grep -q '^ok [0-9]* - a thread id that names another directory is refused$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # A thread's lifecycle over a fake clock: parked 1 h after its last reply and resumed with its
+          # context, a message pi never answered replayed on resume, closed on accept or 24 h idle
+          # with its worktrees removed, left open by 🔍, and the schedule kept across a restart.
+          lifecycle =
+            pkgs.runCommand "genie-agent-lifecycle"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.git
+                ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/lifecycle
+                    ./src/mirror
+                    ./src/state
+                    ./src/supervisor
+                    ./tests/lifecycle.test.ts
+                    ./tests/fixtures/supervisor
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/lifecycle.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: active ⇒ parked at 1 h ⇒ resumed on a message with its context intact$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a park before the first reply keeps the pending message, and the resume replays it$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: accept and 24 h idle each close the thread and remove its worktrees$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: 🔍 does not close the thread: it stays open and its worktrees stay$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a supervisor restart mid-idle still closes on the original schedule$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
           # with its credentials redacted, and the token reaches only the act. Stub ninfer, fake act.
           broker =

@@ -219,7 +219,7 @@ const usedAt = (dir: string) => statSync(`${dir}/${USED}`, { throwIfNoEntry: fal
 // Whether a worktree made from the mirror still exists. Read from git's own registry in the mirror,
 // <dir>/worktrees/*/gitdir, the record that makes the worktree work; a removed one goes stale there,
 // as `git worktree prune` would judge it.
-function liveWorktree(dir: string): boolean {
+export function liveWorktree(dir: string): boolean {
   if (!existsSync(`${dir}/worktrees`)) return false;
   return readdirSync(`${dir}/worktrees`).some((w) => {
     const gitdir = `${dir}/worktrees/${w}/gitdir`;

@@ -73,6 +73,9 @@
               checks.eval-limits = genie-agent.checks.${system}.eval-limits;
               # A thread's transcript, tier and eval cache survive a restart, on its own paths.
               checks.state = genie-agent.checks.${system}.state;
+              # Parked at 1 h and resumed with its context; closed on accept or 24 h idle with its
+              # worktrees removed, open after 🔍; on schedule across a restart.
+              checks.lifecycle = genie-agent.checks.${system}.lifecycle;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
               checks.broker = genie-agent.checks.${system}.broker;
             };

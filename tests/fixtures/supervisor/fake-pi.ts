@@ -1,7 +1,7 @@
 // A recording stand-in for `pi --mode rpc`: the same JSONL framing on stdin and stdout, and a
 // transcript held in this process's memory. Every stdin record is appended to
 // `$PI_RECORD/<pid>.jsonl`. It answers prompt (appended to the transcript; no model), get_messages
-// and get_state, and exits when stdin closes, as pi does. Given `--session-dir <d> --session-id <id>`,
+// and get_state, and exits when stdin closes, as pi does. With PI_SETTLE=never no turn settles. Given `--session-dir <d> --session-id <id>`,
 // it also loads and appends the transcript at `<d>/<id>.jsonl`, as pi resumes a session by id.
 // `{type: "host", title, placeholder}` asks its client an `input` dialog, as an extension's
 // ctx.ui.input does in pi's RPC mode, and answers with the client's value.
@@ -33,9 +33,12 @@ process.stdin.on("data", (chunk: string) => {
       process.stdout.write(`${JSON.stringify({ type: "extension_ui_request", id, method: "input", title: cmd.title, placeholder: cmd.placeholder })}\n`);
     } else if (cmd.type === "prompt") {
       messages.push({ role: "user", content: cmd.message });
-      if (session) appendFileSync(session, `${JSON.stringify(messages.at(-1))}\n`);
       reply({ ...r, data: { disposition: "started" } });
-      process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
+      // pi writes its session only once a turn settles (P2); PI_SETTLE=never holds every turn open.
+      if (process.env.PI_SETTLE !== "never") {
+        if (session) appendFileSync(session, `${JSON.stringify(messages.at(-1))}\n`);
+        process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
+      }
     } else if (cmd.type === "get_messages") reply({ ...r, data: { messages } });
     else if (cmd.type === "get_state") reply({ ...r, data: { pid: process.pid, messageCount: messages.length } });
     else reply({ ...r, success: false, error: `unknown command ${cmd.type}` });

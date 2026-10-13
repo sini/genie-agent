@@ -4,7 +4,7 @@
 // launched with (`--session-dir`, under a fixed `--session-id`), so a fresh pi process resumes the
 // thread's conversation (design row 21) and there is no second transcript format. The thread's Nix
 // store, mounted only into its eval Jobs, is a separate root, so state is never inside it.
-// Collection (P3), the archive (P4) and parking (C4) are not here.
+// Collection (P3) and the archive (P4) are not here; parking and closing are C4's, src/lifecycle.
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 
 export type Tier = "public" | "trusted";
@@ -92,6 +92,15 @@ export class ThreadStateStore {
 
   write(state: ThreadState): void {
     writeAtomic(this.dir(state.thread_id), "state.json", JSON.stringify(state));
+  }
+
+  // The thread's user messages pi has not answered, which its session does not yet hold (C4).
+  pending(thread: string): string[] {
+    return readJson<string[]>(`${this.dir(thread)}/pending.json`) ?? [];
+  }
+
+  setPending(thread: string, messages: string[]): void {
+    writeAtomic(this.dir(thread), "pending.json", JSON.stringify(messages));
   }
 
   cacheGet(thread: string, key: CacheKey): unknown {
