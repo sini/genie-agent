@@ -767,6 +767,7 @@
                   "eval runs at the thread's tier from P2's state, never the request's" \
                   "a draft reply reaches Post, and a forced one reaches XmsgSend at C6's address" \
                   "a reply is redacted then guard-out'd before Post" \
+                  "a credential in the user's question never reaches guard-out" \
                   'a guard-out block posts the withheld notice, never the draft' \
                   'a close archives exactly once'; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }

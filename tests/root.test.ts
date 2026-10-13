@@ -151,6 +151,15 @@ test("oracle: a reply is redacted then guard-out'd before Post", async () => {
   assert.ok(JSON.parse(reviews[0]).messages.at(-1).content.includes(JSON.stringify(JSON.stringify(posted, null, 2))));
 });
 
+test("oracle: a credential in the user's question never reaches guard-out", async () => {
+  const token = `ghp_${randomBytes(27).toString("base64").replace(/[+/=]/g, "x")}`;
+  await inbound({ thread: "q", envelope: envelope(BOB, `my token ${token} fails, why?`) });
+  reviews.length = 0;
+  assert.equal((await host("q", "reply", draft(false))).ok.posted, true);
+  assert.equal(reviews.length, 1);
+  assert.ok(!reviews[0].includes(token) && reviews[0].includes("[redacted:"));
+});
+
 test("oracle: a guard-out block posts the withheld notice, never the draft", async () => {
   const before = sends.length;
   assert.equal((await host("p", "reply", { ...draft(true), answer: "BLOCK me" })).ok.posted, false);
