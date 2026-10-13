@@ -3,19 +3,35 @@
 // runs git. Only https:// and git:// URLs are fetched, and never with credentials.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 
 export interface MirrorConfig {
   mirrorRoot: string;
   worktreeRoot: string;
   // Bytes one mirror may hold on disk; a fetch that passes it is killed and the mirror removed.
   fetchCap?: number;
+  // Bytes all mirrors together may hold once a fetch is done; least-recently-used ones are evicted.
+  quota?: number;
 }
 
 // 2 GiB: above the bare mirror of any ordinary project (and of every gen library), below the
 // monorepos (nixpkgs, linux) whose sources an eval reaches through its flake inputs instead, and
 // a small share of the mirror PVC so one URL cannot take the quota P7 evicts against.
 export const DEFAULT_FETCH_CAP = 2 * 1024 ** 3;
+// 32 GiB: sixteen mirrors at the fetch cap. The mirror PVC is sized at the quota plus one fetch
+// cap, since a fetch lands before eviction makes room for it.
+export const DEFAULT_QUOTA = 32 * 1024 ** 3;
 // How often a running fetch's directory is measured; the overshoot is what git writes in one tick.
 const CAP_POLL_MS = 20;
 
@@ -36,6 +52,16 @@ export class MirrorOverCap extends Error {
     super(`mirror of ${JSON.stringify(url)} passed its ${cap}-byte cap at ${bytes} bytes; fetch killed and mirror removed`);
     this.bytes = bytes;
     this.cap = cap;
+  }
+}
+
+// A fetch refused because the mirrors pinned by live worktrees leave it no room under the quota.
+export class MirrorOverQuota extends Error {
+  readonly reason: string;
+  constructor(pinned: number, quota: number, url: string) {
+    const reason = `this mirror and those pinned by live worktrees hold ${pinned} bytes, past the ${quota}-byte quota`;
+    super(`mirror of ${JSON.stringify(url)} refused: ${reason}`);
+    this.reason = reason;
   }
 }
 
@@ -171,6 +197,48 @@ async function fetchMirror(run: Runner, mirrorRoot: string, dir: string, url: st
   }
 }
 
+// A mirror's last use, the last fetch into it or worktree made from it, is this marker's mtime: it
+// lives on the mirror PVC, so the order survives a restart.
+const USED = "genie-used";
+const touch = (dir: string) => writeFileSync(`${dir}/${USED}`, "");
+const usedAt = (dir: string) => statSync(`${dir}/${USED}`, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+
+// Whether a worktree made from the mirror still exists. Read from git's own registry in the mirror,
+// <dir>/worktrees/*/gitdir, the record that makes the worktree work; a removed one goes stale there,
+// as `git worktree prune` would judge it.
+function liveWorktree(dir: string): boolean {
+  if (!existsSync(`${dir}/worktrees`)) return false;
+  return readdirSync(`${dir}/worktrees`).some((w) => {
+    const gitdir = `${dir}/worktrees/${w}/gitdir`;
+    return existsSync(gitdir) && existsSync(readFileSync(gitdir, "utf8").trim());
+  });
+}
+
+// Holds the mirrors under quota after a fetch into keep, evicting least-recently-used first. A
+// mirror with a live worktree, one another call holds, and keep itself are pinned. When the pinned
+// ones alone pass the quota nothing is evicted, keep is removed unless it is pinned by a worktree,
+// and the fetch is refused.
+function evict(mirrorRoot: string, keep: string, quota: number, url: string): void {
+  const mirrors = readdirSync(mirrorRoot)
+    .filter((k) => !k.startsWith("."))
+    .map((k) => {
+      const dir = `${mirrorRoot}/${k}`;
+      return { dir, bytes: diskBytes(dir), used: usedAt(dir), pinned: k === keep || locks.has(k) || liveWorktree(dir) };
+    });
+  let total = mirrors.reduce((n, m) => n + m.bytes, 0);
+  const pinned = mirrors.filter((m) => m.pinned).reduce((n, m) => n + m.bytes, 0);
+  if (pinned > quota) {
+    const dir = `${mirrorRoot}/${keep}`;
+    if (!liveWorktree(dir)) rmSync(dir, { recursive: true, force: true });
+    throw new MirrorOverQuota(pinned, quota, url);
+  }
+  for (const m of mirrors.filter((m) => !m.pinned).sort((a, b) => a.used - b.used)) {
+    if (total <= quota) break;
+    rmSync(m.dir, { recursive: true, force: true });
+    total -= m.bytes;
+  }
+}
+
 // ponytail: an in-process lock per mirror; a lock file is owed if a second fetcher process ever
 // shares mirrorRoot.
 const locks = new Map<string, Promise<unknown>>();
@@ -201,12 +269,16 @@ export async function worktreeFor(
   return locked(key, async () => {
     mkdirSync(cfg.mirrorRoot, { recursive: true, mode: 0o755 });
     await fetchMirror(run, cfg.mirrorRoot, dir, url, cfg.fetchCap ?? DEFAULT_FETCH_CAP);
+    touch(dir);
+    evict(cfg.mirrorRoot, key, cfg.quota ?? DEFAULT_QUOTA, url);
     const rev = (await run(["-C", dir, "rev-parse", "--verify", "HEAD^{commit}"])).trim();
     if (existsSync(path)) {
       await run(["-C", path, "checkout", "--force", "--detach", rev]);
     } else {
       mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
-      await run(["-C", dir, "worktree", "add", "--detach", path, rev]);
+      // --force: a removed worktree stays registered in the mirror and would refuse this path.
+      await run(["-C", dir, "worktree", "add", "--force", "--detach", path, rev]);
+      touch(dir);
     }
     return { path, rev };
   });

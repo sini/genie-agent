@@ -260,7 +260,9 @@
                 touch $out
               '';
           # The mirror fetcher's gating oracle: two threads on one repo share one clone, a refused URL
-          # starts no git process, and a fetch past the per-repo cap is killed and leaves no mirror.
+          # starts no git process, a fetch past the per-repo cap is killed and leaves no mirror, and
+          # least-recently-used eviction, recorded on disk, holds the quota without touching a mirror
+          # that has a live worktree.
           # Fixtures are served by a git daemon on the sandbox's loopback.
           mirror =
             pkgs.runCommand "genie-agent-mirror"
@@ -282,7 +284,7 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes a mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes a mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's

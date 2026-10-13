@@ -7,7 +7,17 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { after, before, test } from "node:test";
-import { diskBytes, git, MirrorOverCap, MirrorRefused, mirrorKey, worktreeFor, type Runner } from "../src/mirror/index.ts";
+import {
+  diskBytes,
+  git,
+  MirrorOverCap,
+  MirrorOverQuota,
+  MirrorRefused,
+  mirrorKey,
+  worktreeFor,
+  type MirrorConfig,
+  type Runner,
+} from "../src/mirror/index.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-mirror-test-`);
 const served = `${tmp}/served`;
@@ -67,9 +77,9 @@ after(() => {
 });
 
 // A fresh mirror and worktree root, and a runner that records every git argv before running it.
-function setup(fetchCap?: number) {
+function setup(fetchCap?: number, quota?: number) {
   const root = mkdtempSync(`${tmp}/case-`);
-  const cfg = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees`, fetchCap };
+  const cfg = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees`, fetchCap, quota };
   const calls: string[][] = [];
   const run: Runner = (args, signal) => {
     calls.push(args);
@@ -206,4 +216,74 @@ test("a fetch that takes a mirror past its cap removes the mirror", async () => 
   commit("growing", big);
   await assert.rejects(worktreeFor(cfg, `${base}/growing`, "t", measured), overCap(landed));
   assert.deepEqual(readdirSync(cfg.mirrorRoot), []);
+});
+
+// Three fixture repositories of one 1 MiB blob each, and a quota that holds two of their mirrors
+// but not three.
+const quota = 2.5 * MiB;
+function three(name: string): string[] {
+  return ["a", "b", "c"].map((x) => {
+    fixture(`${name}-${x}`);
+    commit(`${name}-${x}`, MiB);
+    return `${base}/${name}-${x}`;
+  });
+}
+// A thread's clone of url whose worktree is then removed, as a finished thread's is.
+async function use(cfg: MirrorConfig, url: string, run: Runner, fetch = worktreeFor) {
+  const { path } = await fetch(cfg, url, "t", run);
+  rmSync(path, { recursive: true, force: true });
+}
+const keys = (urls: string[]) => urls.map(mirrorKey).sort();
+
+test("oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota", async () => {
+  const [a, b, c] = three("lru");
+  const { cfg, run, mirrors } = setup(undefined, quota);
+  await use(cfg, a, run);
+  await use(cfg, b, run);
+  await use(cfg, a, run);
+  assert.deepEqual(mirrors().sort(), keys([a, b]));
+  await use(cfg, c, run);
+  assert.deepEqual(mirrors().sort(), keys([a, c]));
+  assert.ok(diskBytes(cfg.mirrorRoot) <= quota, `${diskBytes(cfg.mirrorRoot)} bytes`);
+});
+
+test("oracle: a mirror with a live worktree is never evicted, even when it is the least recently used", async () => {
+  const [a, b, c] = three("pinned");
+  const { cfg, run, mirrors } = setup(undefined, quota);
+  const live = await worktreeFor(cfg, a, "t", run);
+  await use(cfg, b, run);
+  await use(cfg, c, run);
+  assert.deepEqual(mirrors().sort(), keys([a, c]));
+  assert.equal(head(live.path), live.rev);
+  assert.ok(diskBytes(cfg.mirrorRoot) <= quota, `${diskBytes(cfg.mirrorRoot)} bytes`);
+});
+
+test("oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror", async () => {
+  const [a, b, c] = three("full");
+  const { cfg, run, mirrors } = setup(undefined, quota);
+  await worktreeFor(cfg, a, "t", run);
+  await worktreeFor(cfg, b, "t", run);
+  await assert.rejects(worktreeFor(cfg, c, "t", run), (e: unknown) => {
+    assert.ok(e instanceof MirrorOverQuota, String(e));
+    assert.match(e.reason, /live worktrees/);
+    return true;
+  });
+  assert.deepEqual(mirrors().sort(), keys([a, b]));
+});
+
+test("oracle: the least-recently-used order survives a restart of the fetcher", async () => {
+  const [a, b, c] = three("restart");
+  // A fresh module instance over the same mirror root, as after a restart.
+  const restarted = (await import("../src/mirror/index.ts?restart")).worktreeFor as typeof worktreeFor;
+  // The same mirrors made in the same order, with opposite recency: whatever orders them other
+  // than their recorded use picks the wrong one in one of the two roots.
+  for (const [order, kept] of [
+    [[a, b], [b, c]],
+    [[a, b, a], [a, c]],
+  ]) {
+    const { cfg, run, mirrors } = setup(undefined, quota);
+    for (const url of order) await use(cfg, url, run);
+    await use(cfg, c, run, restarted);
+    assert.deepEqual(mirrors().sort(), keys(kept), `after ${order.length} uses`);
+  }
 });
