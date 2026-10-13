@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { after, before, test } from "node:test";
@@ -177,7 +177,7 @@ const big = 64 * MiB;
 function landing(run: Runner) {
   const landed: number[] = [];
   const measured: Runner = (args, signal) => {
-    const wrote = args[0] === "clone" ? dirname(args.at(-1)!) : args[0] === "-C" && args[2] === "fetch" ? args[1] : "";
+    const wrote = args[0] === "clone" ? dirname(args.at(-1)!) : args[0] === "-C" && args.includes("fetch") ? args[1] : "";
     return run(args, signal).finally(() => wrote && landed.push(diskBytes(wrote)));
   };
   return { landed, measured };
@@ -207,15 +207,93 @@ test("oracle: an over-cap clone is killed and leaves nothing, an under-cap one i
   assert.deepEqual(mirrors(), [mirrorKey(`${base}/small`)]);
 });
 
-test("a fetch that takes a mirror past its cap removes the mirror", async () => {
+test("a fetch that takes an unpinned mirror past its cap removes the mirror", async () => {
   fixture("growing");
   const { cfg, run, mirrors } = setup(cap);
   const { landed, measured } = landing(run);
-  await worktreeFor(cfg, `${base}/growing`, "t", measured);
+  await use(cfg, `${base}/growing`, measured);
   assert.equal(mirrors().length, 1);
   commit("growing", big);
   await assert.rejects(worktreeFor(cfg, `${base}/growing`, "t", measured), overCap(landed));
   assert.deepEqual(readdirSync(cfg.mirrorRoot), []);
+});
+
+// A mirror's refs, every file in it with its size, and those sizes' total. Sizes as written, not
+// as allocated: ZFS reports a file's allocated blocks only seconds after a write, even past a sync.
+const refs = (dir: string) => sh(["for-each-ref", "--format=%(refname) %(objectname)"], dir);
+function state(dir: string) {
+  const sized = readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => [`${e.parentPath.slice(dir.length)}/${e.name}`, statSync(`${e.parentPath}/${e.name}`).size] as const);
+  const files = sized.map(([f, n]) => `${f} ${n}`).sort();
+  return { refs: refs(dir), files, bytes: sized.reduce((t, [, n]) => t + n, 0) };
+}
+const prunes = (calls: string[][]) => calls.filter((a) => a.includes("prune"));
+
+test("oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves", async () => {
+  fixture("kept");
+  commit("kept", 1024);
+  sh(["push", "-q", "origin", "HEAD:side"], `${tmp}/work-kept`);
+  const url = `${base}/kept`;
+  const { cfg, run, calls, mirrors } = setup(cap);
+  const live = await worktreeFor(cfg, url, "t", run);
+  const dir = `${cfg.mirrorRoot}/${mirrorKey(url)}`;
+  const before = state(dir);
+  // Deleted upstream, so a fetch that pruned before its transfer would drop it from the mirror.
+  sh(["push", "-q", "origin", ":side"], `${tmp}/work-kept`);
+  commit("kept", big);
+  let left: string[] = [];
+  const watched: Runner = (args, signal) =>
+    run(args, signal).finally(() => args.includes("fetch") && (left = state(dir).files.filter((f) => !before.files.includes(f))));
+  const n = calls.length;
+  await assert.rejects(worktreeFor(cfg, url, "t", watched), MirrorOverCap);
+  assert.deepEqual(left.map((f) => f.replace(/tmp_pack_\S* \d+$/, "tmp_pack_")), ["/objects/pack/tmp_pack_"]);
+  assert.deepEqual(state(dir), before);
+  assert.deepEqual(prunes(calls.slice(n)), []);
+  assert.deepEqual(mirrors(), [mirrorKey(url)]);
+  assert.equal(head(live.path), live.rev);
+  assert.equal(readFileSync(`${live.path}/blob`).length, 1024);
+});
+
+test("oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them", async () => {
+  const side = fixture("pruned");
+  const work = `${tmp}/work-pruned`;
+  sh(["push", "-q", "origin", "HEAD:side"], work);
+  const url = `${base}/pruned`;
+  const { cfg, run, calls } = setup(cap);
+  await worktreeFor(cfg, url, "t", run);
+  const dir = `${cfg.mirrorRoot}/${mirrorKey(url)}`;
+  sh(["push", "-q", "origin", ":side"], work);
+  const next = commit("pruned");
+  // The prune step finds the repository gone, as when the remote drops between the two round-trips.
+  const failing: Runner = (args, signal) => {
+    if (!args.includes("prune")) return run(args, signal);
+    renameSync(`${served}/pruned.git`, `${served}/pruned-gone.git`);
+    return run(args, signal).finally(() => renameSync(`${served}/pruned-gone.git`, `${served}/pruned.git`));
+  };
+  await assert.rejects(worktreeFor(cfg, url, "t", failing), /remote prune/);
+  assert.equal(refs(dir), `refs/heads/main ${next}\nrefs/heads/side ${side}`);
+  const n = calls.length;
+  await worktreeFor(cfg, url, "t", run);
+  assert.equal(refs(dir), `refs/heads/main ${next}`);
+  assert.deepEqual(
+    calls.slice(n, n + 2).map((a) => a.find((x) => x === "fetch" || x === "prune")),
+    ["fetch", "prune"],
+  );
+});
+
+test("oracle: a pinned mirror already past its cap is refused before git starts", async () => {
+  fixture("over");
+  commit("over", 1024);
+  const url = `${base}/over`;
+  const { cfg, run, calls, mirrors } = setup(cap);
+  const live = await worktreeFor(cfg, url, "t", run);
+  cfg.fetchCap = 1024;
+  const n = calls.length;
+  await assert.rejects(worktreeFor(cfg, url, "t", run), MirrorOverCap);
+  assert.deepEqual(calls.slice(n), []);
+  assert.deepEqual(mirrors(), [mirrorKey(url)]);
+  assert.equal(head(live.path), live.rev);
 });
 
 // Three fixture repositories of one 1 MiB blob each, and a quota that holds two of their mirrors

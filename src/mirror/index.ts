@@ -19,7 +19,8 @@ import {
 export interface MirrorConfig {
   mirrorRoot: string;
   worktreeRoot: string;
-  // Bytes one mirror may hold on disk; a fetch that passes it is killed and the mirror removed.
+  // Bytes one mirror may hold on disk; a fetch that passes it is killed and the mirror removed,
+  // unless a live worktree pins it.
   fetchCap?: number;
   // Bytes all mirrors together may hold once a fetch is done; least-recently-used ones are evicted.
   quota?: number;
@@ -44,12 +45,13 @@ export class MirrorRefused extends Error {
   }
 }
 
-// A fetch that passed its cap, killed and removed.
+// A fetch that passed its cap, killed and its mirror removed (or, when pinned, left as it was), or a
+// pinned mirror already past its cap.
 export class MirrorOverCap extends Error {
   readonly bytes: number;
   readonly cap: number;
   constructor(bytes: number, cap: number, url: string) {
-    super(`mirror of ${JSON.stringify(url)} passed its ${cap}-byte cap at ${bytes} bytes; fetch killed and mirror removed`);
+    super(`mirror of ${JSON.stringify(url)} passed its ${cap}-byte cap at ${bytes} bytes`);
     this.bytes = bytes;
     this.cap = cap;
   }
@@ -175,16 +177,27 @@ async function capped(run: Runner, args: string[], watched: string, cap: number,
   if (over) throw new MirrorOverCap(over, cap, url);
 }
 
-// The fetch into one mirror, and the one place a fetch-size cap or a quota wraps it. A mirror
-// whose fetch passes the cap is removed whole: the cap bounds the mirror, not one fetch's delta.
+// The fetch into one mirror, and the one place a fetch-size cap or a quota wraps it. The cap bounds
+// the mirror, not one fetch's delta. A mirror whose fetch passes it is removed whole, unless a live
+// worktree pins it: then only the killed fetch's temporary pack goes, and the mirror is left as it
+// was before the fetch. A pinned mirror already past the cap is refused before git starts.
 async function fetchMirror(run: Runner, mirrorRoot: string, dir: string, url: string, cap: number): Promise<void> {
   if (existsSync(dir)) {
+    const pinned = liveWorktree(dir);
+    const held = pinned ? diskBytes(dir) : 0;
+    if (held > cap) throw new MirrorOverCap(held, cap, url);
+    // Forced pack mode and no FETCH_HEAD, so a killed fetch leaves only objects/pack/tmp_pack_*;
+    // no --prune, which drops refs before the transfer, so a killed fetch leaves refs untouched.
     try {
-      await capped(run, ["-C", dir, "fetch", "--prune", "origin"], dir, cap, url);
+      await capped(run, ["-C", dir, "-c", "fetch.unpackLimit=1", "fetch", "--no-write-fetch-head", "origin"], dir, cap, url);
     } catch (e) {
-      if (e instanceof MirrorOverCap) rmSync(dir, { recursive: true, force: true });
+      if (!(e instanceof MirrorOverCap)) throw e;
+      const doomed = pinned ? readdirSync(`${dir}/objects/pack`).filter((f) => f.startsWith("tmp_pack_")).map((f) => `${dir}/objects/pack/${f}`) : [dir];
+      for (const p of doomed) rmSync(p, { recursive: true, force: true });
       throw e;
     }
+    // A second round-trip that lists the remote's refs and deletes ours it lacks; it fetches no objects.
+    await run(["-C", dir, "remote", "prune", "origin"]);
     return;
   }
   // Cloned beside the mirror and renamed into place, so a failed clone leaves no mirror.
