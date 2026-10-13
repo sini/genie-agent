@@ -698,6 +698,41 @@
                 done
                 touch $out
               '';
+          # The PR action through the broker's kind-dispatching act against a stub GitHub: one PR whose
+          # body links the thread, its calls in the stated order, and a failed PR step not acted on,
+          # its branch deleted and the token in no reason.
+          pr =
+            pkgs.runCommand "genie-agent-pr"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/broker
+                    ./src/guard
+                    ./src/dispatcher/xmsg.ts
+                    ./src/redactor
+                    ./src/tier1/schema.ts
+                    ./schemas/proposal.json
+                    ./tests/pr.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/pr.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'a pr proposal opens exactly one PR, whose body links the thread' \
+                  'the GitHub calls arrive in the stated order' \
+                  'a failure at the PR step is not acted on, the branch is deleted, and the reason never carries the token' \
+                  'the dispatching act routes a gist to the gist action and a pr to the PR action'; do
+                  grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The archive writer against a stub S3: one PUT per archive holding the transcript (pi's
           # session file), verdicts, escalation and actions, keyed by tier; a failed PUT rejects.
           archive =

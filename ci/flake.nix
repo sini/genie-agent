@@ -89,6 +89,9 @@
               # A gist proposal is one POST /gists, redacted, with the Bearer token; a failure is not acted
               # on, once, and never carries the token.
               checks.gist = genie-agent.checks.${system}.gist;
+              # A pr proposal opens one PR whose body links the thread, its calls in order; a failed PR
+              # step is not acted on, its branch deleted, and never carries the token.
+              checks.pr = genie-agent.checks.${system}.pr;
               # One PUT per archive with all four sections, the transcript pi's session file, keyed by
               # tier; a failed PUT rejects.
               checks.archive = genie-agent.checks.${system}.archive;

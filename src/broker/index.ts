@@ -21,9 +21,17 @@ export interface Proposal {
   body: string;
 }
 
-// The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read. It is the
-// only thing the token is handed to.
-export type Act = (p: Proposal, token: string) => Promise<{ url: string }>;
+// The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read and the
+// thread the proposal came from (A3's PR body links it). It is the only thing the token is handed to.
+export type Act = (p: Proposal, token: string, thread: string) => Promise<{ url: string }>;
+
+// One Act per proposal kind; a kind with no Act throws, so it is not acted on.
+export const byKind =
+  (acts: Record<Proposal["kind"], Act>): Act =>
+  async (p, token, thread) => {
+    if (!Object.hasOwn(acts, p.kind)) throw new Error(`no action for a ${p.kind} proposal`);
+    return acts[p.kind](p, token, thread);
+  };
 
 export interface Config {
   // Read at act time, never from argv or the environment.
@@ -110,7 +118,7 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   }
   if (!token) return done(false, `token empty: ${c.tokenFile}`);
   try {
-    const { url } = await c.act(p, token);
+    const { url } = await c.act(p, token, thread);
     return done(true, "acted", url);
   } catch (e) {
     // A failed request may echo its Authorization header.

@@ -10,7 +10,8 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { archiver, type S3Config } from "../archive/index.ts";
 import { gist } from "../broker/gist.ts";
-import { broker, outbound } from "../broker/index.ts";
+import { broker, byKind, outbound } from "../broker/index.ts";
+import { pr } from "../broker/pr.ts";
 import { escalationGuard } from "../escalation/guard.ts";
 import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts";
 import { router } from "../escalation/route.ts";
@@ -60,7 +61,8 @@ export interface Config {
   model: { baseUrl: string; api: string; id: string; keyFile: string };
   tier1: Omit<Tier1Config, "root">;
   s3: S3Config;
-  broker: { tokenFile: string; githubApi?: string; guardOut: { base: string; model: string; keyFile?: string } };
+  // threadLink: the thread's public URL with `{thread}` where the thread id goes; a PR needs it.
+  broker: { tokenFile: string; githubApi?: string; threadLink?: string; guardOut: { base: string; model: string; keyFile?: string } };
   // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
   eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax">;
   experts?: Record<Tier, string>;
@@ -111,6 +113,13 @@ export function main(configFile: string, io: Io, run?: Runner) {
   const context = (t: string): Context => (existsSync(file(t)) ? JSON.parse(readFileSync(file(t), "utf8")) : { cleaned_question: "", eval_transcript: [] });
   const setContext = (t: string, x: Partial<Context>) => writeFileSync(file(t), JSON.stringify({ ...context(t), ...x }));
 
+  const { githubApi, threadLink } = c.broker;
+  const link = (t: string) => {
+    if (!threadLink) throw new Error("broker.threadLink is not configured");
+    return threadLink.replace("{thread}", encodeURIComponent(t));
+  };
+  const act = byKind({ gist: gist(githubApi), pr: pr(link, githubApi) });
+
   const escalation = new Escalation({ store, xmsg: io.xmsg, guard: escalationGuard(io.guard), route: router(c.experts), context });
 
   // pi reads its model from its agent dir; the key goes into a file there, never argv or env.
@@ -153,7 +162,7 @@ export function main(configFile: string, io: Io, run?: Runner) {
         await io.post.post(t, out.value);
         return { posted: true, escalated: await escalation.reply(t, out.value) };
       },
-      propose: (p) => broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act: gist(c.broker.githubApi) }),
+      propose: (p) => broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act }),
       clone: (url) => worktreeFor(c.mirror, url, t),
       screen,
     }),
