@@ -12,8 +12,8 @@
 // pi writes its session only once a turn settles (P2), so a message sent to a process that parks
 // before its reply would be lost. Every message is persisted as pending before it is sent and
 // cleared when pi's turn settles; a resume replays what is pending ahead of the new message.
-import { existsSync, readdirSync, rmSync } from "node:fs";
-import { git, type MirrorConfig } from "../mirror/index.ts";
+import { existsSync, readdirSync } from "node:fs";
+import { type MirrorConfig, removeWorktrees } from "../mirror/index.ts";
 import type { ThreadStateStore } from "../state/index.ts";
 import type { Record, Supervisor } from "../supervisor/index.ts";
 
@@ -107,15 +107,7 @@ export class Lifecycle {
     this.clock.clearTimeout(this.timers.get(thread));
     this.timers.delete(thread);
     await supervisor.teardown(thread);
-    // P1 keys a thread's worktrees as <worktreeRoot>/<thread>/<mirror key>, its mirror at
-    // <mirrorRoot>/<mirror key>.
-    const dir = `${mirror.worktreeRoot}/${thread}`;
-    for (const key of existsSync(dir) ? readdirSync(dir) : []) {
-      const m = `${mirror.mirrorRoot}/${key}`;
-      if (existsSync(m)) await git(["-C", m, "worktree", "remove", "--force", `${dir}/${key}`]);
-      else rmSync(`${dir}/${key}`, { recursive: true, force: true });
-    }
-    rmSync(dir, { recursive: true, force: true });
+    await removeWorktrees(mirror, thread);
     const st = store.read(thread);
     if (st) store.write({ ...st, status: "closed" });
   }

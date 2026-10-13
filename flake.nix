@@ -543,6 +543,40 @@
                 done
                 touch $out
               '';
+          # A thread's collection over a fake clock: kept at 95 h idle, archived then gone at 97 h
+          # (state, read-only store, worktrees) whatever its status, nothing removed on a failed archive.
+          gc =
+            pkgs.runCommand "genie-agent-gc"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.git
+                ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/gc
+                    ./src/lifecycle
+                    ./src/mirror
+                    ./src/state
+                    ./tests/gc.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/gc.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'at 95 h kept, at 97 h archived and gone: state, store and worktrees, whatever the status' \
+                  'a failed archive deletes nothing, and the next sweep retries it' \
+                  'a read-only store path is removed'; do
+                  grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
           # with its credentials redacted, and the token reaches only the act. Stub ninfer, fake act.
           broker =

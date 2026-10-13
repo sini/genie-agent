@@ -264,6 +264,19 @@ function locked<T>(key: string, f: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// Removes every worktree the thread holds, from git's registry in its mirror as well as from disk,
+// which unpins the mirror for eviction. Keyed as worktreeFor keys them: <worktreeRoot>/<thread>/<key>
+// from the mirror <mirrorRoot>/<key>. Shared by C4's close and P3's collection.
+export async function removeWorktrees(cfg: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">, thread: string, run: Runner = git): Promise<void> {
+  const dir = `${cfg.worktreeRoot}/${thread}`;
+  for (const key of existsSync(dir) ? readdirSync(dir) : []) {
+    const m = `${cfg.mirrorRoot}/${key}`;
+    if (existsSync(m)) await run(["-C", m, "worktree", "remove", "--force", `${dir}/${key}`]);
+    else rmSync(`${dir}/${key}`, { recursive: true, force: true });
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // The thread's worktree of url, at the mirror's default branch head after a fresh fetch.
 export async function worktreeFor(
   cfg: MirrorConfig,
