@@ -72,7 +72,10 @@ export interface Pi {
   }): void;
   on(event: "tool_call", handler: (e: ToolCall) => Promise<{ block: true; reason: string } | undefined>): void;
   on(event: "user_bash", handler: () => Promise<never>): void;
-  on(event: "session_start", handler: () => Promise<void>): void;
+  on(
+    event: "session_start",
+    handler: (e: unknown, ctx: { ui: { input(title: string, placeholder?: string): Promise<string | undefined> } }) => Promise<void>,
+  ): void;
   setActiveTools(names: string[]): void;
 }
 

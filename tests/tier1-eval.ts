@@ -9,11 +9,12 @@
 //   flock ~/.local/state/genie-model.lock node tests/tier1-eval.ts [--prompt <file>] [--out <file>]
 // Exit 0: every question parsed. 1: at least one did not, including a turn cut off at max-tokens
 // (finish "length"). 2: could not measure.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { firstModel } from "../src/guard/service.ts";
 import { type Draft, draftOf, type Message } from "../src/tier1/draft.ts";
 import { type Pi, tier1 } from "../src/tier1/index.ts";
+import { skillsPrompt } from "../src/tier1/launch.ts";
 
 const root = new URL("..", import.meta.url);
 const defaultKey = "/home/sini/.config/hyperqwen/api-key";
@@ -44,11 +45,7 @@ const questions: { id: string; question: string }[] = readFileSync(
   .filter(Boolean)
   .map((l) => JSON.parse(l));
 
-const skillsDir = new URL("skills/", root);
-const skills = readdirSync(skillsDir)
-  .sort()
-  .map((d) => `<skill name="${d}">\n${readFileSync(new URL(`${d}/SKILL.md`, skillsDir), "utf8")}</skill>`);
-const system = `${readFileSync(args.prompt, "utf8")}\n\n# Skills\n\n${skills.join("\n\n")}\n`;
+const system = `${readFileSync(args.prompt, "utf8")}\n\n${skillsPrompt()}`;
 
 // The tool definitions exactly as C1 registers them.
 const tools: { type: "function"; function: { name: string; description: string; parameters: unknown } }[] = [];

@@ -342,6 +342,38 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The Host bridge (plan C3.1) under real pi with the tier-1 extension, as tier1Launch starts
+          # it: a tool call in a thread reaches the supervisor's Host as that thread and its result
+          # returns to the tool, and the system prompt carries tier 1's prompt and every skill. A stub
+          # model on the sandbox's loopback; the forged-thread cell runs over the fake pi.
+          tier1-bridge =
+            pkgs.runCommand "genie-agent-tier1-bridge"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/supervisor
+                    ./src/tier1
+                    ./src/mirror
+                    ./src/guard/verdict.ts
+                    ./schemas
+                    ./skills
+                    ./prompts/tier1.md
+                    ./tests/tier1-bridge.test.ts
+                    ./tests/fixtures/supervisor
+                  ];
+                };
+              }
+              ''
+                cd $src
+                export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/tier1-bridge.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - oracle: a tool call in thread A reaches the supervisor's Host as A and its result returns to the tool; B's as B$" $TMPDIR/tap && grep -q "^ok [0-9]* - oracle: the launched system prompt carries tier 1's prompt and every skill's body$" $TMPDIR/tap && grep -q '^ok [0-9]* - a Host call that names another thread is attributed to the thread whose pipes carried it$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The per-thread eval lock (design oracle 15): one eval in flight per thread, threads overlap,
           # and a failed run releases its thread. A recording fake runner; no nix, no bwrap.
           eval-lock =

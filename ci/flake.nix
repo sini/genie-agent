@@ -62,6 +62,9 @@
               # One pi process per thread: a fact planted in one thread is absent from another, and
               # tearing one down leaves the rest running.
               checks.supervisor = genie-agent.checks.${system}.supervisor;
+              # Under real pi, a tier-1 tool call reaches the supervisor's Host as the thread whose
+              # process made it, and the system prompt carries every skill.
+              checks.tier1-bridge = genie-agent.checks.${system}.tier1-bridge;
               # One eval in flight per thread, threads overlap, and a failed run releases its thread.
               checks.eval-lock = genie-agent.checks.${system}.eval-lock;
               # Only the effective tier opens IFD and builders; the untrusted argv is E1's.

@@ -4,10 +4,17 @@
 // (C4), escalation (C5), the thread's tier (C7) and the thread state on disk (P2) are not here:
 // each enters through `launch` or by calling `teardown`.
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Host } from "../tier1/index.ts";
 
 // How a thread's process starts, e.g. `pi --mode rpc -e <tier-1 extension> --session-dir <store>`.
-// C4's resume and P2's per-thread state change the arguments, not the supervisor.
-export type Launch = (thread: string) => { command: string; args: string[] };
+// C4's resume and P2's per-thread state change the arguments, not the supervisor. env is added
+// to the supervisor's own.
+export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string } };
+
+// The title of the RPC `input` dialog that carries a Host call from tier 1's extension
+// (src/tier1/extension.ts); the supervisor answers no other dialog.
+export const BRIDGE = "genie-host";
+export const METHODS = ["eval", "recall", "escalate", "reply", "propose", "clone"] as const;
 
 // A pi RPC record on stdout: a `response` to a command, or a session event.
 export type Record = { type: string; id?: string; [key: string]: unknown };
@@ -23,11 +30,14 @@ export class Supervisor {
   private next = 0;
   private launch: Launch;
   private onEvent: (thread: string, record: Record) => void;
+  private host?: (thread: string) => Host;
 
-  // onEvent receives every record that answers no command, tagged with its thread.
-  constructor(launch: Launch, onEvent: (thread: string, record: Record) => void = () => {}) {
+  // onEvent receives every record that answers no command, tagged with its thread. host(thread)
+  // answers the Host calls of that thread's tier-1 extension (src/tier1/extension.ts).
+  constructor(launch: Launch, onEvent: (thread: string, record: Record) => void = () => {}, host?: (thread: string) => Host) {
     this.launch = launch;
     this.onEvent = onEvent;
+    this.host = host;
   }
 
   threads(): string[] {
@@ -66,8 +76,8 @@ export class Supervisor {
   }
 
   private spawn(thread: string): Proc {
-    const { command, args } = this.launch(thread);
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] });
+    const { command, args, env } = this.launch(thread);
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...env } as { [k: string]: string } });
     const pending: Proc["pending"] = new Map();
     const exited = new Promise<void>((resolve) => {
       const done = (why: string) => {
@@ -102,11 +112,28 @@ export class Supervisor {
         if (waiter) {
           pending.delete(r.id!);
           waiter.resolve(r);
+        } else if (r.type === "extension_ui_request" && r.method === "input" && r.title === BRIDGE) {
+          // The thread is the one whose pipes the call came on, whatever the call says.
+          void this.answer(thread, r.placeholder).then((value) =>
+            child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: r.id, value })}\n`),
+          );
         } else this.onEvent(thread, r);
       }
     });
     const p = { child, pending, exited };
     this.procs.set(thread, p);
     return p;
+  }
+
+  // One Host call from thread's extension, answered `{ok}` or `{error}`.
+  private async answer(thread: string, payload: unknown): Promise<string> {
+    try {
+      const { method, arg } = JSON.parse(String(payload));
+      if (!(METHODS as readonly string[]).includes(method)) throw new Error(`no Host method ${method}`);
+      if (!this.host) throw new Error("this supervisor has no Host");
+      return JSON.stringify({ ok: (await this.host(thread)[method as (typeof METHODS)[number]](arg)) ?? null });
+    } catch (e) {
+      return JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
+    }
   }
 }
