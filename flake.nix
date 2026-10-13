@@ -329,6 +329,7 @@
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
+                    ./src/guard/verdict.ts
                     ./src/supervisor
                     ./tests/supervisor.test.ts
                     ./tests/fixtures/supervisor
@@ -341,6 +342,14 @@
                 node --test --test-force-exit --test-reporter=tap tests/supervisor.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  "a poisoned bank entry and a poisoned replay fixture both reach guard-in before the session sees them" \
+                  "clean bank entries and clean replay fixtures are screened and seed the session unchanged" \
+                  "a rewrite in a bank entry or replay sends the guard's cleaned_text, not the injection" \
+                  "the seed guard unavailable, throwing or malformed refuses to seed the session" \
+                  "each seed check is a fresh session: source recall, history empty"; do
+                  sed -n 's/^ok [0-9]* - oracle: //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
+                done
                 touch $out
               '';
           # The Host bridge (plan C3.1) under real pi with the tier-1 extension, as tier1Launch starts
