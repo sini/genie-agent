@@ -83,6 +83,9 @@
               checks.gc = genie-agent.checks.${system}.gc;
               # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
               checks.broker = genie-agent.checks.${system}.broker;
+              # One PUT per archive with all four sections, the transcript pi's session file, keyed by
+              # tier; a failed PUT rejects.
+              checks.archive = genie-agent.checks.${system}.archive;
             };
         }
         # Each single executable runs its own main and no offered payload. Linux only, so it is

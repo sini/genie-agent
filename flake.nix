@@ -604,6 +604,39 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The archive writer against a stub S3: one PUT per archive holding the transcript (pi's
+          # session file), verdicts, escalation and actions, keyed by tier; a failed PUT rejects.
+          archive =
+            pkgs.runCommand "genie-agent-archive"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/archive
+                    ./src/gc
+                    ./src/lifecycle
+                    ./src/mirror
+                    ./src/state
+                    ./tests/archive.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/archive.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  "close ⇒ exactly one PUT holding all four sections, absent ones explicit, the transcript pi's session file" \
+                  'a failed PUT rejects, so collection deletes nothing' \
+                  "the key carries the thread's tier, and the two tiers never share a prefix" \
+                  "P3's collection of an expired thread, with this archiver, is exactly one PUT and then the thread is gone"; do
+                  grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                touch $out
+              '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
