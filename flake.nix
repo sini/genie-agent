@@ -193,6 +193,7 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/redactor
                     ./tests/redactor.test.ts
+                    ./tests/fixtures/redactor
                   ];
                 };
               }
@@ -201,7 +202,7 @@
                 rc=0
                 node --test --test-reporter=tap tests/redactor.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - clean control passes byte-identical$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - clean control passes byte-identical$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: every credential-shape case is redacted and every near-miss control passes byte-identical$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The dispatcher's gating oracles, core (design oracle 24) and delivery (oracle 28), against

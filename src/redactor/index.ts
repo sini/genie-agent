@@ -31,6 +31,19 @@ const patterns: { kind: string; re: RegExp }[] = [
   // Synapse: syt_<base64 localpart>_<20 random>_<6 crc>.
   { kind: "matrix-access-token", re: /syt_[A-Za-z0-9+/]+_[A-Za-z0-9]{20}_[A-Za-z0-9]{6}/g },
   { kind: "age-secret-key", re: /AGE-SECRET-KEY-1[0-9A-Z]{50,}/g },
+  // An ed25519 PKCS#8 body without its PEM lines: v1 (openssl) is 48 bytes, one line; v2 (ring,
+  // so rcgen and xmsg's leaf keys) is 83 bytes, its seed on the first line and its public key on
+  // the second. Both open with the DER header ahead of the 32-byte seed.
+  {
+    kind: "ed25519-private-key",
+    re: /M(?:C4CAQAw|FECAQEw)BQYDK2VwBCIEI[A-Za-z0-9+/]{43}(?:\r?\ngSEA[A-Za-z0-9+/]{43}=)?/g,
+  },
+  // AWS-format access key ids, as a Longhorn backup target's AWS_ACCESS_KEY_ID holds them.
+  { kind: "aws-access-key-id", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
+  // Garage: GK + 12 random bytes in hex, or 16 for an imported key; its secret is 32 bytes in hex,
+  // named only by `garage key info`'s label, since a bare 64-hex string is also a sha256.
+  { kind: "garage-key-id", re: /\bGK[0-9a-f]{24}(?:[0-9a-f]{8})?\b/g },
+  { kind: "garage-secret-key", re: /(?<=Secret key:\s*)[0-9a-f]{64}\b/g },
 ];
 
 // A value in a credential context (`Bearer x`, `token=x`, `SECRET_KEY: "x"`) is redacted when it

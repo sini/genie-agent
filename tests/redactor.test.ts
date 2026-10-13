@@ -3,21 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { redact, secretLineHashes } from "../src/redactor/index.ts";
+import { b62, b64, b64url, bech32, corpus, rand } from "./fixtures/redactor/corpus.ts";
 
-// Token bodies are generated, never written down, so the repository holds no token-shaped
-// literal for a secret scanner to flag.
-function rand(n: number, alphabet: string, seed: number): string {
-  let s = "";
-  for (let i = 0; i < n; i++) {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    s += alphabet[seed % alphabet.length];
-  }
-  return s;
-}
-const b62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-const b64url = b62 + "-_";
-const b64 = b62 + "+/";
-const bech32 = "QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L";
 const keyBody = (seed: number) =>
   Array.from({ length: 4 }, (_, i) => rand(64, b64, seed + i)).join("\n");
 
@@ -99,4 +86,21 @@ test("clean control passes byte-identical", () => {
   const { text, hits } = redact(clean, { secretFileHashes: secretLineHashes("unrelated-secret\n") });
   assert.equal(text, clean);
   assert.deepEqual(hits, []);
+});
+
+// Design oracle 2 over the S7 corpus. Each case is its own subtest, so a red names the case.
+test("oracle 2: every credential-shape case is redacted and every near-miss control passes byte-identical", async (t) => {
+  for (const shape of new Set(corpus.map((c) => c.shape))) {
+    const cases = corpus.filter((c) => c.shape === shape);
+    assert.ok(cases.some((c) => c.kinds.length > 0) && cases.some((c) => c.kinds.length === 0));
+  }
+  for (const c of corpus)
+    await t.test(c.id, () => {
+      const { text, hits } = redact(c.input);
+      assert.equal(text, c.expected);
+      assert.deepEqual(
+        hits.map((h) => h.kind),
+        c.kinds,
+      );
+    });
 });
