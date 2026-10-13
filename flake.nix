@@ -364,6 +364,28 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 15: two requests on one thread never overlap, and run in arrival order$' $TMPDIR/tap && grep -q '^ok [0-9]* - two threads overlap$' $TMPDIR/tap && grep -q '^ok [0-9]* - a failed or timed-out run releases the thread, and the next request runs$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The trusted IFD path's argv (design oracle 4): only the effective tier opens IFD and the
+          # configured builders, and the untrusted argv is E1's byte for byte. No nix, no bwrap.
+          eval-argv =
+            pkgs.runCommand "genie-agent-eval-argv"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/eval
+                    ./tests/eval-argv.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/eval-argv.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process
           # and a fresh store over the same paths, and a thread id cannot leave its root.
           state =

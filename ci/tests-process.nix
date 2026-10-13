@@ -44,6 +44,8 @@
         for cell in \
           'request.trusted cannot raise a public tier' \
           'a plain flake evaluates' \
+          'IFD is refused under public' \
+          'IFD is admitted under trusted' \
           'impure env fails under pure-eval, trusted or not' \
           'impure file fails under pure-eval, trusted or not' \
           '<nixpkgs> fails under pure-eval' \

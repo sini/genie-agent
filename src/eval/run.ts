@@ -31,6 +31,9 @@ export interface RunOptions {
   timeoutMs?: number;
   // A local flake directory evaluated in place of github:<repo>/<rev>. Tests only.
   localFlake?: string;
+  // The remote builders a trusted eval builds its IFD on (design §5.3), in Nix's `builders` syntax:
+  // the launcher's deployment config, never the request. Unset, a trusted eval builds in its own store.
+  builders?: string;
 }
 
 export const TAIL_CHARS = 4096;
@@ -53,12 +56,14 @@ const which = (name: string): string => {
 // The model writes the request; nothing in it may reach Nix as anything but a github coordinate.
 const coordinate = /^[A-Za-z0-9._-]+$/;
 
-export function nixArgv(launch: Launch, flakeRef: string): string[] {
+// The effective tier is the only thing that opens the trusted path; a public eval's argv is E1's.
+export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string[] {
   const { request } = launch;
+  const trusted = effectiveTier(launch) === "trusted";
   const settings = {
     "pure-eval": "true",
-    "allow-import-from-derivation": effectiveTier(launch) === "trusted" ? "true" : "false",
-    builders: "",
+    "allow-import-from-derivation": trusted ? "true" : "false",
+    builders: trusted ? builders : "",
     substituters: "",
     "accept-flake-config": "false",
     // No indirect flake reference resolves: the global registry is a moving URL.
@@ -121,7 +126,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     "--bind", tmp, "/work",
     ...(options.localFlake ? ["--ro-bind", options.localFlake, "/src"] : []),
     nix,
-    ...nixArgv(launch, flakeRef),
+    ...nixArgv(launch, flakeRef, options.builders),
   ];
   try {
     return await new Promise<EvalResult>((resolve, reject) => {
