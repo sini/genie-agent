@@ -21,7 +21,7 @@ import {
   type K8sVolume,
   type K8sVolumeMount,
 } from "../src/eval/k8s.ts";
-import type { Launch } from "../src/eval/run.ts";
+import { effectiveTier, type Launch, type Tier } from "../src/eval/run.ts";
 
 const sampleLaunch: Launch = {
   request: {
@@ -1120,25 +1120,184 @@ test("mutant (oracle 23): builders appearing on untrusted launch fails property 
   );
 });
 
-test("effectiveTier (oracle 23): trusted sender with trusted: 'no' does not mount builder-key", () => {
-  const launch: Launch = {
-    request: { ...trustedLaunch.request, trusted: "no" },
-    sender_tier: "trusted",
+test("oracle 10: four-row truth table over (request, tier) gives (effective trust, builder key mounted) on k8sRunner submissions", async () => {
+  let submittedJob: K8sJob | undefined;
+  const server = await startStubK8sServer({
+    createJob: (job) => {
+      submittedJob = job;
+      return { status: 201, body: job };
+    },
+    getPodLog: () => ({ status: 200, body: '"hello"\n' }),
+  });
+  after(server.close);
+
+  const client = new K8sClient({ baseUrl: server.url, namespace: "genie-eval" });
+  const builderConfig: BuilderConfig = {
+    uri: "ssh-ng://nix-remote-build@uplink",
+    system: "x86_64-linux",
+    maxJobs: 4,
+    supportedFeatures: ["kvm"],
   };
-  const job = renderJob(launch, { name: "eval-t-untrusted-req", thread: "t1" });
-  assertUntrustedJobMounts(job, "t1");
-  assert.equal(job.metadata.labels?.["genie.agent/tier"], "trusted");
-  assert.ok(!job.spec.template.spec.volumes?.some((v) => v.secret !== undefined));
+  const runner = k8sRunner({
+    client,
+    thread: "t-oracle10",
+    builderKeySecretName: "prod-builder-key",
+    builderKeyMountPath: "/root/.ssh",
+    builderKeyFileName: "id_ed25519",
+    builder: builderConfig,
+  });
+
+  const cases: Array<{
+    trustedReq: "yes" | "no";
+    senderTier: Tier;
+    expectedEffective: Tier;
+    expectedKeyMounted: boolean;
+  }> = [
+    { trustedReq: "yes", senderTier: "trusted", expectedEffective: "trusted", expectedKeyMounted: true },
+    { trustedReq: "yes", senderTier: "public", expectedEffective: "public", expectedKeyMounted: false },
+    { trustedReq: "no", senderTier: "trusted", expectedEffective: "public", expectedKeyMounted: false },
+    { trustedReq: "no", senderTier: "public", expectedEffective: "public", expectedKeyMounted: false },
+  ];
+
+  for (const c of cases) {
+    submittedJob = undefined;
+    const launch: Launch = {
+      request: { repo: "owner/repo", rev: "main", attr: "pkg", trusted: c.trustedReq },
+      sender_tier: c.senderTier,
+    };
+
+    // 1. Pure effectiveTier assertion
+    assert.equal(
+      effectiveTier(launch),
+      c.expectedEffective,
+      `effectiveTier for (${c.trustedReq}, ${c.senderTier}) must be ${c.expectedEffective}`,
+    );
+
+    // 2. Verified on what k8sRunner submits to stub Kubernetes API
+    const result = await runner(launch);
+    assert.equal(result.exit, 0);
+    assert.ok(submittedJob, `k8sRunner must submit a Job for (${c.trustedReq}, ${c.senderTier})`);
+
+    const hasSecretVol = submittedJob.spec.template.spec.volumes?.some((v) => v.secret !== undefined) ?? false;
+    assert.equal(
+      hasSecretVol,
+      c.expectedKeyMounted,
+      `builder-key Secret volume for (${c.trustedReq}, ${c.senderTier}) must be ${c.expectedKeyMounted}`,
+    );
+
+    const hasSecretMount = submittedJob.spec.template.spec.containers[0]?.volumeMounts?.some(
+      (m) => m.name === "builder-key",
+    ) ?? false;
+    assert.equal(
+      hasSecretMount,
+      c.expectedKeyMounted,
+      `builder-key volumeMount for (${c.trustedReq}, ${c.senderTier}) must be ${c.expectedKeyMounted}`,
+    );
+
+    if (c.expectedEffective === "trusted") {
+      assertTrustedJobMounts(
+        submittedJob,
+        "t-oracle10",
+        "prod-builder-key",
+        "/root/.ssh",
+        "id_ed25519",
+        builderConfig,
+      );
+      assertJobProperties(submittedJob, "t-oracle10", "trusted");
+    } else {
+      assertUntrustedJobMounts(submittedJob, "t-oracle10");
+      const args = submittedJob.spec.template.spec.containers[0]?.args ?? [];
+      const ifdIdx = args.indexOf("allow-import-from-derivation");
+      assert.notEqual(ifdIdx, -1);
+      assert.equal(args[ifdIdx + 1], "false", "allow-import-from-derivation must be false on effective untrusted");
+      const buildersIdx = args.indexOf("builders");
+      assert.notEqual(buildersIdx, -1);
+      assert.equal(args[buildersIdx + 1], "", "builders must be empty on effective untrusted");
+
+      if (c.senderTier === "public") {
+        assertJobProperties(submittedJob, "t-oracle10", "public");
+      }
+    }
+  }
+
+  // A public thread with trusted:true gets an untrusted Job and no key
+  submittedJob = undefined;
+  const publicBoolLaunch = {
+    request: { repo: "owner/repo", rev: "main", attr: "pkg", trusted: true as any },
+    sender_tier: "public" as const,
+  };
+  const resultBool = await runner(publicBoolLaunch as any);
+  assert.equal(resultBool.exit, 0);
+  assert.ok(submittedJob, "k8sRunner must submit a Job for public thread with trusted:true");
+  assert.equal(
+    submittedJob.spec.template.spec.volumes?.some((v) => v.secret !== undefined),
+    false,
+    "public thread with trusted:true must not mount any Secret",
+  );
+  assertUntrustedJobMounts(submittedJob, "t-oracle10");
+  assertJobProperties(submittedJob, "t-oracle10", "public");
 });
 
-test("effectiveTier (oracle 23): public sender with trusted: 'yes' does not mount builder-key", () => {
-  const launch: Launch = {
-    request: { ...sampleLaunch.request, trusted: "yes" },
+test("mutant (oracle 10): effective = request.trusted without sender_tier fails oracle 10", () => {
+  const mutantEffectiveTier = (launch: Launch): Tier =>
+    launch.request.trusted === "yes" ? "trusted" : "public";
+
+  const publicLaunchWithTrustedReq: Launch = {
+    request: { repo: "owner/repo", rev: "main", attr: "pkg", trusted: "yes" },
     sender_tier: "public",
   };
-  const job = renderJob(launch, { name: "eval-t-public-sender", thread: "t1" });
-  assertUntrustedJobMounts(job, "t1");
-  assertJobProperties(job, "t1", "public");
+
+  // Oracle 10 requires effective trust to be public; mutant yields trusted:
+  assert.throws(
+    () => {
+      const eff = mutantEffectiveTier(publicLaunchWithTrustedReq);
+      assert.equal(eff, "public", "effective trust must be public for public sender");
+    },
+    /effective trust must be public for public sender/,
+    "mutant setting effective = request.trusted must fail RED on public sender with trusted:yes",
+  );
+
+  // If a runner submitted a Job with builder-key mounted because of the mutant:
+  const mutantJob = renderJob(publicLaunchWithTrustedReq, {
+    name: "eval-t-mutant",
+    thread: "t1",
+  });
+  const mutantSubmittedJob: K8sJob = {
+    ...mutantJob,
+    spec: {
+      ...mutantJob.spec,
+      template: {
+        ...mutantJob.spec.template,
+        spec: {
+          ...mutantJob.spec.template.spec,
+          volumes: [
+            ...(mutantJob.spec.template.spec.volumes ?? []),
+            { name: "builder-key", secret: { secretName: "builder-key", defaultMode: 0o400 } },
+          ],
+          containers: [
+            {
+              ...mutantJob.spec.template.spec.containers[0],
+              volumeMounts: [
+                ...(mutantJob.spec.template.spec.containers[0].volumeMounts ?? []),
+                { name: "builder-key", mountPath: "/root/.ssh", readOnly: true },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  assert.throws(
+    () => assertUntrustedJobMounts(mutantSubmittedJob, "t1"),
+    /untrusted Job must not mount any Secret/,
+    "oracle 10 must fail RED when public sender with trusted:yes mounts builder-key",
+  );
+  assert.throws(
+    () => assertJobProperties(mutantSubmittedJob, "t1", "public"),
+    /untrusted Job must not mount any Secret/,
+    "assertJobProperties must fail RED when public sender with trusted:yes mounts builder-key",
+  );
 });
 
 // Helper for stubbing the Kubernetes API over HTTP.

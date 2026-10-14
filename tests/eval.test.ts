@@ -214,6 +214,7 @@ test("the clamp: trusted only on request yes and a trusted sender tier", () => {
   assert.equal(effectiveTier({ request, sender_tier: "trusted" }), "trusted");
   assert.equal(effectiveTier({ request, sender_tier: "public" }), "public");
   assert.equal(effectiveTier({ request: { ...request, trusted: "no" }, sender_tier: "trusted" }), "public");
+  assert.equal(effectiveTier({ request: { ...request, trusted: "no" }, sender_tier: "public" }), "public");
 });
 
 test("the resolved CA bundle is a real file, not a symlink into /etc/static", () => {
