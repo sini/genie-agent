@@ -16,7 +16,7 @@ import process from "node:process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { Delivery, Dispatcher, SocketXmsg, type Inbound } from "../src/dispatcher/index.ts";
+import { Delivery, Dispatcher, SocketXmsg, type Inbound } from "../../src/dispatcher/index.ts";
 
 const XMSG_BIN = process.env.XMSG_BIN;
 if (!XMSG_BIN || !existsSync(XMSG_BIN)) {

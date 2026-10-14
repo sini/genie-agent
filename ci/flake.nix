@@ -142,7 +142,7 @@
                         fileset = nixpkgs.lib.fileset.unions [
                           ../package.json
                           ../src/dispatcher
-                          ../tests/xmsg-integration.test.ts
+                          ../tests/integration/xmsg.test.ts
                         ];
                       };
                     }
@@ -151,7 +151,7 @@
                       export XMSG_BIN="${xmsg.packages.${system}.default}/bin/xmsg"
                       export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
                       rc=0
-                      node --test --test-reporter=tap tests/xmsg-integration.test.ts > $TMPDIR/tap || rc=$?
+                      node --test --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
                       cat $TMPDIR/tap
                       [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 1: guard round trip relays verdict and refuses svc: prefix$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
