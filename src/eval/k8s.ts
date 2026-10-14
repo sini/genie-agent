@@ -124,6 +124,8 @@ export interface RenderJobOptions {
   scratchMountPath?: string;
   repoClaimName?: string;
   repoMountPath?: string;
+  builderKeySecretName?: string;
+  builderKeyMountPath?: string;
   builders?: string;
   localFlake?: string;
   labels?: Record<string, string>;
@@ -165,13 +167,18 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
       ? undefined
       : (options.runtimeClassName ?? "gvisor");
 
+  const isTrusted = effectiveTier(launch) === "trusted";
+
   const repoVolumeName = "repo";
   const storeVolumeName = "thread-store";
   const scratchVolumeName = "scratch";
+  const builderKeyVolumeName = "builder-key";
 
   const repoMountPath = options.repoMountPath ?? "/src";
   const storeMountPath = options.storeMountPath ?? "/thread-store";
   const scratchMountPath = options.scratchMountPath ?? "/tmp";
+  const builderKeyMountPath = options.builderKeyMountPath ?? "/root/.ssh";
+  const builderKeySecretName = options.builderKeySecretName ?? "builder-key";
 
   // Nix eval arguments:
   // --store <mountPath> points to a local chroot store under the mounted PVC so fetched inputs persist
@@ -186,8 +193,9 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     ...nixArgv(launch, flakeRef, options.builders),
   ];
 
-  // Untrusted Job mount set (plan E10, design §5.2 layer 4, §6):
-  // exactly the repo source (read-only), the thread store, and the scratch emptyDir, with no Secret.
+  // Job mount set (plan E10, E11, design §5.2 layer 4, §5.3, §6):
+  // untrusted: exactly repo source (read-only), thread store, and scratch emptyDir, with no Secret.
+  // trusted: those three plus the builder-key Secret, read-only.
   const volumes: K8sVolume[] = [
     {
       name: repoVolumeName,
@@ -208,6 +216,16 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
         sizeLimit: options.scratchLimit ?? "10Gi",
       },
     },
+    ...(isTrusted
+      ? [
+          {
+            name: builderKeyVolumeName,
+            secret: {
+              secretName: builderKeySecretName,
+            },
+          },
+        ]
+      : []),
   ];
 
   const volumeMounts: K8sVolumeMount[] = [
@@ -224,6 +242,15 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
       name: scratchVolumeName,
       mountPath: scratchMountPath,
     },
+    ...(isTrusted
+      ? [
+          {
+            name: builderKeyVolumeName,
+            mountPath: builderKeyMountPath,
+            readOnly: true,
+          },
+        ]
+      : []),
   ];
 
   const env = [

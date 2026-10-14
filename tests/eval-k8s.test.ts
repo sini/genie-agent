@@ -291,13 +291,141 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
     "thread-state volume must never mount in eval Job",
   );
 
-  // 9. Untrusted launch must not mount any Secret (gate R5, design §5.2 layer 4)
+  // 9. Mount set isolation by tier (gate R5, design §5.2 layer 4, §5.3)
   if (expectedTier === "public") {
     assert.ok(
       !volumes.some((v) => v.secret !== undefined),
       "untrusted Job must not mount any Secret",
     );
+  } else if (expectedTier === "trusted") {
+    const builderKeyVol = volumes.find((v) => v.name === "builder-key");
+    assert.ok(builderKeyVol, "builder-key volume must exist on trusted Job");
+    assert.ok(builderKeyVol.secret, "builder-key volume must be a Secret");
+    const builderKeyMount = mounts.find((m) => m.name === "builder-key");
+    assert.ok(builderKeyMount, "builder-key volumeMount must exist on trusted Job");
+    assert.equal(builderKeyMount.readOnly, true, "builder-key must be mounted read-only");
   }
+}
+
+// Oracle 23 (plan E11, design §5.3):
+// Trusted Job mount set: E10's three volumes (repo read-only, thread store, scratch emptyDir)
+// plus the builder-key Secret, read-only.
+// Invariant: thread-state volume never mounts.
+// Builders in argv must point at the mounted key path and appear only when trusted.
+export function assertTrustedJobMounts(
+  job: K8sJob,
+  expectedThread?: string,
+  expectedSecretName = "builder-key",
+  expectedMountPath = "/root/.ssh",
+): void {
+  const volumes = job.spec.template.spec.volumes ?? [];
+  const mounts = job.spec.template.spec.containers[0]?.volumeMounts ?? [];
+  const args = job.spec.template.spec.containers[0]?.args ?? [];
+
+  // Invariant 1: thread-state volume never mounts in any eval Job (design §5.2 layer 4, §6)
+  const hasThreadStateVol = volumes.some(
+    (v) =>
+      v.name.includes("thread-state") ||
+      v.persistentVolumeClaim?.claimName.includes("thread-state"),
+  );
+  const hasThreadStateMount = mounts.some(
+    (m) =>
+      m.name.includes("thread-state") ||
+      m.mountPath.includes("state"),
+  );
+  assert.ok(
+    !hasThreadStateVol && !hasThreadStateMount,
+    "thread-state volume must never mount in eval Job",
+  );
+
+  // Invariant 2: Exactly four volumes and four volumeMounts (repo, thread-store, scratch, builder-key)
+  assert.equal(
+    volumes.length,
+    4,
+    `trusted Job must have exactly 4 volumes (repo, thread-store, scratch, builder-key), found ${volumes.length}`,
+  );
+  assert.equal(
+    mounts.length,
+    4,
+    `trusted Job must have exactly 4 volumeMounts, found ${mounts.length}`,
+  );
+
+  // Invariant 3: Thread store volume (PVC) mounted at /thread-store, not /nix/store
+  const storeVol = volumes.find((v) => v.name === "thread-store");
+  assert.ok(storeVol, "thread-store volume must exist");
+  assert.ok(storeVol.persistentVolumeClaim, "thread-store volume must be a PVC");
+  if (expectedThread) {
+    assert.equal(
+      storeVol.persistentVolumeClaim?.claimName,
+      `thread-store-${expectedThread}`,
+      "thread-store PVC claimName must match thread",
+    );
+  }
+  const storeMount = mounts.find((m) => m.name === "thread-store");
+  assert.ok(storeMount, "thread-store volumeMount must exist");
+  assert.equal(storeMount.mountPath, "/thread-store", "thread-store must be mounted at /thread-store");
+  assert.ok(!mounts.some((m) => m.mountPath === "/nix/store"), "must not mount volume at /nix/store");
+
+  // Invariant 4: Scratch emptyDir volume mounted at /tmp
+  const scratchVol = volumes.find((v) => v.name === "scratch");
+  assert.ok(scratchVol, "scratch volume must exist");
+  assert.ok(scratchVol.emptyDir, "scratch volume must be an emptyDir");
+  const scratchMount = mounts.find((m) => m.name === "scratch");
+  assert.ok(scratchMount, "scratch volumeMount must exist");
+  assert.equal(scratchMount.mountPath, "/tmp", "scratch must be mounted at /tmp");
+
+  // Invariant 5: Repo source volume exists and is mounted read-only at /src
+  const repoVol = volumes.find((v) => v.name === "repo");
+  assert.ok(repoVol, "repo source volume must exist");
+  assert.ok(repoVol.persistentVolumeClaim, "repo source volume must be a PVC");
+  assert.equal(repoVol.persistentVolumeClaim?.readOnly, true, "repo source must be mounted read-only");
+  if (expectedThread) {
+    assert.equal(
+      repoVol.persistentVolumeClaim?.claimName,
+      `repo-${expectedThread}`,
+      "repo PVC claimName must match thread",
+    );
+  }
+  const repoMount = mounts.find((m) => m.name === "repo");
+  assert.ok(repoMount, "repo source volumeMount must exist");
+  assert.equal(repoMount.name, repoVol.name, "repo mount name must match repo volume name");
+  assert.equal(repoMount.mountPath, "/src", "repo source must be mounted at /src");
+  assert.equal(repoMount.readOnly, true, "repo source must be mounted read-only");
+
+  // Invariant 6: Builder-key Secret volume exists, is a Secret with expected name, and is mounted read-only
+  const builderKeyVol = volumes.find((v) => v.name === "builder-key");
+  assert.ok(builderKeyVol, "builder-key volume must exist on trusted Job");
+  assert.ok(builderKeyVol.secret, "builder-key volume must be a Secret");
+  assert.equal(
+    builderKeyVol.secret.secretName,
+    expectedSecretName,
+    `builder-key Secret name must be ${expectedSecretName}`,
+  );
+  const builderKeyMount = mounts.find((m) => m.name === "builder-key");
+  assert.ok(builderKeyMount, "builder-key volumeMount must exist on trusted Job");
+  assert.equal(
+    builderKeyMount.mountPath,
+    expectedMountPath,
+    `builder-key mountPath must be ${expectedMountPath}`,
+  );
+  assert.equal(builderKeyMount.readOnly, true, "builder-key must be mounted read-only");
+
+  // Invariant 7: argv has allow-import-from-derivation = true and builders pointing at the mounted key path
+  const ifdIdx = args.indexOf("allow-import-from-derivation");
+  assert.notEqual(ifdIdx, -1, "argv must configure allow-import-from-derivation");
+  assert.equal(args[ifdIdx + 1], "true", "allow-import-from-derivation must be true for trusted launch");
+
+  const buildersIdx = args.indexOf("builders");
+  assert.notEqual(buildersIdx, -1, "argv must configure builders");
+  const buildersValue = args[buildersIdx + 1];
+  assert.ok(
+    buildersValue.length > 0,
+    "builders must not be empty on trusted launch",
+  );
+  assert.ok(
+    buildersValue.includes(expectedMountPath),
+    `builders in argv must point at the mounted key path (${expectedMountPath}), got: ${buildersValue}`,
+  );
 }
 
 // Oracle 22 (plan E10, design §5.2 layer 4, §6):
@@ -394,13 +522,14 @@ test("oracle: snapshot plus property checks on the rendered Job spec", () => {
 });
 
 test("property check: trusted launch enables IFD and builders flag in Job spec", () => {
-  const builders = "ssh-ng://nix-remote-build@uplink x86_64-linux";
+  const builders = "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519";
   const rendered = renderJob(trustedLaunch, {
     name: "eval-t2-trusted",
     thread: "t2",
     builders,
   });
   assertJobProperties(rendered, "t2", "trusted");
+  assertTrustedJobMounts(rendered, "t2", "builder-key", "/root/.ssh");
   const args = rendered.spec.template.spec.containers[0].args ?? [];
   const ifdIdx = args.indexOf("allow-import-from-derivation");
   assert.equal(args[ifdIdx + 1], "true");
@@ -697,6 +826,189 @@ test("mutant (oracle 22): unexpected fourth volume fails property check", () => 
     /untrusted Job must have exactly 3 volumes/,
     "property check must fail RED when unapproved extra volume is present",
   );
+});
+
+test("oracle 23: k8sRunner submits trusted Job with repo (read-only), thread store, scratch, and builder-key Secret wired into builders", async () => {
+  let submittedJob: K8sJob | undefined;
+  const server = await startStubK8sServer({
+    createJob: (job) => {
+      submittedJob = job;
+      return { status: 201, body: job };
+    },
+    getPodLog: () => ({ status: 200, body: '"trusted-hello"\n' }),
+  });
+  after(server.close);
+
+  const client = new K8sClient({ baseUrl: server.url, namespace: "genie-eval" });
+  const runner = k8sRunner({
+    client,
+    thread: "t-trusted",
+    builderKeySecretName: "prod-builder-key",
+    builderKeyMountPath: "/root/.ssh",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519",
+  });
+  const result = await runner(trustedLaunch);
+
+  assert.equal(result.exit, 0);
+  assert.ok(submittedJob, "k8sRunner must submit a Job");
+  assertTrustedJobMounts(submittedJob, "t-trusted", "prod-builder-key", "/root/.ssh");
+  assertJobProperties(submittedJob, "t-trusted", "trusted");
+});
+
+test("mutant (oracle 23): omitting builder-key on trusted launch fails property check", () => {
+  const job = renderJob(trustedLaunch, {
+    name: "eval-t-trusted",
+    thread: "t-trusted",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519",
+  });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: (job.spec.template.spec.volumes ?? []).filter((v) => v.name !== "builder-key"),
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: (job.spec.template.spec.containers[0].volumeMounts ?? []).filter(
+                (m) => m.name !== "builder-key",
+              ),
+            },
+          ],
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => assertTrustedJobMounts(mutantJob, "t-trusted"),
+    /trusted Job must have exactly 4 volumes/,
+    "property check must fail RED when builder-key is omitted on trusted launch",
+  );
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t-trusted", "trusted"),
+    /builder-key volume must exist on trusted Job/,
+    "assertJobProperties must fail RED when builder-key is omitted on trusted launch",
+  );
+});
+
+test("mutant (oracle 23): mounting builder-key on untrusted launch makes oracle 22 go RED", () => {
+  const job = renderJob(sampleLaunch, {
+    name: "eval-t1-untrusted",
+    thread: "t1",
+  });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: [
+            ...(job.spec.template.spec.volumes ?? []),
+            {
+              name: "builder-key",
+              secret: { secretName: "builder-key" },
+            },
+          ],
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: [
+                ...(job.spec.template.spec.containers[0].volumeMounts ?? []),
+                {
+                  name: "builder-key",
+                  mountPath: "/root/.ssh",
+                  readOnly: true,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => assertUntrustedJobMounts(mutantJob),
+    /untrusted Job must not mount any Secret/,
+    "oracle 22 must fail RED when builder-key is mounted on untrusted launch",
+  );
+});
+
+test("mutant (oracle 23): builders in argv missing mounted key path fails property check", () => {
+  const job = renderJob(trustedLaunch, {
+    name: "eval-t-trusted",
+    thread: "t-trusted",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux",
+  });
+  assert.throws(
+    () => assertTrustedJobMounts(job, "t-trusted", "builder-key", "/root/.ssh"),
+    /builders in argv must point at the mounted key path/,
+    "property check must fail RED when builders does not point at mounted key path",
+  );
+});
+
+test("mutant (oracle 23): builders appearing on untrusted launch fails property check", () => {
+  const job = renderJob(sampleLaunch, {
+    name: "eval-t1-untrusted",
+    thread: "t1",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519",
+  });
+  // On untrusted launch, builders is suppressed in argv:
+  const args = job.spec.template.spec.containers[0].args ?? [];
+  const buildersIdx = args.indexOf("builders");
+  assert.equal(args[buildersIdx + 1], "", "untrusted launch must configure no builders");
+
+  // Mutant: simulate leak where builders appears in argv on untrusted launch
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              args: job.spec.template.spec.containers[0].args?.map((arg, idx) =>
+                idx === buildersIdx + 1 ? "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519" : arg,
+              ),
+            },
+          ],
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t1", "public"),
+    /untrusted launch must configure no builders/,
+    "assertJobProperties must fail RED when builders appears on untrusted launch",
+  );
+});
+
+test("effectiveTier (oracle 23): trusted sender with trusted: 'no' does not mount builder-key", () => {
+  const launch: Launch = {
+    request: { ...trustedLaunch.request, trusted: "no" },
+    sender_tier: "trusted",
+  };
+  const job = renderJob(launch, { name: "eval-t-untrusted-req", thread: "t1" });
+  assertUntrustedJobMounts(job, "t1");
+  assert.equal(job.metadata.labels?.["genie.agent/tier"], "trusted");
+  assert.ok(!job.spec.template.spec.volumes?.some((v) => v.secret !== undefined));
+});
+
+test("effectiveTier (oracle 23): public sender with trusted: 'yes' does not mount builder-key", () => {
+  const launch: Launch = {
+    request: { ...sampleLaunch.request, trusted: "yes" },
+    sender_tier: "public",
+  };
+  const job = renderJob(launch, { name: "eval-t-public-sender", thread: "t1" });
+  assertUntrustedJobMounts(job, "t1");
+  assertJobProperties(job, "t1", "public");
 });
 
 // Helper for stubbing the Kubernetes API over HTTP.
