@@ -415,6 +415,29 @@
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 15: two requests on one thread never overlap, and run in arrival order$' $TMPDIR/tap && grep -q '^ok [0-9]* - two threads overlap$' $TMPDIR/tap && grep -q '^ok [0-9]* - a failed or timed-out run releases the thread, and the next request runs$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
+          # The eval-result cache (plan E6, design §6): keyed (repo, rev, attr, flags). A second identical
+          # request runs 0 evals. Mutant: cache bypassed.
+          eval-cache =
+            pkgs.runCommand "genie-agent-eval-cache"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/eval
+                    ./src/state
+                    ./tests/eval-cache.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/eval-cache.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: eval-result cache keyed (repo, rev, attr, flags) runs 0 evals on second identical request$' $TMPDIR/tap && grep -q '^ok [0-9]* - mutant (oracle E6): caching every result makes the timeout cell go RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The trusted IFD path's argv (design oracle 4): only the effective tier opens IFD and the
           # configured builders, and the untrusted argv is E1's byte for byte. No nix, no bwrap.
           eval-argv =

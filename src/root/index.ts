@@ -15,6 +15,7 @@ import { pr } from "../broker/pr.ts";
 import { escalationGuard } from "../escalation/guard.ts";
 import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts";
 import { router } from "../escalation/route.ts";
+import { withCache } from "../eval/cache.ts";
 import { perThread, type Runner } from "../eval/lock.ts";
 import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
@@ -103,7 +104,7 @@ export function main(configFile: string, io: Io, run?: Runner) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
   const archive = archiver(store, c.s3);
-  const evalIn = perThread(run ?? ((l) => runEval(l, c.eval)));
+  const evalIn = withCache(store, perThread(run ?? ((l) => runEval(l, c.eval))));
   const screen = webScreen(io.guard);
   const { base, model, keyFile: outKey } = c.broker.guardOut;
   const guardOut = { base, model, system: readFileSync(new URL("prompts/guard-out.md", repo).pathname, "utf8"), apiKey: outKey && secret(outKey) };
