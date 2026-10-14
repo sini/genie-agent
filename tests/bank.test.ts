@@ -211,56 +211,5 @@ test("mutant 4: cross-contamination of seed entry in den-law triggers RED", asyn
   }
 });
 
-// Live Oracle against the actual hindsight cluster endpoint if available
-test("live gating oracle H1: recall from genie returns seed entry and 0 from den-law, positive control hits den-law", async () => {
-  // In a hermetic Nix sandbox without network, skip the live arm immediately
-  if (process.env.NIX_BUILD_TOP) {
-    return;
-  }
-
-  const liveEndpoint = DEFAULT_HINDSIGHT_ENDPOINT;
-  let reachable = false;
-  try {
-    const ping = await fetch(`${liveEndpoint}/health`, { signal: AbortSignal.timeout(2000) });
-    reachable = ping.ok;
-  } catch {
-    reachable = false;
-  }
-
-  if (!reachable) {
-    console.log("Hindsight cluster endpoint unreachable; skipping live arm (hermetic stub tests passed)");
-    return;
-  }
-
-  const genie = new HindsightBankClient(liveEndpoint, GENIE_BANK_ID);
-  const denLaw = new HindsightBankClient(liveEndpoint, DEN_LAW_BANK_ID);
-
-  // Verify bank config
-  const cfg = await genie.getConfig();
-  assert.equal(cfg.bank_id, "genie");
-  assert.equal(cfg.overrides.retain_extraction_mode, "verbatim");
-
-  // Arm 1: eval-never-build
-  const res1 = await verifyBankIsolation(
-    genie,
-    denLaw,
-    "genie evaluates a configuration in a sandbox and never builds it",
-    "eval-never-build",
-  );
-  assert.equal(res1.seedFound, true);
-  assert.equal(res1.seedDocumentId, "eval-never-build");
-  assert.equal(res1.denLawHitsInGenie, 0);
-  assert.ok(res1.positiveControlHits > 0, `den-law positive control hits: ${res1.positiveControlHits}`);
-
-  // Arm 2: den-docs
-  const res2 = await verifyBankIsolation(
-    genie,
-    denLaw,
-    "den documentation and runnable templates",
-    "den-docs",
-  );
-  assert.equal(res2.seedFound, true);
-  assert.equal(res2.seedDocumentId, "den-docs");
-  assert.equal(res2.denLawHitsInGenie, 0);
-  assert.ok(res2.positiveControlHits > 0, `den-law positive control hits: ${res2.positiveControlHits}`);
-});
+// Hermetic test suite ends here. Live cluster oracle is moved to tests/bank-live-oracle.ts
+// which fails explicitly when unreachable rather than skipping silently.
