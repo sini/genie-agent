@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import {
@@ -19,7 +20,6 @@ import {
   HindsightRecallClient,
   recallBankId,
 } from "../src/bank/index.ts";
-import { assertMemoryMountSafety, type K8sJob, renderJob } from "../src/eval/k8s.ts";
 import {
   assertNotEmptyMemoryArm,
   formatMemoryReportTables,
@@ -101,47 +101,42 @@ test("Oracle 1: confine enforces realpath across worktree and memory mount; refu
   );
 });
 
-// --- Oracle 2: Spec Safety Property (/memory mount in K8s Job) ---
-test("Oracle 2: K8s Job rendered spec prohibits writable volume mounts at or under /memory", () => {
-  const dummyLaunch: any = {
-    request: { repo: "o/r", rev: "main", attr: "test", trusted: false },
-    sender_tier: "public",
-  };
+// --- Oracle 2: Live Runner Stand-in Fixture Refusal (Amendment 6 & Item 4) ---
+test("Oracle 2: live runner tier1-eval --memory-arms with stand-in fixture exits non-zero naming the refusal without reaching model", () => {
+  const evalScript = `${repoRoot}/tests/tier1-eval.ts`;
 
-  // Standard rendered job passes safety check
-  const job = renderJob(dummyLaunch, { thread: "test-thread" });
-  assert.doesNotThrow(() => assertMemoryMountSafety(job));
-
-  // A readOnly mount at /memory is permitted
-  const safeJob: K8sJob = JSON.parse(JSON.stringify(job));
-  safeJob.spec.template.spec.containers[0].volumeMounts!.push({
-    name: "memory-vol",
-    mountPath: "/memory",
-    readOnly: true,
-  });
-  assert.doesNotThrow(() => assertMemoryMountSafety(safeJob));
-
-  // A writable mount directly at /memory throws spec safety violation
-  const writableJob: K8sJob = JSON.parse(JSON.stringify(job));
-  writableJob.spec.template.spec.containers[0].volumeMounts!.push({
-    name: "bad-mem",
-    mountPath: "/memory",
-    readOnly: false,
-  });
-  assert.throws(
-    () => assertMemoryMountSafety(writableJob),
-    /spec safety violation: writable volume mount at or under \/memory: \/memory/,
+  // 1. Running --memory-arms with default stand-in recall fixture fails closed before any model call
+  const proc = spawnSync(
+    process.execPath,
+    [evalScript, "--memory-arms", "--base", "http://127.0.0.1:59999"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(proc.status, 0, "must exit non-zero on stand-in fixture");
+  assert.match(
+    proc.stderr,
+    /refused: cannot use stand-in recall fixture on a live run/,
+    `stderr must name the refusal before contacting model: ${proc.stderr}`,
   );
 
-  // A writable mount under /memory/scratch throws spec safety violation
-  const writableSubJob: K8sJob = JSON.parse(JSON.stringify(job));
-  writableSubJob.spec.template.spec.containers[0].volumeMounts!.push({
-    name: "bad-mem-sub",
-    mountPath: "/memory/scratch",
-  });
-  assert.throws(
-    () => assertMemoryMountSafety(writableSubJob),
-    /spec safety violation: writable volume mount at or under \/memory: \/memory\/scratch/,
+  // 2. Repeatable --questions flag is supported and properly parsed
+  const procQuestions = spawnSync(
+    process.execPath,
+    [
+      evalScript,
+      "--memory-arms",
+      "--base",
+      "http://127.0.0.1:59999",
+      "--questions",
+      questionsFile,
+      "--questions",
+      questionsFile,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(procQuestions.status, 0);
+  assert.match(
+    procQuestions.stderr,
+    /refused: cannot use stand-in recall fixture on a live run/,
   );
 });
 

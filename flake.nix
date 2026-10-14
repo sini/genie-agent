@@ -163,6 +163,54 @@
               license = nixpkgs.lib.licenses.mit;
             };
           };
+
+          # I12 will copy this output to /memory in the tier-1 image.
+          operating-memory = pkgs.stdenvNoCC.mkDerivation {
+            pname = "genie-operating-memory";
+            version = "0.1.0";
+            src = nixpkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = ./operating-memory;
+            };
+            nativeBuildInputs = [ pkgs.python3 ];
+            buildPhase = ''
+              if [ ! -f operating-memory/MEMORY.md ]; then
+                echo "Error: MEMORY.md is missing from operating-memory" >&2
+                exit 1
+              fi
+
+              python3 -c '
+              import os, re, sys
+              mem_path = "operating-memory/MEMORY.md"
+              with open(mem_path) as f:
+                  content = f.read()
+
+              links = re.findall(r"\[.*?\]\((.*?)\)", content)
+              missing = []
+              for link in links:
+                  target = link.split("#")[0].strip()
+                  if not target or target.startswith("http://") or target.startswith("https://"):
+                      continue
+                  full_path = os.path.join("operating-memory", target)
+                  if not os.path.exists(full_path):
+                      missing.append(f"{target} (from {link})")
+
+              if missing:
+                  print("Error: MEMORY.md link target does not exist:", file=sys.stderr)
+                  for m in missing:
+                      print(f"  - {m}", file=sys.stderr)
+                  sys.exit(1)
+              '
+            '';
+            installPhase = ''
+              mkdir -p $out
+              cp -r operating-memory/* $out/
+            '';
+            meta = {
+              description = "Pinned operating memory corpus for tier 1";
+              license = nixpkgs.lib.licenses.mit;
+            };
+          };
         }
         // onLinux pkgs {
           genie-dispatcher = genieDispatcher pkgs;

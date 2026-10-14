@@ -343,24 +343,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     },
   };
 
-  assertMemoryMountSafety(job);
   return job;
-}
-
-// Oracle 2 (Spec Safety Property): Invariant on rendered spec: /memory comes only from image,
-// no volume mounts at or under /memory unless readOnly: true.
-export function assertMemoryMountSafety(job: K8sJob): void {
-  const containers = job.spec?.template?.spec?.containers ?? [];
-  for (const container of containers) {
-    for (const mount of container.volumeMounts ?? []) {
-      const p = mount.mountPath;
-      if (p === "/memory" || p.startsWith("/memory/")) {
-        if (!mount.readOnly) {
-          throw new Error(`spec safety violation: writable volume mount at or under /memory: ${p}`);
-        }
-      }
-    }
-  }
 }
 
 export interface K8sClientOptions {

@@ -46,6 +46,8 @@
               # src/ is left to tsc.
               treefmt.programs.jsonfmt.enable = true;
               checks.package = genie-agent.packages.${system}.default;
+              # Pinned operating-memory package ensures MEMORY.md and all link targets exist.
+              checks.operating-memory = genie-agent.packages.${system}.operating-memory;
               # Every fixture under schemas/fixtures validates or fails as its directory names.
               checks.schemas = genie-agent.checks.${system}.schemas;
               # Every credential shape is redacted and named; clean text passes byte-identical.

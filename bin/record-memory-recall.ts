@@ -8,6 +8,7 @@
 //   bin/record-memory-recall.ts [--questions <path>] [--out <path>] [--endpoint <url>]
 
 import { readFileSync, writeFileSync } from "node:fs";
+import process from "node:process";
 import {
   DEFAULT_HINDSIGHT_ENDPOINT,
   GENIE_MEMORY_BANK_ID,
@@ -52,10 +53,15 @@ export interface RecallFixtureRecord {
     {
       query: string;
       results: Array<{
-        document_id?: string;
+        document_id?: string | null;
         text?: string;
         tags?: string[];
-        score?: number;
+        scores?: {
+          final?: number;
+          reranker?: number;
+          semantic?: number;
+          keyword?: number;
+        };
       }>;
     }
   >;
@@ -93,7 +99,7 @@ async function main() {
   };
 
   for (const q of questions) {
-    process.stdout.write(`Querying: [${q.id}] ${q.question.slice(0, 50)}... `);
+    process.stderr.write(`Querying: [${q.id}] ${q.question.slice(0, 50)}... `);
     try {
       const res = await client.recall({ query: q.question });
       output.fixtures[q.id] = {
@@ -102,7 +108,7 @@ async function main() {
           document_id: r.document_id,
           text: r.text,
           tags: r.tags,
-          score: r.score,
+          scores: r.scores,
         })),
       };
       console.log(`OK (${res.results?.length ?? 0} results)`);
