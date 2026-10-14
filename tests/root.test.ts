@@ -59,14 +59,20 @@ const s3 = createServer((req, res) => {
 });
 await new Promise<void>((r) => s3.listen(0, "127.0.0.1", r));
 
-// guard-out on ninfer: blocks any review holding BLOCK, passes the rest, and keeps every request body.
+// guard-out on ninfer: blocks any review whose answer holds BLOCK, passes the rest, and keeps every request body.
 const reviews: string[] = [];
 const ninfer = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
     reviews.push(body);
-    const content = JSON.stringify({ verdict: body.includes("BLOCK") ? "block" : "pass", reason: body.includes("BLOCK") ? "leak" : "clean" });
+    let block = body.includes("BLOCK");
+    try {
+      const msg = JSON.parse(body).messages?.at(-1)?.content ?? "";
+      const match = msg.match(/"answer_under_review":\s*([\s\S]*?)\n\}/);
+      if (match) block = match[1].includes("BLOCK");
+    } catch {}
+    const content = JSON.stringify({ verdict: block ? "block" : "pass", reason: block ? "leak" : "clean" });
     res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }));
   });
 });
@@ -463,3 +469,86 @@ test("oracle: main launches real pi against a stub model", async () => {
     await realRoot.stop();
   }
 });
+
+test("oracle: blocked expert reply marker is absent from later public package, draft and replay (oracle 25)", async () => {
+  const thread = "c8_oracle25";
+  const MARKER = "SECRET_MARKER_98765";
+  const blockedReply = `BLOCK: this contains ${MARKER} that must never leak`;
+
+  // 1. Alice (trusted) asks a question. Thread tier is trusted.
+  await inbound({ thread, envelope: envelope(ALICE, "trusted question from alice") });
+  assert.equal(root.store.read(thread)?.sender_tier, "trusted");
+
+  // 2. Expert reply arrives with BLOCK and MARKER.
+  // Pod round trip (outbound through ninfer stub) blocks it.
+  const postsBefore = posts.length;
+  await inbound({ thread, expert: blockedReply });
+  // Posts the withheld notice, not the expert text.
+  assert.deepEqual(posts.at(-1), [thread, WITHHELD]);
+  assert.ok(!JSON.stringify(posts.slice(postsBefore)).includes(MARKER));
+
+  // 3. Bob (public) contributes to the thread; tier falls from trusted to public.
+  await inbound({ thread, envelope: envelope(BOB, "public follow-up from bob") });
+  assert.equal(root.store.read(thread)?.sender_tier, "public");
+
+  // 4. Tier 1 replies with draft(true), escalating the thread to @public.
+  const sendsBefore = sends.length;
+  await host(thread, "reply", draft(true));
+  assert.equal(sends.length, sendsBefore + 1);
+  const send = sends.at(-1)!;
+  assert.equal(send.to, EXPERTS.public);
+  const pkg = JSON.parse(send.text);
+
+  // Assert: marker is absent from package and draft.
+  assert.ok(!pkg.cleaned_question.includes(MARKER), `package cleaned_question contains marker: ${pkg.cleaned_question}`);
+  assert.ok(!JSON.stringify(pkg).includes(MARKER), `package contains marker: ${JSON.stringify(pkg)}`);
+  const lastPost = posts.at(-1);
+  assert.ok(!JSON.stringify(lastPost).includes(MARKER), `draft post contains marker: ${JSON.stringify(lastPost)}`);
+
+  // 5. Thread is closed and collected by GC; archived to Garage S3.
+  await root.supervisor.teardown(thread);
+  const oldActive = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
+  root.store.write({ ...root.store.read(thread)!, last_active: oldActive });
+  await root.gc.sweep();
+  assert.equal(existsSync(`${root.store.stateRoot}/${thread}`), false);
+
+  // Archive in S3 has tier label only, no marker.
+  const archiveKey = `/genie-transcripts/tier1/public/${thread}.json`;
+  const archived = s3Storage.get(archiveKey);
+  assert.ok(archived !== undefined, `expected archive at ${archiveKey}`);
+  const s3Obj = JSON.parse(archived);
+  assert.equal(s3Obj.tier, "public");
+  assert.deepEqual(s3Obj.blocked_expert_replies, [{ tier: "trusted" }]);
+  assert.ok(!JSON.stringify(s3Obj).includes(MARKER), `archived object contains marker: ${JSON.stringify(s3Obj)}`);
+
+  // 6. Resuming from S3 archive (P5 replayResume): prompts must not contain marker.
+  await inbound({ thread, envelope: envelope(BOB, "resumed question after gc") });
+  const pid = root.supervisor.pid(thread);
+  assert.ok(pid !== undefined, "pi was launched for resumed thread");
+  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.type === "prompt")
+    .map((r) => r.message);
+  assert.ok(!threadPrompts.some((p) => p.includes(MARKER)), `replayed prompts contain marker: ${JSON.stringify(threadPrompts)}`);
+});
+
+test("oracle: an allowed expert reply is posted and delivered to pi", async () => {
+  const thread = "c8_allowed";
+  await inbound({ thread, envelope: envelope(ALICE, "trusted question") });
+  const postsBefore = posts.length;
+  await inbound({ thread, expert: "clean helpful expert advice" });
+  assert.deepEqual(posts.at(-1), [thread, "clean helpful expert advice"]);
+  const pid = root.supervisor.pid(thread);
+  assert.ok(pid !== undefined);
+  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.type === "prompt")
+    .map((r) => r.message);
+  assert.ok(threadPrompts.includes("clean helpful expert advice"));
+});
+
+

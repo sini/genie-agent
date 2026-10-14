@@ -161,6 +161,21 @@ test("oracle: the key carries the thread's tier, and the two tiers never share a
   }
 });
 
+test("oracle: a blocked expert reply is archived with a tier label only and none of its text (plan C8)", async () => {
+  const s3 = await s3stub();
+  try {
+    const id = "$blocked1";
+    thread(id, "trusted");
+    store.addBlockedExpertReply(id, "trusted");
+    await archiver(store, config(s3.endpoint))(id);
+    const [req] = s3.requests;
+    const obj = JSON.parse(req.body);
+    assert.deepEqual(obj.blocked_expert_replies, [{ tier: "trusted" }]);
+  } finally {
+    s3.close();
+  }
+});
+
 test("oracle: P3's collection of an expired thread, with this archiver, is exactly one PUT and then the thread is gone", async () => {
   const s3 = await s3stub();
   try {

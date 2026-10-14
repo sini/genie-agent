@@ -14,6 +14,10 @@ export interface Tombstone {
   tier: Tier;
 }
 
+export interface BlockedExpertReply {
+  tier: Tier;
+}
+
 // One record of schemas/thread-state.json.
 export interface ThreadState {
   thread_id: string;
@@ -172,6 +176,17 @@ export class ThreadStateStore {
   clearTombstone(thread: string): void {
     const f = this.tombstonePath(thread);
     if (existsSync(f)) rmSync(f, { recursive: false, force: true });
+  }
+
+  // Blocked expert replies (plan C8, design §4 step 6, §5.8): dropped from context and transcript,
+  // recorded with a tier label only for the permanent archive (P4).
+  blockedExpertReplies(thread: string): BlockedExpertReply[] {
+    return readJson<BlockedExpertReply[]>(`${this.dir(thread)}/blocked_expert_replies.json`) ?? [];
+  }
+
+  addBlockedExpertReply(thread: string, tier: Tier): void {
+    const current = this.blockedExpertReplies(thread);
+    writeAtomic(this.dir(thread), "blocked_expert_replies.json", JSON.stringify([...current, { tier }]));
   }
 }
 

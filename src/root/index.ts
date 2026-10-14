@@ -4,7 +4,8 @@
 // Host calls run here, on the supervisor's side: eval on the per-thread lock at the thread's stored
 // tier, clone on the mirror, the web Screen, escalation (C5, routed by C6, guarded by S5), and
 // proposals through the broker. A thread is archived (P4) when it closes and again when it is
-// collected (P3).
+// collected (P3). An expert reply that guard-out blocks is dropped from tier 1's context and the
+// transcript, and archived with a tier label only (C8, design §4 step 6, §5.8).
 //
 // xmsg and Matrix enter only through the seams below; GA builds their real adapters.
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,9 +32,14 @@ import type { Config as Tier1Config } from "../tier1/index.ts";
 import { tier1Launch } from "../tier1/launch.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 
-// One inbound item from matrix-xmsg, on the thread it belongs to: the raw envelope exactly as
-// matrix-xmsg sends it, `!trust` (C7's TrustControl), or a ✅ accept / 🔍 deeper reaction.
-export type Inbound = { thread: string } & ({ envelope: string } | TrustControl | { control: "accept" | "deeper" });
+// One inbound item from matrix-xmsg or xmsg, on the thread it belongs to: the raw envelope exactly as
+// matrix-xmsg sends it, `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, or an expert reply.
+export type Inbound = { thread: string } & (
+  | { envelope: string }
+  | TrustControl
+  | { control: "accept" | "deeper" }
+  | { expert: string }
+);
 
 export interface Intake {
   // The next batch of inbound items, in arrival order; null once the intake has closed.
@@ -122,7 +128,16 @@ export function main(configFile: string, io: Io, run?: Runner) {
   };
   const act = byKind({ gist: gist(githubApi), pr: pr(link, githubApi) });
 
-  const escalation = new Escalation({ store, xmsg: io.xmsg, guard: escalationGuard(io.guard), route: router(c.experts), context });
+  const escalation = new Escalation({
+    store,
+    xmsg: io.xmsg,
+    guard: escalationGuard(io.guard),
+    route: router(c.experts),
+    context: (t) => {
+      const { cleaned_question, eval_transcript } = context(t);
+      return { cleaned_question, eval_transcript };
+    },
+  });
 
   // pi reads its model from its agent dir; the key goes into a file there, never argv or env.
   const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
@@ -189,7 +204,8 @@ export function main(configFile: string, io: Io, run?: Runner) {
   const gc = new Gc({ store, mirror: c.mirror, archive });
 
   // C7 reads the raw envelope before guard-in; a reject is answered with a refusal and never
-  // reaches pi.
+  // reaches pi. An expert reply is judged by guard-out (C8); a blocked reply is dropped from
+  // context and transcript, posting WITHHELD and recorded with a tier label only for the archive (P4).
   const handle = async (i: Inbound): Promise<void> => {
     if ("envelope" in i) {
       observe(store, i.thread, parseEnvelope(i.envelope));
@@ -202,6 +218,16 @@ export function main(configFile: string, io: Io, run?: Runner) {
       }
       setContext(i.thread, { cleaned_question: text });
       await lifecycle.message(i.thread, text);
+    } else if ("expert" in i) {
+      const q = context(i.thread).cleaned_question;
+      const out = await outbound(q, (scrub) => scrub(i.expert), guardOut);
+      if (!("value" in out)) {
+        console.error(`thread ${i.thread}: expert reply withheld: ${out.reason}`);
+        store.addBlockedExpertReply(i.thread, store.read(i.thread)?.sender_tier ?? "public");
+        return io.post.post(i.thread, WITHHELD);
+      }
+      await io.post.post(i.thread, out.value);
+      await lifecycle.message(i.thread, out.value);
     } else if (i.control === "trust") observe(store, i.thread, i);
     else await lifecycle.control(i.thread, i.control);
   };

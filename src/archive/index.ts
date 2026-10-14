@@ -13,7 +13,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { GcOptions } from "../gc/index.ts";
-import type { ThreadStateStore, Tier } from "../state/index.ts";
+import type { BlockedExpertReply, ThreadStateStore, Tier } from "../state/index.ts";
 import type { Supervisor } from "../supervisor/index.ts";
 import { seedSession, type SeedGuard } from "../supervisor/seed.ts";
 
@@ -47,6 +47,7 @@ export interface ArchivedThread {
   escalation: unknown;
   actions: unknown;
   absent: Record<string, string>;
+  blocked_expert_replies?: BlockedExpertReply[];
 }
 
 // Everything the archive holds for a thread, from P2's state directory.
@@ -59,6 +60,7 @@ export function archiveObject(store: ThreadStateStore, thread: string, now = new
   const absent: Record<string, string> = { ...ABSENT };
   if (!existsSync(session)) absent.transcript = "pi wrote no session: the thread closed before its first reply";
   if (!escalation) absent.escalation = "the thread never escalated";
+  const blockedExpertReplies = store.blockedExpertReplies?.(thread) ?? [];
   return {
     key: objectKey(state.sender_tier, thread),
     body: {
@@ -73,6 +75,7 @@ export function archiveObject(store: ThreadStateStore, thread: string, now = new
       escalation,
       actions: null,
       absent,
+      ...(blockedExpertReplies.length ? { blocked_expert_replies: blockedExpertReplies } : {}),
     },
   };
 }
