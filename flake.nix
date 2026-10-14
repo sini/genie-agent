@@ -466,6 +466,28 @@
                 grep -qx "ok [0-9]* - an eval cgroup's OOM count unreadable falls back to the whole cgroup's" $TMPDIR/tap || { echo "missing cell: the whole cgroup's fallback"; exit 1; }
                 touch $out
               '';
+          # The Kubernetes eval runner (plan E3): render the Job spec (runtimeClass gvisor, 12Gi/2c, deadline,
+          # thread store root, scratch emptyDir limit, labels) and submit/watch against a stub k8s API.
+          eval-k8s =
+            pkgs.runCommand "genie-agent-eval-k8s"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/eval
+                    ./tests/eval-k8s.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/eval-k8s.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: snapshot plus property checks on the rendered Job spec$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                touch $out
+              '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process
           # and a fresh store over the same paths, and a thread id cannot leave its root.
           state =
