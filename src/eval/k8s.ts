@@ -125,6 +125,8 @@ export interface RenderJobOptions {
   builders?: string;
   localFlake?: string;
   labels?: Record<string, string>;
+  repoVolume?: K8sVolume;
+  repoVolumeMount?: K8sVolumeMount;
   extraVolumes?: K8sVolume[];
   extraVolumeMounts?: K8sVolumeMount[];
   env?: { name: string; value: string }[];
@@ -140,6 +142,26 @@ export const DEFAULT_RESOURCES: K8sResourceRequirements = {
   requests: { cpu: "2", memory: "12Gi" },
   limits: { cpu: "2", memory: "12Gi" },
 };
+
+// Constructs a read-only PVC volume for the repository source under evaluation (design §5.2 layer 4).
+export function repoSourceVolume(claimName: string, name = "repo"): K8sVolume {
+  return {
+    name,
+    persistentVolumeClaim: {
+      claimName,
+      readOnly: true,
+    },
+  };
+}
+
+// Constructs a read-only volume mount for the repository source (design §5.2 layer 4).
+export function repoSourceMount(mountPath = "/src", name = "repo"): K8sVolumeMount {
+  return {
+    name,
+    mountPath,
+    readOnly: true,
+  };
+}
 
 // Renders the Kubernetes Job manifest for one eval launch.
 export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJob {
@@ -196,6 +218,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
         sizeLimit: options.scratchLimit ?? "10Gi",
       },
     },
+    ...(options.repoVolume ? [options.repoVolume] : []),
     ...(options.extraVolumes ?? []),
   ];
 
@@ -208,6 +231,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
       name: scratchVolumeName,
       mountPath: options.scratchMountPath ?? "/tmp",
     },
+    ...(options.repoVolumeMount ? [options.repoVolumeMount] : []),
     ...(options.extraVolumeMounts ?? []),
   ];
 
