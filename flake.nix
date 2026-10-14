@@ -905,6 +905,32 @@
                 node tests/support-memory.ts support-memory
                 touch $out
               '';
+          # The hindsight memory bank client and isolation oracle (Unit H1, design row 8, §6).
+          bank =
+            pkgs.runCommand "genie-agent-bank"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/bank
+                    ./tests/bank.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/bank.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - oracle H1: bank isolation verification succeeds with seed entry and isolated banks" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - mutant 1: target bank leaking den-law entries triggers RED" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - mutant 2: seed entry absent from target bank triggers RED" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - mutant 3: positive control with 0 hits on den-law triggers RED" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - mutant 4: cross-contamination of seed entry in den-law triggers RED" $TMPDIR/tap || exit 1
+                touch $out
+              '';
         }
         // onLinux pkgs {
           dispatcher-sea = seaCheck "genie-dispatcher" (genieDispatcher pkgs) pkgs;
