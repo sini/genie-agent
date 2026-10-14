@@ -110,6 +110,32 @@ export interface K8sPod {
   };
 }
 
+export interface BuilderConfig {
+  uri: string;
+  system: string;
+  maxJobs?: number;
+  supportedFeatures?: string[] | string;
+}
+
+// Formats a Nix builder entry string from typed config and key path.
+export function formatBuilderEntry(
+  config: BuilderConfig,
+  keyPath: string,
+): string {
+  const parts = [config.uri, config.system, keyPath];
+  if (config.maxJobs !== undefined || config.supportedFeatures !== undefined) {
+    parts.push(config.maxJobs !== undefined ? String(config.maxJobs) : "-");
+  }
+  if (config.supportedFeatures !== undefined) {
+    parts.push("-"); // speed-factor
+    const features = Array.isArray(config.supportedFeatures)
+      ? config.supportedFeatures.join(",")
+      : config.supportedFeatures;
+    parts.push(features);
+  }
+  return parts.join(" ");
+}
+
 export interface RenderJobOptions {
   name?: string;
   namespace?: string;
@@ -126,7 +152,9 @@ export interface RenderJobOptions {
   repoMountPath?: string;
   builderKeySecretName?: string;
   builderKeyMountPath?: string;
-  builders?: string;
+  builderKeyFileName?: string;
+  builder?: BuilderConfig;
+  builders?: string | BuilderConfig;
   localFlake?: string;
   labels?: Record<string, string>;
   env?: { name: string; value: string }[];
@@ -179,6 +207,16 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
   const scratchMountPath = options.scratchMountPath ?? "/tmp";
   const builderKeyMountPath = options.builderKeyMountPath ?? "/root/.ssh";
   const builderKeySecretName = options.builderKeySecretName ?? "builder-key";
+  const builderKeyFileName = options.builderKeyFileName ?? "id_ed25519";
+  const builderKeyPath = `${builderKeyMountPath}/${builderKeyFileName}`;
+
+  const builderConfig =
+    options.builder ??
+    (typeof options.builders === "object" ? options.builders : undefined);
+
+  const buildersArg = builderConfig
+    ? formatBuilderEntry(builderConfig, builderKeyPath)
+    : (typeof options.builders === "string" ? options.builders : undefined);
 
   // Nix eval arguments:
   // --store <mountPath> points to a local chroot store under the mounted PVC so fetched inputs persist
@@ -190,7 +228,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     "--option",
     "max-jobs",
     "0",
-    ...nixArgv(launch, flakeRef, options.builders),
+    ...nixArgv(launch, flakeRef, buildersArg),
   ];
 
   // Job mount set (plan E10, E11, design §5.2 layer 4, §5.3, §6):
@@ -222,6 +260,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
             name: builderKeyVolumeName,
             secret: {
               secretName: builderKeySecretName,
+              defaultMode: 0o400,
             },
           },
         ]
@@ -258,6 +297,14 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     { name: "XDG_CACHE_HOME", value: "/tmp/cache" },
     { name: "NIX_PATH", value: "" },
     { name: "TMPDIR", value: "/tmp" },
+    ...(isTrusted
+      ? [
+          {
+            name: "NIX_SSHOPTS",
+            value: `-o UserKnownHostsFile=${builderKeyMountPath}/known_hosts`,
+          },
+        ]
+      : []),
     ...(options.env ?? []),
   ];
 

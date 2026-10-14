@@ -14,6 +14,8 @@ import {
   renderJob,
   runK8sEval,
   submitAndWatchJob,
+  type BuilderConfig,
+  formatBuilderEntry,
   type K8sJob,
   type K8sPod,
   type K8sVolume,
@@ -297,13 +299,29 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
       !volumes.some((v) => v.secret !== undefined),
       "untrusted Job must not mount any Secret",
     );
+    assert.ok(
+      !container.env?.some((e) => e.name === "NIX_SSHOPTS"),
+      "untrusted Job must not configure NIX_SSHOPTS",
+    );
   } else if (expectedTier === "trusted") {
     const builderKeyVol = volumes.find((v) => v.name === "builder-key");
     assert.ok(builderKeyVol, "builder-key volume must exist on trusted Job");
     assert.ok(builderKeyVol.secret, "builder-key volume must be a Secret");
+    assert.equal(
+      builderKeyVol.secret.defaultMode,
+      0o400,
+      "builder-key Secret defaultMode must be 0400",
+    );
     const builderKeyMount = mounts.find((m) => m.name === "builder-key");
     assert.ok(builderKeyMount, "builder-key volumeMount must exist on trusted Job");
     assert.equal(builderKeyMount.readOnly, true, "builder-key must be mounted read-only");
+    const sshOptsEnv = container.env?.find((e) => e.name === "NIX_SSHOPTS");
+    assert.ok(sshOptsEnv, "trusted Job must configure NIX_SSHOPTS env var");
+    assert.equal(
+      sshOptsEnv.value,
+      `-o UserKnownHostsFile=${builderKeyMount.mountPath}/known_hosts`,
+      "NIX_SSHOPTS must point at known_hosts under builder key mount path",
+    );
   }
 }
 
@@ -317,10 +335,13 @@ export function assertTrustedJobMounts(
   expectedThread?: string,
   expectedSecretName = "builder-key",
   expectedMountPath = "/root/.ssh",
+  expectedKeyFileName = "id_ed25519",
+  expectedBuilderConfig?: BuilderConfig,
 ): void {
   const volumes = job.spec.template.spec.volumes ?? [];
-  const mounts = job.spec.template.spec.containers[0]?.volumeMounts ?? [];
-  const args = job.spec.template.spec.containers[0]?.args ?? [];
+  const container = job.spec.template.spec.containers[0];
+  const mounts = container?.volumeMounts ?? [];
+  const args = container?.args ?? [];
 
   // Invariant 1: thread-state volume never mounts in any eval Job (design §5.2 layer 4, §6)
   const hasThreadStateVol = volumes.some(
@@ -392,7 +413,7 @@ export function assertTrustedJobMounts(
   assert.equal(repoMount.mountPath, "/src", "repo source must be mounted at /src");
   assert.equal(repoMount.readOnly, true, "repo source must be mounted read-only");
 
-  // Invariant 6: Builder-key Secret volume exists, is a Secret with expected name, and is mounted read-only
+  // Invariant 6: Builder-key Secret volume exists, is a Secret with expected name, defaultMode 0400, and is mounted read-only
   const builderKeyVol = volumes.find((v) => v.name === "builder-key");
   assert.ok(builderKeyVol, "builder-key volume must exist on trusted Job");
   assert.ok(builderKeyVol.secret, "builder-key volume must be a Secret");
@@ -400,6 +421,11 @@ export function assertTrustedJobMounts(
     builderKeyVol.secret.secretName,
     expectedSecretName,
     `builder-key Secret name must be ${expectedSecretName}`,
+  );
+  assert.equal(
+    builderKeyVol.secret.defaultMode,
+    0o400,
+    "builder-key Secret defaultMode must be 0400",
   );
   const builderKeyMount = mounts.find((m) => m.name === "builder-key");
   assert.ok(builderKeyMount, "builder-key volumeMount must exist on trusted Job");
@@ -409,6 +435,15 @@ export function assertTrustedJobMounts(
     `builder-key mountPath must be ${expectedMountPath}`,
   );
   assert.equal(builderKeyMount.readOnly, true, "builder-key must be mounted read-only");
+
+  // Invariant 6b: known_hosts wired via NIX_SSHOPTS in container env
+  const sshOptsEnv = container?.env?.find((e) => e.name === "NIX_SSHOPTS");
+  assert.ok(sshOptsEnv, "trusted Job must configure NIX_SSHOPTS env var");
+  assert.equal(
+    sshOptsEnv.value,
+    `-o UserKnownHostsFile=${expectedMountPath}/known_hosts`,
+    "NIX_SSHOPTS must point at known_hosts under builder key mount path",
+  );
 
   // Invariant 7: argv has allow-import-from-derivation = true and builders pointing at the mounted key path
   const ifdIdx = args.indexOf("allow-import-from-derivation");
@@ -422,10 +457,32 @@ export function assertTrustedJobMounts(
     buildersValue.length > 0,
     "builders must not be empty on trusted launch",
   );
+  const tokens = buildersValue.trim().split(/\s+/);
+  if (!buildersValue.includes(expectedMountPath) && tokens.length < 3) {
+    assert.fail(`builders in argv must point at the mounted key path (${expectedMountPath}), got: ${buildersValue}`);
+  }
+  const keyPath = tokens[2];
+  const mountWithSlash = expectedMountPath.endsWith("/") ? expectedMountPath : `${expectedMountPath}/`;
+  assert.ok(
+    keyPath && (keyPath === `${expectedMountPath}/${expectedKeyFileName}` || keyPath.startsWith(mountWithSlash)),
+    `builders key path ${keyPath ?? "<none>"} must be under the mount path ${expectedMountPath}`,
+  );
   assert.ok(
     buildersValue.includes(expectedMountPath),
     `builders in argv must point at the mounted key path (${expectedMountPath}), got: ${buildersValue}`,
   );
+
+  if (expectedBuilderConfig) {
+    const expectedEntry = formatBuilderEntry(
+      expectedBuilderConfig,
+      `${expectedMountPath}/${expectedKeyFileName}`,
+    );
+    assert.equal(
+      buildersValue,
+      expectedEntry,
+      `builders in argv must equal exact derivation from config: expected "${expectedEntry}", got "${buildersValue}"`,
+    );
+  }
 }
 
 // Oracle 22 (plan E10, design §5.2 layer 4, §6):
@@ -840,19 +897,43 @@ test("oracle 23: k8sRunner submits trusted Job with repo (read-only), thread sto
   after(server.close);
 
   const client = new K8sClient({ baseUrl: server.url, namespace: "genie-eval" });
+  const builderConfig: BuilderConfig = {
+    uri: "ssh-ng://nix-remote-build@uplink",
+    system: "x86_64-linux",
+    maxJobs: 4,
+    supportedFeatures: ["kvm", "benchmark"],
+  };
   const runner = k8sRunner({
     client,
     thread: "t-trusted",
     builderKeySecretName: "prod-builder-key",
     builderKeyMountPath: "/root/.ssh",
-    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519",
+    builderKeyFileName: "id_ed25519",
+    builder: builderConfig,
   });
   const result = await runner(trustedLaunch);
 
   assert.equal(result.exit, 0);
   assert.ok(submittedJob, "k8sRunner must submit a Job");
-  assertTrustedJobMounts(submittedJob, "t-trusted", "prod-builder-key", "/root/.ssh");
+  assertTrustedJobMounts(
+    submittedJob,
+    "t-trusted",
+    "prod-builder-key",
+    "/root/.ssh",
+    "id_ed25519",
+    builderConfig,
+  );
   assertJobProperties(submittedJob, "t-trusted", "trusted");
+
+  const args = submittedJob.spec.template.spec.containers[0]?.args ?? [];
+  const buildersIdx = args.indexOf("builders");
+  assert.notEqual(buildersIdx, -1, "argv must configure builders");
+  const expectedBuilders = formatBuilderEntry(builderConfig, "/root/.ssh/id_ed25519");
+  assert.equal(
+    args[buildersIdx + 1],
+    expectedBuilders,
+    "submitted builders must equal exact derivation from config",
+  );
 });
 
 test("mutant (oracle 23): omitting builder-key on trusted launch fails property check", () => {
@@ -938,6 +1019,41 @@ test("mutant (oracle 23): mounting builder-key on untrusted launch makes oracle 
   );
 });
 
+test("mutant (oracle 23): dropping defaultMode on builder-key Secret fails property check", () => {
+  const job = renderJob(trustedLaunch, {
+    name: "eval-t-trusted",
+    thread: "t-trusted",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /root/.ssh/id_ed25519",
+  });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: (job.spec.template.spec.volumes ?? []).map((v) =>
+            v.name === "builder-key" && v.secret
+              ? { ...v, secret: { secretName: v.secret.secretName } }
+              : v,
+          ),
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => assertTrustedJobMounts(mutantJob, "t-trusted"),
+    /builder-key Secret defaultMode must be 0400/,
+    "assertTrustedJobMounts must fail RED when defaultMode is dropped",
+  );
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t-trusted", "trusted"),
+    /builder-key Secret defaultMode must be 0400/,
+    "assertJobProperties must fail RED when defaultMode is dropped",
+  );
+});
+
 test("mutant (oracle 23): builders in argv missing mounted key path fails property check", () => {
   const job = renderJob(trustedLaunch, {
     name: "eval-t-trusted",
@@ -948,6 +1064,20 @@ test("mutant (oracle 23): builders in argv missing mounted key path fails proper
     () => assertTrustedJobMounts(job, "t-trusted", "builder-key", "/root/.ssh"),
     /builders in argv must point at the mounted key path/,
     "property check must fail RED when builders does not point at mounted key path",
+  );
+});
+
+test("mutant (oracle 23): builders key path not under mount fails property check", () => {
+  const job = renderJob(trustedLaunch, {
+    name: "eval-t-trusted",
+    thread: "t-trusted",
+    builderKeyMountPath: "/root/.ssh",
+    builders: "ssh-ng://nix-remote-build@uplink x86_64-linux /tmp/untrusted/id_ed25519",
+  });
+  assert.throws(
+    () => assertTrustedJobMounts(job, "t-trusted", "builder-key", "/root/.ssh"),
+    /builders key path .* must be under the mount path/,
+    "property check must fail RED when builders key path is outside builderKeyMountPath",
   );
 });
 
