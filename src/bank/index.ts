@@ -77,7 +77,15 @@ export interface BankRetainResponse {
 
 export const DEFAULT_HINDSIGHT_ENDPOINT = process.env.HINDSIGHT_ENDPOINT ?? "http://10.11.0.20:8888";
 export const GENIE_BANK_ID = "genie";
+export const GENIE_MEMORY_BANK_ID = "genie-memory";
 export const DEN_LAW_BANK_ID = "den-law";
+
+// Resolves a recall bank selector to its Hindsight bank ID.
+// Default (or "support") -> GENIE_BANK_ID; "memory" -> GENIE_MEMORY_BANK_ID.
+export function recallBankId(bank?: "support" | "memory"): string {
+  if (bank === "memory") return GENIE_MEMORY_BANK_ID;
+  return GENIE_BANK_ID;
+}
 
 export const GENIE_BANK_CONFIG: BankConfig = {
   name: "genie",

@@ -26,7 +26,7 @@ export const TOOLS = [
 // The supervisor's side of each tool's effect (C3 implements it). Arguments arrive validated.
 export interface Host {
   eval(request: unknown): Promise<unknown>;
-  recall(query: string): Promise<unknown>;
+  recall(request: { query: string; bank?: "support" | "memory" } | string): Promise<unknown>;
   escalate(escalation: unknown): Promise<unknown>;
   reply(draft: unknown): Promise<unknown>;
   propose(proposal: unknown): Promise<unknown>;
@@ -41,6 +41,8 @@ export interface Host {
 export interface Config {
   // The thread's worktree root, `<worktreeRoot>/<thread>`: every clone lands under it.
   root: string;
+  // Read-only memory mount path (default: /memory)
+  memoryRoot?: string;
   searxngUrl: string;
   // CIDRs of the cluster's pod and service networks, refused like the private ranges.
   cluster: string[];
@@ -94,9 +96,9 @@ const nonEmpty = { type: "string", minLength: 1 };
 // one would be checked as one file and opened as another.
 const UNICODE_SPACES = /[  -   　]/;
 
-// The real path `raw` names inside root, or a refusal. Relative paths are taken from root, and
+// The real path `raw` names inside root or memoryRoot, or a refusal. Relative paths are taken from root, and
 // symlinks and `..` are resolved before the check.
-export function confine(root: string, raw: unknown): string {
+export function confine(root: string, raw: unknown, memoryRoot = "/memory"): string {
   const p = raw === undefined || raw === "" ? "." : raw;
   if (typeof p !== "string") throw new Error("the path is not a string");
   if (/^[A-Za-z][A-Za-z0-9+.-]*:|^\/\//.test(p)) throw new Error(`${p} is a URL, not a path`);
@@ -107,13 +109,23 @@ export function confine(root: string, raw: unknown): string {
   } catch {
     throw new Error("no worktree yet: clone a repository first");
   }
+  let memTop: string | undefined;
+  if (memoryRoot) {
+    try {
+      memTop = realpathSync(memoryRoot);
+    } catch {
+      memTop = undefined;
+    }
+  }
   let real: string;
   try {
     real = realpathSync(isAbsolute(p) ? p : resolve(top, p));
   } catch {
     throw new Error(`${p} does not exist`);
   }
-  if (real !== top && !real.startsWith(`${top}/`)) throw new Error(`${p} is outside the thread's worktrees`);
+  const inWorktree = real === top || real.startsWith(`${top}/`);
+  const inMemory = memTop !== undefined && (real === memTop || real.startsWith(`${memTop}/`));
+  if (!inWorktree && !inMemory) throw new Error(`${p} is outside the thread's worktrees and memory mount`);
   if (UNICODE_SPACES.test(real)) throw new Error(`${p} is not a plain path`);
   return real;
 }
@@ -144,7 +156,24 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
 
   const tools = [
     c1("eval", "Evaluate one attribute of one repository at one rev (nix eval). Set secrets: \"stub\" when agenix/sops secrets block pure-eval; the result is stubbed with placeholder paths/values. Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
-    c1("recall", "Look up previously answered support questions.", object({ query: nonEmpty }), (v) => v.query),
+    c1(
+      "recall",
+      'Look up previously answered support questions (bank: "support", default) or operating memory practices, traps, lessons, and gen library conventions (bank: "memory").',
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["query"],
+        properties: {
+          query: nonEmpty,
+          bank: {
+            type: "string",
+            enum: ["support", "memory"],
+            description: 'Target bank: "support" for answered support questions (default), or "memory" for operating memory wiki and rules.',
+          },
+        },
+      },
+      (v) => (v.bank !== undefined ? { query: v.query, bank: v.bank } : v.query),
+    ),
     c1("escalate", "Hand this thread to the expert tier.", load("escalation"), whole),
     c1("reply", "Post the final draft answer. Call exactly once, last.", load("draft"), whole),
     c1("propose", "Propose a gist or a pull request to the broker. A pull request needs repo and branch.", load("proposal"), whole),
@@ -158,7 +187,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       async execute(_id: string, params: { url: string }) {
         checkUrl(params.url);
         const { path, rev } = await deps.host.clone(params.url);
-        return text(JSON.stringify({ path: confine(cfg.root, path), rev }));
+        return text(JSON.stringify({ path: confine(cfg.root, path, cfg.memoryRoot), rev }));
       },
     },
     {
@@ -190,7 +219,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       if (!(BUILTINS as readonly string[]).includes(e.toolName)) return undefined;
       try {
         // The built-in opens exactly the path checked.
-        e.input.path = confine(cfg.root, e.input.path);
+        e.input.path = confine(cfg.root, e.input.path, cfg.memoryRoot);
       } catch (err) {
         return { block: true, reason: `refused: ${(err as Error).message}` };
       }

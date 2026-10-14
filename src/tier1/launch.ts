@@ -18,19 +18,37 @@ export function skillsPrompt(dir = new URL("skills", repo).pathname): string {
   return `# Skills\n\n${skills.join("\n\n")}\n`;
 }
 
+// Operating memory index at memoryPath, as tier 1's system prompt carries it.
+// Refuses if missing: no silent fallback (Amendment 2).
+export function memoryPrompt(memoryPath = "/memory/MEMORY.md"): string {
+  try {
+    const content = readFileSync(memoryPath, "utf8");
+    return `# Operating Memory Index\n\n${content}\n`;
+  } catch {
+    throw new Error(`memory index not found: ${memoryPath}`);
+  }
+}
+
 export function tier1Launch(o: {
   pi: string;
   // The thread's Config, handed to the extension in its env.
   config: (thread: string) => Config;
   // More pi arguments for the thread: its session (P2's sessionArgs), its model.
   args?: (thread: string) => string[];
+  // If true, seeds memoryPrompt into the system prompt. Default: false.
+  memory?: boolean;
+  memoryPath?: string;
 }): Launch {
+  const appendPrompts = [skillsPrompt()];
+  if (o.memory) {
+    appendPrompts.push(memoryPrompt(o.memoryPath));
+  }
   const fixed = [
     "--mode", "rpc",
     "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
     "-e", new URL("src/tier1/extension.ts", repo).pathname,
     "--system-prompt", new URL("prompts/tier1.md", repo).pathname,
-    "--append-system-prompt", skillsPrompt(),
+    ...appendPrompts.flatMap((p) => ["--append-system-prompt", p]),
   ];
   return (thread) => ({
     command: o.pi,

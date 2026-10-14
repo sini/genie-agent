@@ -1,0 +1,345 @@
+{
+  "metadata": {
+    "bank_id": "genie-memory",
+    "stand_in": true,
+    "note": "Stand-in recall fixture for CI hermetic testing"
+  },
+  "fixtures": {
+    "q01": {
+      "query": "An orchestrator is planning their workflow for a session. Should they write implementation code directly in the main session or delegate execution to subagents?",
+      "results": [
+        {
+          "document_id": "workflow/orchestrator-operating-rules.md",
+          "text": "Operating memory excerpt for workflow/orchestrator-operating-rules.md. Relevant guidance for An orchestrator is planning their workflow for a session. Should they write implementation code directly in the main session or delegate execution to subagents?",
+          "tags": [
+            "tier:memory",
+            "slug:workflow/orchestrator-operating-rules.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q02": {
+      "query": "The orchestrator notices context usage is around 50%, with several pending tasks left in the queue. Is it appropriate to wrap up the session early?",
+      "results": [
+        {
+          "document_id": "workflow/do-not-wind-down-early.md",
+          "text": "Operating memory excerpt for workflow/do-not-wind-down-early.md. Relevant guidance for The orchestrator notices context usage is around 50%, with several pending tasks left in the queue. Is it appropriate to wrap up the session early?",
+          "tags": [
+            "tier:memory",
+            "slug:workflow/do-not-wind-down-early.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q03": {
+      "query": "When working in a shared git checkout where another peer agent is actively modifying files, how should changes be committed?",
+      "results": [
+        {
+          "document_id": "workflow/shared-checkout-peer-sessions.md",
+          "text": "Operating memory excerpt for workflow/shared-checkout-peer-sessions.md. Relevant guidance for When working in a shared git checkout where another peer agent is actively modifying files, how should changes be committed?",
+          "tags": [
+            "tier:memory",
+            "slug:workflow/shared-checkout-peer-sessions.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q04": {
+      "query": "What is the default review stance for an adversarial gate reviewer evaluating a submitted patch or spec?",
+      "results": [
+        {
+          "document_id": "workflow/roles/gate.md",
+          "text": "Operating memory excerpt for workflow/roles/gate.md. Relevant guidance for What is the default review stance for an adversarial gate reviewer evaluating a submitted patch or spec?",
+          "tags": [
+            "tier:memory",
+            "slug:workflow/roles/gate.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q05": {
+      "query": "When dispatched as a scout to measure an issue across repositories, should the scout fix small bugs found during measurement?",
+      "results": [
+        {
+          "document_id": "workflow/roles/scout.md",
+          "text": "Operating memory excerpt for workflow/roles/scout.md. Relevant guidance for When dispatched as a scout to measure an issue across repositories, should the scout fix small bugs found during measurement?",
+          "tags": [
+            "tier:memory",
+            "slug:workflow/roles/scout.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q06": {
+      "query": "If a harness default instruction conflicts with local project directives or design records, which one governs?",
+      "results": [
+        {
+          "document_id": "practices/orchestrate-against-theory.md",
+          "text": "Operating memory excerpt for practices/orchestrate-against-theory.md. Relevant guidance for If a harness default instruction conflicts with local project directives or design records, which one governs?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/orchestrate-against-theory.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q07": {
+      "query": "What should an orchestrator do if multiple subagents complete their dispatches and sit idle while context remains low?",
+      "results": [
+        {
+          "document_id": "practices/keep-the-fleet-full.md",
+          "text": "Operating memory excerpt for practices/keep-the-fleet-full.md. Relevant guidance for What should an orchestrator do if multiple subagents complete their dispatches and sit idle while context remains low?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/keep-the-fleet-full.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q08": {
+      "query": "What essential elements must be provided when writing a dispatch brief for a leaf agent?",
+      "results": [
+        {
+          "document_id": "practices/writing-a-dispatch-brief.md",
+          "text": "Operating memory excerpt for practices/writing-a-dispatch-brief.md. Relevant guidance for What essential elements must be provided when writing a dispatch brief for a leaf agent?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/writing-a-dispatch-brief.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q09": {
+      "query": "How should long-running or background processes be terminated safely when multiple agent sessions share a machine?",
+      "results": [
+        {
+          "document_id": "practices/kill-only-captured-pids.md",
+          "text": "Operating memory excerpt for practices/kill-only-captured-pids.md. Relevant guidance for How should long-running or background processes be terminated safely when multiple agent sessions share a machine?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/kill-only-captured-pids.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q10": {
+      "query": "How should resource-intensive Nix evaluations or builds be constrained on developer hosts?",
+      "results": [
+        {
+          "document_id": "practices/cap-every-heavy-evaluation.md",
+          "text": "Operating memory excerpt for practices/cap-every-heavy-evaluation.md. Relevant guidance for How should resource-intensive Nix evaluations or builds be constrained on developer hosts?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/cap-every-heavy-evaluation.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q11": {
+      "query": "Why is having multiple concurrent agent sessions write to the same git working directory problematic?",
+      "results": [
+        {
+          "document_id": "practices/one-writer-per-checkout.md",
+          "text": "Operating memory excerpt for practices/one-writer-per-checkout.md. Relevant guidance for Why is having multiple concurrent agent sessions write to the same git working directory problematic?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/one-writer-per-checkout.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q12": {
+      "query": "When should code changes be committed during multi-step development?",
+      "results": [
+        {
+          "document_id": "practices/landing-and-history.md",
+          "text": "Operating memory excerpt for practices/landing-and-history.md. Relevant guidance for When should code changes be committed during multi-step development?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/landing-and-history.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q13": {
+      "query": "What does a search or census returning zero results prove when verifying an absence claim?",
+      "results": [
+        {
+          "document_id": "practices/armed-controls.md",
+          "text": "Operating memory excerpt for practices/armed-controls.md. Relevant guidance for What does a search or census returning zero results prove when verifying an absence claim?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/armed-controls.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q14": {
+      "query": "What must exist before a spec or plan can be submitted to a review gate?",
+      "results": [
+        {
+          "document_id": "practices/gates-need-an-oracle.md",
+          "text": "Operating memory excerpt for practices/gates-need-an-oracle.md. Relevant guidance for What must exist before a spec or plan can be submitted to a review gate?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/gates-need-an-oracle.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q15": {
+      "query": "What are the decision classification tiers used when filing tasks and architecture decisions?",
+      "results": [
+        {
+          "document_id": "practices/decision-tiers.md",
+          "text": "Operating memory excerpt for practices/decision-tiers.md. Relevant guidance for What are the decision classification tiers used when filing tasks and architecture decisions?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/decision-tiers.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q16": {
+      "query": "Why are silent fallbacks such as or [] considered harmful when looking up required attributes?",
+      "results": [
+        {
+          "document_id": "practices/silent-fallbacks-delocalise-failures.md",
+          "text": "Operating memory excerpt for practices/silent-fallbacks-delocalise-failures.md. Relevant guidance for Why are silent fallbacks such as or [] considered harmful when looking up required attributes?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/silent-fallbacks-delocalise-failures.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q17": {
+      "query": "How should container images be referenced in deployment manifests and configurations?",
+      "results": [
+        {
+          "document_id": "practices/pin-container-images-by-digest.md",
+          "text": "Operating memory excerpt for practices/pin-container-images-by-digest.md. Relevant guidance for How should container images be referenced in deployment manifests and configurations?",
+          "tags": [
+            "tier:memory",
+            "slug:practices/pin-container-images-by-digest.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q18": {
+      "query": "Why might bash arrays and word splitting behave differently when running commands in zsh?",
+      "results": [
+        {
+          "document_id": "traps/zsh-is-not-bash.md",
+          "text": "Operating memory excerpt for traps/zsh-is-not-bash.md. Relevant guidance for Why might bash arrays and word splitting behave differently when running commands in zsh?",
+          "tags": [
+            "tier:memory",
+            "slug:traps/zsh-is-not-bash.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q19": {
+      "query": "Why is checking $? after a piped shell command risky for verifying command success?",
+      "results": [
+        {
+          "document_id": "traps/read-exit-status-unpiped.md",
+          "text": "Operating memory excerpt for traps/read-exit-status-unpiped.md. Relevant guidance for Why is checking $? after a piped shell command risky for verifying command success?",
+          "tags": [
+            "tier:memory",
+            "slug:traps/read-exit-status-unpiped.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q20": {
+      "query": "What happens when using cat file | sed ... > file to transform a file in place?",
+      "results": [
+        {
+          "document_id": "traps/redirect-truncates-before-read.md",
+          "text": "Operating memory excerpt for traps/redirect-truncates-before-read.md. Relevant guidance for What happens when using cat file | sed ... > file to transform a file in place?",
+          "tags": [
+            "tier:memory",
+            "slug:traps/redirect-truncates-before-read.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q21": {
+      "query": "Why might newly created files fail to be evaluated by a Nix flake command?",
+      "results": [
+        {
+          "document_id": "traps/nix-flake-filtered-tree-and-eval-cache.md",
+          "text": "Operating memory excerpt for traps/nix-flake-filtered-tree-and-eval-cache.md. Relevant guidance for Why might newly created files fail to be evaluated by a Nix flake command?",
+          "tags": [
+            "tier:memory",
+            "slug:traps/nix-flake-filtered-tree-and-eval-cache.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q22": {
+      "query": "In the beads issue tracker, what is the meaning of br dep add X Y?",
+      "results": [
+        {
+          "document_id": "traps/tracker-br-traps.md",
+          "text": "Operating memory excerpt for traps/tracker-br-traps.md. Relevant guidance for In the beads issue tracker, what is the meaning of br dep add X Y?",
+          "tags": [
+            "tier:memory",
+            "slug:traps/tracker-br-traps.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q23": {
+      "query": "When facing a difficult architectural fix, why should an agent avoid settling for a temporary workaround?",
+      "results": [
+        {
+          "document_id": "lessons/avoidance-off-ramp.md",
+          "text": "Operating memory excerpt for lessons/avoidance-off-ramp.md. Relevant guidance for When facing a difficult architectural fix, why should an agent avoid settling for a temporary workaround?",
+          "tags": [
+            "tier:memory",
+            "slug:lessons/avoidance-off-ramp.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    },
+    "q24": {
+      "query": "What is the architectural purpose of the gen library ecosystem?",
+      "results": [
+        {
+          "document_id": "gen/overview.md",
+          "text": "Operating memory excerpt for gen/overview.md. Relevant guidance for What is the architectural purpose of the gen library ecosystem?",
+          "tags": [
+            "tier:memory",
+            "slug:gen/overview.md"
+          ],
+          "score": 0.95
+        }
+      ]
+    }
+  }
+}

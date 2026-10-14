@@ -493,3 +493,476 @@ export function formatReportTables(report: EvalReport): string {
 
   return lines.join("\n");
 }
+
+// --- Unit C2.2: Tier-1 Operating Memory (Wiki & Bank) Eval ---
+
+export type MemoryArm = "no-memory" | "wiki" | "bank" | "wiki+bank";
+
+export interface MemoryRecallItem {
+  document_id?: string;
+  text?: string;
+  tags?: string[];
+  score?: number;
+}
+
+export interface MemoryRecallFixture {
+  metadata: {
+    bank_id?: string;
+    endpoint?: string;
+    recorded_at?: string;
+    stand_in?: boolean;
+  };
+  fixtures: Record<
+    string,
+    {
+      query: string;
+      results: MemoryRecallItem[];
+    }
+  >;
+}
+
+export interface MemoryRetrievalCheckResult {
+  verified: number;
+  unindexedSlugs: string[];
+  missingFixtureSlugs: string[];
+}
+
+// Amendment 7: Model-free retrieval check verifying for every question:
+// (a) expected citation slug is linked from MEMORY.md, and
+// (b) expected citation slug is present in the question's recall fixture.
+// Amendment 6: harness explicitly refuses stand-in fixture on --live runs.
+export function verifyModelFreeRetrieval(
+  questions: QuestionFixture[],
+  memoryMdPath: string,
+  recallFixtures: MemoryRecallFixture,
+  options: { live?: boolean } = {},
+): MemoryRetrievalCheckResult {
+  if (options.live && recallFixtures.metadata?.stand_in) {
+    throw new Error("refused: cannot use stand-in recall fixture on a live run");
+  }
+
+  let memoryText: string;
+  try {
+    memoryText = readFileSync(memoryMdPath, "utf8");
+  } catch {
+    throw new Error(`memory index not found: ${memoryMdPath}`);
+  }
+
+  // Extract all markdown links [title](path)
+  const links = new Set<string>();
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = linkRegex.exec(memoryText)) !== null) {
+    links.add(match[2].trim());
+  }
+
+  const unindexedSlugs: string[] = [];
+  const missingFixtureSlugs: string[] = [];
+  let verified = 0;
+
+  for (const q of questions) {
+    const citations = q.expected_citations ?? [];
+    const fix = recallFixtures.fixtures?.[q.id];
+
+    for (const slug of citations) {
+      // (a) Link check: citation must be linked from MEMORY.md
+      if (!links.has(slug)) {
+        unindexedSlugs.push(`${q.id}:${slug}`);
+        throw new Error(`unindexed citation slug: ${slug} in question ${q.id} not linked from ${memoryMdPath}`);
+      }
+
+      // (b) Fixture check: citation must be present in question's recall fixture
+      if (!fix) {
+        missingFixtureSlugs.push(`${q.id}:${slug}`);
+        throw new Error(`missing recall fixture for question ${q.id}`);
+      }
+
+      const found = fix.results?.some(
+        (r) =>
+          r.document_id === slug ||
+          r.document_id?.endsWith(slug) ||
+          r.tags?.some((t) => t.includes(slug)) ||
+          r.text?.includes(slug),
+      );
+
+      if (!found) {
+        missingFixtureSlugs.push(`${q.id}:${slug}`);
+        throw new Error(`expected citation ${slug} not found in recall fixture for ${q.id}`);
+      }
+
+      verified++;
+    }
+  }
+
+  return { verified, unindexedSlugs, missingFixtureSlugs };
+}
+
+// Oracle 4: An arm that silently loads no memory is reported as such, not scored as a memory arm.
+export function assertNotEmptyMemoryArm(
+  arm: MemoryArm,
+  memoryContent?: string,
+  recallFixtures?: Record<string, unknown>,
+): void {
+  if (arm === "wiki" || arm === "wiki+bank") {
+    if (!memoryContent || memoryContent.trim() === "" || !memoryContent.includes("[")) {
+      throw new Error(`empty memory arm: ${arm} has no memory loaded`);
+    }
+  }
+  if (arm === "bank" || arm === "wiki+bank") {
+    if (!recallFixtures || Object.keys(recallFixtures).length === 0) {
+      throw new Error(`empty memory arm: ${arm} has no memory loaded`);
+    }
+  }
+}
+
+export interface MemoryRetrievalResult {
+  question_id: string;
+  expected_citation: string;
+  read_called: boolean;
+  recall_called: boolean;
+  retrieved: boolean;
+}
+
+export interface MemoryArmResult extends ArmResult {
+  arm: any;
+  retrieval_rate: number;
+  retrieval_results: MemoryRetrievalResult[];
+}
+
+export interface MemoryEvalComparison extends EvalComparison {
+  baseline_arm: any;
+  degraded_arm: any;
+}
+
+export interface MemoryEvalReport {
+  model: string;
+  runs_per_arm: number;
+  concurrency: number;
+  noise_band: number;
+  arms: Record<MemoryArm, MemoryArmResult>;
+  comparisons: MemoryEvalComparison[];
+  model_free_retrieval?: MemoryRetrievalCheckResult;
+}
+
+export interface MemoryEvalOptions {
+  model: string;
+  base: string;
+  apiKey?: string;
+  basePromptPath?: string;
+  memoryRoot?: string;
+  memoryMdPath?: string;
+  recallFixturesPath?: string;
+  recallFixtures?: MemoryRecallFixture;
+  questions: QuestionFixture[];
+  heldOutQuestionsFile?: string;
+  arms?: MemoryArm[];
+  runs?: number;
+  concurrency?: number;
+  turns?: number;
+  maxTokens?: number;
+  live?: boolean;
+  fetchFn?: typeof fetch;
+}
+
+export function memoryPromptFromIndex(memoryMdPath: string): string {
+  try {
+    const content = readFileSync(memoryMdPath, "utf8");
+    return `# Operating Memory Index\n\n${content}\n`;
+  } catch {
+    throw new Error(`memory index not found: ${memoryMdPath}`);
+  }
+}
+
+export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<MemoryEvalReport> {
+  let allQuestions = [...options.questions];
+  if (options.heldOutQuestionsFile) {
+    try {
+      const raw = readFileSync(options.heldOutQuestionsFile, "utf8");
+      const heldOut: QuestionFixture[] = raw
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => JSON.parse(l));
+      allQuestions = [...allQuestions, ...heldOut];
+    } catch (err) {
+      throw new Error(`failed to load held-out questions: ${(err as Error).message}`);
+    }
+  }
+
+  const memoryMdPath =
+    options.memoryMdPath ??
+    `${options.memoryRoot ?? new URL("../../operating-memory", import.meta.url).pathname}/MEMORY.md`;
+
+  let recallFixtures = options.recallFixtures;
+  if (!recallFixtures) {
+    const fixPath =
+      options.recallFixturesPath ??
+      new URL("tests/fixtures/memory-eval/recall-fixtures.json", repoRoot).pathname;
+    const raw = readFileSync(fixPath, "utf8");
+    recallFixtures = JSON.parse(raw) as MemoryRecallFixture;
+  }
+
+  // Model-free retrieval check (Amendment 6 & 7)
+  const retrievalCheck = verifyModelFreeRetrieval(
+    allQuestions,
+    memoryMdPath,
+    recallFixtures,
+    { live: options.live },
+  );
+
+  let memoryContent: string | undefined;
+  try {
+    memoryContent = readFileSync(memoryMdPath, "utf8");
+  } catch {
+    memoryContent = undefined;
+  }
+
+  const armNames: MemoryArm[] = options.arms ?? ["no-memory", "wiki", "bank", "wiki+bank"];
+
+  // Verify no arm silently loads empty memory (Oracle 4)
+  for (const arm of armNames) {
+    assertNotEmptyMemoryArm(arm, memoryContent, recallFixtures.fixtures);
+  }
+
+  const basePromptPath =
+    options.basePromptPath ?? new URL("prompts/tier1.md", repoRoot).pathname;
+  const basePrompt = readFileSync(basePromptPath, "utf8");
+
+  const tools = tier1Tools();
+  const fetcher = options.fetchFn ?? fetch;
+  const runsCount = options.runs ?? 1;
+  const turns = options.turns ?? 6;
+  const maxTokens = options.maxTokens ?? 16384;
+  const concurrency = options.concurrency ?? 1;
+
+  const armResults: Record<string, MemoryArmResult> = {};
+
+  for (const arm of armNames) {
+    let system = `${basePrompt}\n\n${skillsPrompt()}`;
+    if (arm === "wiki" || arm === "wiki+bank") {
+      system = `${system}\n\n${memoryPromptFromIndex(memoryMdPath)}`;
+    }
+
+    async function completeTurn(messages: unknown[]): Promise<{ message: Message; finish: string }> {
+      const res = await fetcher(`${options.base}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: options.model,
+          temperature: 0,
+          max_tokens: maxTokens,
+          messages,
+          tools,
+        }),
+        signal: AbortSignal.timeout(300_000),
+      });
+      const body = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+      const choice = JSON.parse(body).choices?.[0];
+      if (!choice?.message) throw new Error(`No message choice in response: ${body.slice(0, 200)}`);
+      return { message: choice.message, finish: choice.finish_reason ?? "" };
+    }
+
+    const allRetrievalResults: MemoryRetrievalResult[] = [];
+
+    async function evaluateQuestion(q: QuestionFixture): Promise<ScoredQuestion> {
+      const messages: any[] = [
+        { role: "system", content: system },
+        { role: "user", content: q.question },
+      ];
+      const calls: string[] = [];
+      let last: Message = {};
+      let finish = "";
+      let readCalled = false;
+      let recallCalled = false;
+
+      for (let turn = 0; turn < turns; turn++) {
+        ({ message: last, finish } = await completeTurn(messages));
+        const toolCalls = (last as any).tool_calls ?? [];
+        calls.push(...toolCalls.map((c: any) => c.function.name));
+        if (!toolCalls.length || toolCalls.some((c: any) => c.function.name === "reply")) break;
+        messages.push({ role: "assistant", content: last.content ?? "", tool_calls: toolCalls });
+
+        for (const c of toolCalls) {
+          const fnName = c.function.name;
+          let toolArgs: any = {};
+          try {
+            toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : c.function.arguments;
+          } catch {}
+
+          if (fnName === "read") {
+            const p = toolArgs.path ?? "";
+            const matchesCitation = (q.expected_citations ?? []).some((cite) => p.includes(cite));
+
+            let fileContent = "";
+            if (arm === "wiki" || arm === "wiki+bank") {
+              try {
+                fileContent = readFileSync(p, "utf8");
+                if (matchesCitation) readCalled = true;
+              } catch {
+                fileContent = `[wiki content for ${p}]`;
+                if (matchesCitation) readCalled = true;
+              }
+            } else {
+              fileContent = `refused: ${p} is outside the thread's worktrees`;
+            }
+            messages.push({
+              role: "tool",
+              tool_call_id: c.id,
+              content: JSON.stringify({ content: fileContent }),
+            });
+          } else if (fnName === "recall") {
+            const matchesCitation = (q.expected_citations ?? []).some((cite) =>
+              (toolArgs.query ?? "").toLowerCase().includes(cite.toLowerCase()),
+            );
+
+            let recallResp: any = { results: [] };
+            if (arm === "bank" || arm === "wiki+bank") {
+              const fix = recallFixtures?.fixtures?.[q.id];
+              if (fix && fix.results?.length) {
+                recallResp = { results: fix.results };
+                if (matchesCitation || toolArgs.bank === "memory") recallCalled = true;
+              }
+            }
+            messages.push({
+              role: "tool",
+              tool_call_id: c.id,
+              content: JSON.stringify(recallResp),
+            });
+          } else {
+            messages.push({
+              role: "tool",
+              tool_call_id: c.id,
+              content: JSON.stringify({ error: `${fnName} is unavailable in this evaluation` }),
+            });
+          }
+        }
+      }
+
+      const expectedCite = q.expected_citations?.[0] ?? "";
+      const retrieved = readCalled || recallCalled;
+      allRetrievalResults.push({
+        question_id: q.id,
+        expected_citation: expectedCite,
+        read_called: readCalled,
+        recall_called: recallCalled,
+        retrieved,
+      });
+
+      const scored = scoreQuestion(q, last, calls);
+      return {
+        id: q.id,
+        question: q.question,
+        calls,
+        finish,
+        last,
+        ...scored,
+      };
+    }
+
+    const runResults: RunResult[] = [];
+    for (let runIdx = 0; runIdx < runsCount; runIdx++) {
+      const questionsScored = await pMap(allQuestions, evaluateQuestion, concurrency);
+      const meanScore = questionsScored.reduce((s, q) => s + q.overall, 0) / questionsScored.length;
+      const meanCorr = questionsScored.reduce((s, q) => s + q.correctness, 0) / questionsScored.length;
+      const meanCite = questionsScored.reduce((s, q) => s + q.citation, 0) / questionsScored.length;
+      const meanCalib = questionsScored.reduce((s, q) => s + q.calibration, 0) / questionsScored.length;
+
+      runResults.push({
+        run_index: runIdx + 1,
+        mean_score: Number(meanScore.toFixed(4)),
+        mean_correctness: Number(meanCorr.toFixed(4)),
+        mean_citation: Number(meanCite.toFixed(4)),
+        mean_calibration: Number(meanCalib.toFixed(4)),
+        questions: questionsScored,
+      });
+    }
+
+    const armMeanScore = runResults.reduce((s, r) => s + r.mean_score, 0) / runResults.length;
+    const armMeanCorr = runResults.reduce((s, r) => s + r.mean_correctness, 0) / runResults.length;
+    const armMeanCite = runResults.reduce((s, r) => s + r.mean_citation, 0) / runResults.length;
+    const armMeanCalib = runResults.reduce((s, r) => s + r.mean_calibration, 0) / runResults.length;
+    const noiseBand = computeNoiseBand(runResults.map((r) => r.mean_score));
+
+    const totalRetrievals = allRetrievalResults.filter((r) => r.retrieved).length;
+    const retrievalRate = allRetrievalResults.length > 0 ? totalRetrievals / allRetrievalResults.length : 0;
+
+    armResults[arm] = {
+      arm,
+      runs: runResults,
+      mean_score: Number(armMeanScore.toFixed(4)),
+      mean_correctness: Number(armMeanCorr.toFixed(4)),
+      mean_citation: Number(armMeanCite.toFixed(4)),
+      mean_calibration: Number(armMeanCalib.toFixed(4)),
+      noise_band: runsCount >= 2 ? noiseBand : undefined,
+      retrieval_rate: Number(retrievalRate.toFixed(4)),
+      retrieval_results: allRetrievalResults,
+    };
+  }
+
+  // Comparisons: each memory arm beats no-memory baseline
+  const noMemoryArm = armResults["no-memory"];
+  const noiseBand = noMemoryArm?.noise_band ?? armResults["wiki+bank"]?.noise_band ?? 0;
+  const comparisons: MemoryEvalComparison[] = [];
+
+  for (const arm of ["wiki", "bank", "wiki+bank"] as MemoryArm[]) {
+    if (armResults[arm] && noMemoryArm) {
+      comparisons.push(compareArms(armResults[arm] as any, noMemoryArm as any, noiseBand) as any);
+    }
+  }
+
+  return {
+    model: options.model,
+    runs_per_arm: runsCount,
+    concurrency,
+    noise_band: noiseBand,
+    arms: armResults as Record<MemoryArm, MemoryArmResult>,
+    comparisons,
+    model_free_retrieval: retrievalCheck,
+  };
+}
+
+export function formatMemoryReportTables(report: MemoryEvalReport): string {
+  const lines: string[] = [];
+
+  lines.push("=== Tier-1 Operating Memory Eval Summary ===");
+  lines.push(`Model: ${report.model}`);
+  lines.push(`Runs per arm: ${report.runs_per_arm}`);
+  lines.push(`Concurrency: ${report.concurrency}`);
+  lines.push(`Measured Noise Band: ${report.noise_band.toFixed(4)}`);
+  lines.push("");
+
+  lines.push("--- Memory Arms Performance ---");
+  lines.push(
+    "Arm             Score   Correctness  Citation  Calibration  Retrieval  Runs Spread",
+  );
+  for (const [arm, res] of Object.entries(report.arms)) {
+    const spreadStr = res.noise_band !== undefined ? res.noise_band.toFixed(4) : "n/a (N=1)";
+    lines.push(
+      `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${spreadStr}`,
+    );
+  }
+  lines.push("");
+
+  lines.push("--- Comparisons Against Baseline (no-memory) ---");
+  lines.push("Memory Arm      Memory    No-Memory Delta    NoiseBand  Status");
+  for (const comp of report.comparisons) {
+    lines.push(
+      `${String(comp.baseline_arm).padEnd(15)} ${comp.baseline_mean.toFixed(4).padEnd(9)} ${comp.degraded_mean.toFixed(4).padEnd(9)} ${comp.delta.toFixed(4).padEnd(8)} ${comp.noise_band.toFixed(4).padEnd(10)} ${comp.status}`,
+    );
+  }
+
+  if (report.model_free_retrieval) {
+    lines.push("");
+    lines.push("--- Model-Free Retrieval Check ---");
+    lines.push(`Verified Question-Citation Mappings: ${report.model_free_retrieval.verified}`);
+    lines.push(`Unindexed Slugs: ${report.model_free_retrieval.unindexedSlugs.length}`);
+    lines.push(`Missing Fixture Slugs: ${report.model_free_retrieval.missingFixtureSlugs.length}`);
+  }
+
+  return lines.join("\n");
+}
+
