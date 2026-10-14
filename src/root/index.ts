@@ -32,23 +32,42 @@ import type { Config as Tier1Config } from "../tier1/index.ts";
 import { tier1Launch } from "../tier1/launch.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 
+export interface ApproveControl {
+  control: "approve";
+  sender?: string;
+  sender_id?: string;
+  tier?: Tier | string;
+  target?: string;
+}
+
 // One inbound item from matrix-xmsg or xmsg, on the thread it belongs to: the raw envelope exactly as
-// matrix-xmsg sends it, `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, or an expert reply.
-export type Inbound = { thread: string } & (
-  | { envelope: string }
-  | TrustControl
-  | { control: "accept" | "deeper" }
-  | { expert: string }
-);
+// matrix-xmsg sends it, `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, an approve control (C10),
+// or an expert reply.
+export type Inbound =
+  | ({ thread: string } & (
+      | { envelope: string }
+      | TrustControl
+      | { control: "accept" | "deeper" }
+      | { expert: string }
+    ))
+  | ({ thread?: string } & ApproveControl);
 
 export interface Intake {
   // The next batch of inbound items, in arrival order; null once the intake has closed.
   next(): Promise<Inbound[] | null>;
 }
 
+export interface PostEnvelope {
+  text: string;
+  approval?: true;
+}
+
+export type PostPayload = PostEnvelope;
+
 export interface Post {
   // A message to the bot's thread: tier 1's draft, or a notice such as a refusal.
-  post(thread: string, message: Draft | string): Promise<void>;
+  // Returns the posted event id if provided by the underlying transport.
+  post(thread: string, message: PostPayload): Promise<string | void>;
 }
 
 export interface Io {
@@ -79,8 +98,10 @@ export interface Config {
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
 export const WITHHELD = "I drafted an answer, but my output check withheld it. Please rephrase your question.";
-export const approvalNotice = (action: string, params: unknown) =>
-  `Approval requested: ${action} ${JSON.stringify(params)}`;
+export const approvalNotice = (action: string, params: unknown): PostEnvelope & { approval: true } => ({
+  approval: true,
+  text: `Approval requested: ${action} ${JSON.stringify(params)}`,
+});
 export const approvalRequest = approvalNotice;
 
 const repo = new URL("../../", import.meta.url);
@@ -152,6 +173,17 @@ export function main(configFile: string, io: Io, run?: Runner) {
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
 
+  // Wrap every outbound post in a structured envelope { text: <string> }, with approval: true
+  // only on approval notices, so model output can never mint an approval request (Unit C10).
+  const postEnvelope = async (thread: string, msg: string | Draft | PostEnvelope, approval?: boolean): Promise<string | void> => {
+    if (typeof msg === "object" && msg !== null && "text" in msg && (msg as PostEnvelope).approval === true) {
+      return io.post.post(thread, msg as PostEnvelope);
+    }
+    const text = typeof msg === "string" ? msg : JSON.stringify(msg);
+    const payload: PostEnvelope = approval ? { text, approval: true } : { text };
+    return io.post.post(thread, payload);
+  };
+
   const supervisor: Supervisor = new Supervisor(
     (t) => {
       const l = launch(t);
@@ -168,14 +200,15 @@ export function main(configFile: string, io: Io, run?: Runner) {
         const tier = store.read(t)?.sender_tier ?? "public";
         if (req.trusted === "yes" && tier !== "trusted") {
           const action = "eval";
+          const sentEventId = (await postEnvelope(t, approvalNotice(action, req))) ?? undefined;
           const pendingAction: PendingAction = {
             action,
             params: JSON.parse(JSON.stringify(req)),
             thread: t,
             requested_at: new Date().toISOString(),
+            posted_event_id: typeof sentEventId === "string" ? sentEventId : undefined,
           };
           store.addPendingAction(pendingAction);
-          await io.post.post(t, approvalNotice(action, req));
           const result = {
             refused: "trusted eval",
             error: "refused: trusted eval on a public thread",
@@ -198,10 +231,10 @@ export function main(configFile: string, io: Io, run?: Runner) {
         const out = await outbound(context(t).cleaned_question, (scrub): Draft => ({ ...d, answer: scrub(d.answer), gaps: d.gaps.map(scrub) }), guardOut);
         if (!("value" in out)) {
           console.error(`thread ${t}: reply withheld: ${out.reason}`);
-          await io.post.post(t, WITHHELD);
+          await postEnvelope(t, WITHHELD);
           return { posted: false, reason: out.reason };
         }
-        await io.post.post(t, out.value);
+        await postEnvelope(t, out.value);
         return { posted: true, escalated: await escalation.reply(t, out.value) };
       },
       propose: (p) => broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act }),
@@ -239,7 +272,8 @@ export function main(configFile: string, io: Io, run?: Runner) {
         text = await guardIn(io.guard, i.envelope);
       } catch (e) {
         console.error(`thread ${i.thread}: ${e}`);
-        return io.post.post(i.thread, REFUSAL);
+        await postEnvelope(i.thread, REFUSAL);
+        return;
       }
       setContext(i.thread, { cleaned_question: text });
       await lifecycle.message(i.thread, text);
@@ -249,12 +283,40 @@ export function main(configFile: string, io: Io, run?: Runner) {
       if (!("value" in out)) {
         console.error(`thread ${i.thread}: expert reply withheld: ${out.reason}`);
         store.addBlockedExpertReply(i.thread, store.read(i.thread)?.sender_tier ?? "public");
-        return io.post.post(i.thread, WITHHELD);
+        await postEnvelope(i.thread, WITHHELD);
+        return;
       }
-      await io.post.post(i.thread, out.value);
+      await postEnvelope(i.thread, out.value);
       await lifecycle.message(i.thread, out.value);
-    } else if (i.control === "trust") observe(store, i.thread, i);
-    else await lifecycle.control(i.thread, i.control);
+    } else if (i.control === "trust") {
+      observe(store, i.thread, i);
+    } else if (i.control === "approve") {
+      // One-shot approval (Unit C10, design row 24):
+      // An approval control carrying a trusted sender's tier runs the named pending action once
+      // with the trusted capability, logs approver + action, posts the result, and consumes the record;
+      // the thread tier is unchanged.
+      // A non-trusted tier, or a target with no pending action, does nothing.
+      if (i.tier !== "trusted") return;
+      const target = i.target;
+      if (!target) return;
+      const pending = store.consumePendingAction(target, i.thread);
+      if (!pending) return;
+
+      const approver = i.sender_id ?? i.sender ?? "unknown";
+      console.log(`approved action ${pending.action} by ${approver} for target ${target}`);
+
+      if (pending.action === "eval") {
+        const evalReq = pending.params as EvalRequest;
+        const evalResult = await evalIn(pending.thread, { request: evalReq, sender_tier: "trusted" });
+        const postContent = typeof evalResult.stdout_tail === "string" && evalResult.stdout_tail.length > 0
+          ? evalResult.stdout_tail
+          : JSON.stringify(evalResult);
+        await postEnvelope(pending.thread, postContent);
+        setContext(pending.thread, { eval_transcript: [...context(pending.thread).eval_transcript, { request: evalReq, result: evalResult }] });
+      }
+    } else if (i.control === "accept" || i.control === "deeper") {
+      await lifecycle.control(i.thread, i.control);
+    }
   };
 
   return {

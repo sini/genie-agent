@@ -5,7 +5,7 @@
 // thread's conversation (design row 21) and there is no second transcript format. The thread's Nix
 // store, mounted only into its eval Jobs, is a separate root, so state is never inside it.
 // Collection is P3's, src/gc, and the archive P4's; parking and closing are C4's, src/lifecycle.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 
 export type Tier = "public" | "trusted";
 
@@ -18,12 +18,13 @@ export interface BlockedExpertReply {
   tier: Tier;
 }
 
-// Pending actions (plan C9, design row 24): recorded when a capability is refused by the thread's tier.
+// Pending actions (plan C9, C10, design row 24): recorded when a capability is refused by the thread's tier.
 export interface PendingAction {
   action: string;
   params: unknown;
   thread: string;
   requested_at: string;
+  posted_event_id?: string;
 }
 
 // One record of schemas/thread-state.json.
@@ -197,7 +198,7 @@ export class ThreadStateStore {
     writeAtomic(this.dir(thread), "blocked_expert_replies.json", JSON.stringify([...current, { tier }]));
   }
 
-  // Pending actions (plan C9, design row 24): recorded when a capability is refused by the thread's tier.
+  // Pending actions (plan C9, C10, design row 24): recorded when a capability is refused by the thread's tier.
   pendingActions(thread: string): PendingAction[] {
     return readJson<PendingAction[]>(`${this.dir(thread)}/pending_actions.json`) ?? [];
   }
@@ -213,6 +214,33 @@ export class ThreadStateStore {
 
   setPendingActions(thread: string, actions: PendingAction[]): void {
     writeAtomic(this.dir(thread), "pending_actions.json", JSON.stringify(actions));
+  }
+
+  // Consume a pending action whose posted_event_id equals target.
+  // When thread is specified, searches that thread; otherwise searches across threads.
+  consumePendingAction(target: string, thread?: string): PendingAction | undefined {
+    if (thread) {
+      const actions = this.pendingActions(thread);
+      const idx = actions.findIndex((a) => a.posted_event_id === target);
+      if (idx !== -1) {
+        const [matched] = actions.splice(idx, 1);
+        this.setPendingActions(thread, actions);
+        return matched;
+      }
+      return undefined;
+    }
+    const entries = readdirSync(this.stateRoot);
+    for (const name of entries) {
+      if (name.startsWith(".")) continue;
+      const actions = this.pendingActions(name);
+      const idx = actions.findIndex((a) => a.posted_event_id === target);
+      if (idx !== -1) {
+        const [matched] = actions.splice(idx, 1);
+        this.setPendingActions(name, actions);
+        return matched;
+      }
+    }
+    return undefined;
   }
 }
 

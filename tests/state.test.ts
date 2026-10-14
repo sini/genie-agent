@@ -89,3 +89,45 @@ test("pending actions persist and reload across store instances", () => {
   assert.deepEqual(store2.pendingActions("$ev1"), [action]);
   assert.deepEqual(store2.pendingAction("$ev1"), action);
 });
+
+test("consumePendingAction finds and consumes action by target, leaves others untouched, and second consume returns undefined", () => {
+  const store = new ThreadStateStore(stateRoot, storeRoot);
+  const thread = "consume_test";
+
+  const action1: PendingAction = {
+    action: "eval",
+    params: { repo: "o/r", rev: "main", attr: "a", trusted: "yes" },
+    thread,
+    requested_at: "2026-10-13T20:00:00.000Z",
+    posted_event_id: "$ev_target_1",
+  };
+  const action2: PendingAction = {
+    action: "eval",
+    params: { repo: "o/r", rev: "main", attr: "b", trusted: "yes" },
+    thread,
+    requested_at: "2026-10-13T20:01:00.000Z",
+    posted_event_id: "$ev_target_2",
+  };
+
+  store.addPendingAction(action1);
+  store.addPendingAction(action2);
+  assert.equal(store.pendingActions(thread).length, 2);
+
+  // Consume action 2 by target
+  const consumed2 = store.consumePendingAction("$ev_target_2", thread);
+  assert.deepEqual(consumed2, action2);
+
+  // Action 1 remains
+  assert.deepEqual(store.pendingActions(thread), [action1]);
+
+  // Second consume of action 2 returns undefined (already consumed)
+  assert.equal(store.consumePendingAction("$ev_target_2", thread), undefined);
+
+  // Unknown target returns undefined
+  assert.equal(store.consumePendingAction("$ev_nonexistent", thread), undefined);
+
+  // Consume action 1 without thread specified (searches across threads)
+  const consumed1 = store.consumePendingAction("$ev_target_1");
+  assert.deepEqual(consumed1, action1);
+  assert.deepEqual(store.pendingActions(thread), []);
+});
