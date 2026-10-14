@@ -18,6 +18,14 @@ export interface BlockedExpertReply {
   tier: Tier;
 }
 
+// Pending actions (plan C9, design row 24): recorded when a capability is refused by the thread's tier.
+export interface PendingAction {
+  action: string;
+  params: unknown;
+  thread: string;
+  requested_at: string;
+}
+
 // One record of schemas/thread-state.json.
 export interface ThreadState {
   thread_id: string;
@@ -187,6 +195,24 @@ export class ThreadStateStore {
   addBlockedExpertReply(thread: string, tier: Tier): void {
     const current = this.blockedExpertReplies(thread);
     writeAtomic(this.dir(thread), "blocked_expert_replies.json", JSON.stringify([...current, { tier }]));
+  }
+
+  // Pending actions (plan C9, design row 24): recorded when a capability is refused by the thread's tier.
+  pendingActions(thread: string): PendingAction[] {
+    return readJson<PendingAction[]>(`${this.dir(thread)}/pending_actions.json`) ?? [];
+  }
+
+  addPendingAction(action: PendingAction): void {
+    const current = this.pendingActions(action.thread);
+    writeAtomic(this.dir(action.thread), "pending_actions.json", JSON.stringify([...current, action]));
+  }
+
+  pendingAction(thread: string): PendingAction | undefined {
+    return this.pendingActions(thread).at(-1);
+  }
+
+  setPendingActions(thread: string, actions: PendingAction[]): void {
+    writeAtomic(this.dir(thread), "pending_actions.json", JSON.stringify(actions));
   }
 }
 

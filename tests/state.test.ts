@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { Supervisor } from "../src/supervisor/index.ts";
-import { type ThreadState, ThreadStateStore } from "../src/state/index.ts";
+import { type PendingAction, type ThreadState, ThreadStateStore } from "../src/state/index.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-state-test-`);
 process.env.PI_RECORD = tmp;
@@ -67,4 +67,25 @@ test("a thread id that names another directory is refused", () => {
     assert.throws(() => store.store(bad), /refused thread id/, bad);
     assert.throws(() => store.write({ thread_id: bad } as ThreadState), /refused thread id/, bad);
   }
+});
+
+test("pending actions persist and reload across store instances", () => {
+  const store1 = new ThreadStateStore(stateRoot, storeRoot);
+  assert.deepEqual(store1.pendingActions("$ev1"), []);
+  assert.equal(store1.pendingAction("$ev1"), undefined);
+
+  const action: PendingAction = {
+    action: "eval",
+    params: { repo: "o/r", rev: "main", attr: "x", trusted: "yes" },
+    thread: "$ev1",
+    requested_at: "2026-10-13T20:00:00.000Z",
+  };
+  store1.addPendingAction(action);
+  assert.deepEqual(store1.pendingActions("$ev1"), [action]);
+  assert.deepEqual(store1.pendingAction("$ev1"), action);
+
+  // Fresh store instance over same paths reads the persisted action
+  const store2 = new ThreadStateStore(stateRoot, storeRoot);
+  assert.deepEqual(store2.pendingActions("$ev1"), [action]);
+  assert.deepEqual(store2.pendingAction("$ev1"), action);
 });

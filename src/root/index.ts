@@ -23,7 +23,7 @@ import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
 import { Lifecycle } from "../lifecycle/index.ts";
 import { type MirrorConfig, worktreeFor } from "../mirror/index.ts";
-import { ThreadStateStore, type Tier } from "../state/index.ts";
+import { ThreadStateStore, type PendingAction, type Tier } from "../state/index.ts";
 import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
 import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
@@ -79,6 +79,9 @@ export interface Config {
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
 export const WITHHELD = "I drafted an answer, but my output check withheld it. Please rephrase your question.";
+export const approvalNotice = (action: string, params: unknown) =>
+  `Approval requested: ${action} ${JSON.stringify(params)}`;
+export const approvalRequest = approvalNotice;
 
 const repo = new URL("../../", import.meta.url);
 const secret = (file: string) => readFileSync(file, "utf8").trim();
@@ -157,8 +160,30 @@ export function main(configFile: string, io: Io, run?: Runner) {
     (t, r) => lifecycle.event(t, r),
     (t) => ({
       // The tier is the thread's, from P2's state, never the request's (E4's effectiveTier clamps it).
+      // When the thread's tier refuses a capability (e.g. trusted eval on a public thread), tier 1's
+      // tool result names it, the supervisor records the pending action with params fixed, and the bot
+      // posts an approval request (C9, design row 24).
       eval: async (request) => {
-        const result = await evalIn(t, { request: request as EvalRequest, sender_tier: store.read(t)?.sender_tier ?? "public" });
+        const req = request as EvalRequest;
+        const tier = store.read(t)?.sender_tier ?? "public";
+        if (req.trusted === "yes" && tier !== "trusted") {
+          const action = "eval";
+          const pendingAction: PendingAction = {
+            action,
+            params: JSON.parse(JSON.stringify(req)),
+            thread: t,
+            requested_at: new Date().toISOString(),
+          };
+          store.addPendingAction(pendingAction);
+          await io.post.post(t, approvalNotice(action, req));
+          const result = {
+            refused: "trusted eval",
+            error: "refused: trusted eval on a public thread",
+          };
+          setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
+          return result;
+        }
+        const result = await evalIn(t, { request: req, sender_tier: tier });
         setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
         return result;
       },

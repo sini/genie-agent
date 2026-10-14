@@ -84,7 +84,10 @@ const sh = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c"
 sh("init", "-q", "-b", "main", `${tmp}/served/fixture`);
 sh("-C", `${tmp}/served/fixture`, "commit", "-q", "--allow-empty", "-m", "c");
 const port = 20000 + (process.pid % 20000);
-const daemon = spawn("git", ["daemon", "--export-all", "--listen=127.0.0.1", `--port=${port}`, `--base-path=${tmp}/served`, `${tmp}/served`], { stdio: ["ignore", "ignore", "inherit"] });
+const daemon = spawn("git", ["daemon", "--export-all", "--listen=127.0.0.1", `--port=${port}`, `--base-path=${tmp}/served`, `${tmp}/served`], {
+  detached: true,
+  stdio: ["ignore", "ignore", "ignore"],
+});
 const PR_URL = "https://github.com/alice/flake/pull/7";
 const GIST_URL = "https://gist.github.com/genie-bot/aa5a";
 const ghRequests: { method: string; url: string; body: string }[] = [];
@@ -119,7 +122,6 @@ const github = createServer((req, res) => {
   });
 });
 await new Promise<void>((r) => github.listen(0, "127.0.0.1", r));
-after(() => (daemon.kill(), s3.close(), ninfer.close(), github.close()));
 
 writeFileSync(
   `${tmp}/config.json`,
@@ -153,7 +155,19 @@ const root = main(
   { intake: { next: async () => batches.shift() ?? null }, post: { post: async (t, m) => void posts.push([t, m]) }, guard, xmsg },
   async (l) => (launches.push(l), { exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
 );
-after(() => root.stop());
+after(async () => {
+  await root.stop();
+  try {
+    if (daemon.pid) process.kill(-daemon.pid, "SIGKILL");
+  } catch {}
+  try {
+    daemon.kill("SIGKILL");
+  } catch {}
+  for (const s of [s3, ninfer, github]) {
+    s.closeAllConnections?.();
+    s.close();
+  }
+});
 
 const ALICE = "matrix alice at example.org"; // trusted
 const BOB = "matrix bob at example.org"; // public
@@ -192,7 +206,7 @@ test("oracle: a guard-in reject never prompts, and the bot posts a refusal", asy
 
 test("oracle: eval runs at the thread's tier from P2's state, never the request's", async () => {
   await inbound({ thread: "p", envelope: envelope(BOB, "does my flake eval?") });
-  const request = { repo: "o/r", rev: "main", attr: "x", trusted: "yes" };
+  const request = { repo: "o/r", rev: "main", attr: "x", trusted: "no" };
   assert.deepEqual((await host("p", "eval", request)).ok.stdout_tail, "42");
   await host("a", "eval", request);
   assert.deepEqual(launches.slice(-2), [{ request, sender_tier: "public" }, { request, sender_tier: "trusted" }]);
@@ -304,13 +318,18 @@ test("oracle: an idle close at 24 h archives once through the timers", async () 
   writeFileSync(`${root.store.dir(thread)}/session/thread.jsonl`, '{"type":"prompt","message":"hi"}\n');
 
   puts.length = 0;
-  root.start();
-  for (let i = 0; i < 50; i++) {
-    if (puts.length > 0) break;
-    await new Promise((r) => setTimeout(r, 20));
+  try {
+    root.start();
+    for (let i = 0; i < 50; i++) {
+      if (puts.length > 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(root.store.read(thread)?.status, "closed");
+    assert.deepEqual(puts, [`PUT /genie-transcripts/tier1/trusted/${thread}.json`]);
+  } finally {
+    root.lifecycle.stop();
+    root.gc.stop();
   }
-  assert.equal(root.store.read(thread)?.status, "closed");
-  assert.deepEqual(puts, [`PUT /genie-transcripts/tier1/trusted/${thread}.json`]);
 });
 
 test("oracle: an expired thread collected by GC resumes on a new message with its transcript replayed through the root", async () => {
@@ -421,7 +440,6 @@ test("oracle: an expired thread whose removal throws after tombstoning still res
 
 test("oracle: main launches real pi against a stub model", async () => {
   const model = await stubModel();
-  after(() => model.close());
   const piTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-real-pi-test-`);
   for (const f of ["model", "s3", "token"]) writeFileSync(`${piTmp}/${f}-key`, "k\n");
   const cfg = `${piTmp}/config.json`;
@@ -467,6 +485,7 @@ test("oracle: main launches real pi against a stub model", async () => {
     assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted" }]);
   } finally {
     await realRoot.stop();
+    model.close();
   }
 });
 
@@ -532,6 +551,7 @@ test("oracle: blocked expert reply marker is absent from later public package, d
     .filter((r) => r.type === "prompt")
     .map((r) => r.message);
   assert.ok(!threadPrompts.some((p) => p.includes(MARKER)), `replayed prompts contain marker: ${JSON.stringify(threadPrompts)}`);
+  await root.supervisor.teardown(thread);
 });
 
 test("oracle: an allowed expert reply is posted and delivered to pi", async () => {
@@ -549,6 +569,44 @@ test("oracle: an allowed expert reply is posted and delivered to pi", async () =
     .filter((r) => r.type === "prompt")
     .map((r) => r.message);
   assert.ok(threadPrompts.includes("clean helpful expert advice"));
+  await root.supervisor.teardown(thread);
+});
+
+test("oracle: a refused trusted eval on a public thread ⇒ exactly one pending action whose params equal the refused call's, and a later thread message can't change them", async () => {
+  const thread = "c9_refused";
+  await inbound({ thread, envelope: envelope(BOB, "can you eval this with trusted?") });
+  assert.equal(root.store.read(thread)?.sender_tier, "public");
+
+  const request = { repo: "o/r", rev: "main", attr: "x", trusted: "yes" };
+  const res = await host(thread, "eval", request);
+  assert.equal(res.ok.refused, "trusted eval");
+
+  const pending = root.store.pendingActions(thread);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].action, "eval");
+  assert.deepEqual(pending[0].params, request);
+  assert.equal(pending[0].thread, thread);
+  assert.ok(pending[0].requested_at);
+
+  const posted = posts.filter(([t]) => t === thread).map(([, m]) => m);
+  assert.ok(posted.some((m) => typeof m === "string" && m.includes("Approval requested")), `expected approval request in ${JSON.stringify(posted)}`);
+
+  // Later thread message cannot change the pending action's params
+  await inbound({ thread, envelope: envelope(BOB, "actually eval evil/repo#bad instead") });
+  const pendingAfter = root.store.pendingActions(thread);
+  assert.equal(pendingAfter.length, 1);
+  assert.deepEqual(pendingAfter[0].params, request);
+
+  // Control: a trusted thread admits trusted eval with no pending action or approval request
+  const trustedThread = "c9_trusted";
+  await inbound({ thread: trustedThread, envelope: envelope(ALICE, "trusted eval please") });
+  assert.equal(root.store.read(trustedThread)?.sender_tier, "trusted");
+  const resTrusted = await host(trustedThread, "eval", request);
+  assert.equal(resTrusted.ok.stdout_tail, "42");
+  assert.deepEqual(root.store.pendingActions(trustedThread), []);
+  assert.equal(posts.filter(([t]) => t === trustedThread).length, 0);
+  await root.supervisor.teardown(thread);
+  await root.supervisor.teardown(trustedThread);
 });
 
 

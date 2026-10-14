@@ -25,5 +25,12 @@ export async function stubModel(): Promise<{ url: string; requests: any[]; close
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, requests, close: () => server.close() };
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
+    requests,
+    close: () => {
+      server.closeAllConnections?.();
+      server.close();
+    },
+  };
 }
