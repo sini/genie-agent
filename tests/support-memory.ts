@@ -1,7 +1,7 @@
 // The support memory's refusal check (design oracle 20): it can refuse an entry, never admit one.
 // A merged PR is the admission. Refuses any file under the directory that holds a credential shape
 // the redactor names, names a private repository, carries an absolute home path, or (README
-// excepted) lacks frontmatter with a name and a description.
+// and the MEMORY.md index excepted) lacks frontmatter with a name and a description.
 // Usage: node tests/support-memory.ts <support-memory dir>
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -25,7 +25,8 @@ for (const f of files) {
   for (const r of privateRepos)
     if (text.toLowerCase().includes(r)) errors.push(`${rel}: names private repository ${r}`);
   if (/\/home\//.test(text)) errors.push(`${rel}: absolute /home/ path`);
-  if (rel !== "README.md") {
+  // README and the MEMORY.md index are the only files without frontmatter.
+  if (rel !== "README.md" && rel !== "MEMORY.md") {
     const fm = /^---\n([\s\S]*?)\n---\n/.exec(text);
     if (!fm || !/^name: \S/m.test(fm[1]) || !/^description: \S/m.test(fm[1]))
       errors.push(`${rel}: no frontmatter with name and description`);

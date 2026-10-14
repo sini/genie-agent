@@ -903,12 +903,14 @@
                     ./src/redactor
                     ./tests/support-memory.ts
                     ./support-memory
+                    ./operating-memory
                   ];
                 };
               }
               ''
                 cd $src
                 node tests/support-memory.ts support-memory
+                node tests/support-memory.ts operating-memory
                 touch $out
               '';
           # The hindsight memory bank client and isolation oracle (Unit H1, design row 8, §6).
