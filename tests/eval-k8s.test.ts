@@ -73,6 +73,8 @@ const SNAPSHOT: K8sJob = {
             image: "ghcr.io/sini/genie-eval:latest",
             command: ["nix"],
             args: [
+              "--store",
+              "/thread-store",
               "--option",
               "max-jobs",
               "0",
@@ -116,7 +118,7 @@ const SNAPSHOT: K8sJob = {
             volumeMounts: [
               {
                 name: "thread-store",
-                mountPath: "/nix/store",
+                mountPath: "/thread-store",
               },
               {
                 name: "scratch",
@@ -178,7 +180,7 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
   assert.equal(job.spec.backoffLimit, 0, "backoffLimit must be 0");
   assert.equal(job.spec.template.spec.restartPolicy, "Never", "restartPolicy must be Never");
 
-  // 4. Thread store volume mounted as store root
+  // 4. Thread store volume mounted at a separate path, never shadowing image's /nix/store
   const volumes = job.spec.template.spec.volumes ?? [];
   const mounts = container.volumeMounts ?? [];
   const storeVol = volumes.find((v) => v.name === "thread-store");
@@ -188,9 +190,23 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
     `thread-store-${expectedThread}`,
     "thread-store PVC claimName must match thread",
   );
+  // Property check: no volumeMount at /nix/store (would shadow image closure)
+  assert.ok(
+    !mounts.some((m) => m.mountPath === "/nix/store"),
+    "must not mount volume at /nix/store to prevent shadowing image closure",
+  );
   const storeMount = mounts.find((m) => m.name === "thread-store");
   assert.ok(storeMount, "thread-store volumeMount must exist");
-  assert.equal(storeMount.mountPath, "/nix/store", "thread-store must be mounted at /nix/store");
+  assert.equal(storeMount.mountPath, "/thread-store", "thread-store must be mounted at /thread-store");
+
+  // Property check: argv carries --store <mountPath> matching the PVC mount
+  const storeArgIdx = container.args?.indexOf("--store") ?? -1;
+  assert.notEqual(storeArgIdx, -1, "argv must carry --store");
+  assert.equal(
+    container.args?.[storeArgIdx + 1],
+    storeMount.mountPath,
+    "argv --store must match thread-store mountPath",
+  );
 
   // 5. Scratch emptyDir limit
   const scratchVol = volumes.find((v) => v.name === "scratch");
@@ -212,11 +228,25 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
     "pod template labels must mirror Job labels",
   );
 
-  // 7. Nix command options
+  // 7. Nix command options: max-jobs=0, pure-eval, connect-timeout, and untrusted builders/substituters
   assert.deepEqual(container.command, ["nix"]);
-  assert.ok(container.args?.includes("max-jobs"));
-  assert.ok(container.args?.includes("pure-eval"));
-  assert.ok(container.args?.includes("connect-timeout"));
+  const args = container.args ?? [];
+  const maxJobsIdx = args.indexOf("max-jobs");
+  assert.notEqual(maxJobsIdx, -1, "argv must configure max-jobs");
+  assert.equal(args[maxJobsIdx + 1], "0", "max-jobs must be 0");
+
+  const buildersIdx = args.indexOf("builders");
+  assert.notEqual(buildersIdx, -1, "argv must configure builders");
+  if (expectedTier === "public") {
+    assert.equal(args[buildersIdx + 1], "", "untrusted launch must configure no builders");
+  }
+
+  const substitutersIdx = args.indexOf("substituters");
+  assert.notEqual(substitutersIdx, -1, "argv must configure substituters");
+  assert.equal(args[substitutersIdx + 1], "", "launch must configure no substituters");
+
+  assert.ok(args.includes("pure-eval"));
+  assert.ok(args.includes("connect-timeout"));
 }
 
 test("oracle: snapshot plus property checks on the rendered Job spec", () => {
@@ -254,6 +284,53 @@ test("mutant: dropping runtimeClassName fails property check and snapshot", () =
     () => assertJobProperties(mutantJob, "t1", "public"),
     /runtimeClassName must be gvisor/,
     "property check must fail RED when runtimeClassName is dropped",
+  );
+});
+
+test("mutant: PVC mounted at /nix/store fails property check", () => {
+  const mutantJob = renderJob(sampleLaunch, {
+    name: "eval-t1-test",
+    thread: "t1",
+    storeMountPath: "/nix/store",
+  });
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t1", "public"),
+    /must not mount volume at \/nix\/store/,
+    "property check must fail RED when PVC is mounted at /nix/store",
+  );
+});
+
+test("mutant: argv missing --store fails property check", () => {
+  const job = renderJob(sampleLaunch, {
+    name: "eval-t1-test",
+    thread: "t1",
+  });
+  const storeIdx = job.spec.template.spec.containers[0].args?.indexOf("--store") ?? -1;
+  assert.ok(storeIdx >= 0);
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              args: job.spec.template.spec.containers[0].args?.filter(
+                (_, i) => i !== storeIdx && i !== storeIdx + 1,
+              ),
+            },
+          ],
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t1", "public"),
+    /argv must carry --store/,
+    "property check must fail RED when argv is missing --store",
   );
 });
 

@@ -165,8 +165,15 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
       ? undefined
       : (options.runtimeClassName ?? "gvisor");
 
-  // Nix eval arguments: max-jobs=0 keeps builds out of the pod (design §5.3).
+  const storeMountPath = options.storeMountPath ?? "/thread-store";
+
+  // Nix eval arguments:
+  // --store <mountPath> points to a local chroot store under the mounted PVC so fetched inputs persist
+  // without shadowing the container image's /nix/store (where nix and its closure live).
+  // max-jobs=0 keeps builds out of the pod (design §5.3).
   const nixArgs = [
+    "--store",
+    storeMountPath,
     "--option",
     "max-jobs",
     "0",
@@ -195,7 +202,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
   const volumeMounts: K8sVolumeMount[] = [
     {
       name: storeVolumeName,
-      mountPath: options.storeMountPath ?? "/nix/store",
+      mountPath: storeMountPath,
     },
     {
       name: scratchVolumeName,
