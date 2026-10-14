@@ -11,6 +11,7 @@ export interface EvalRequest {
   rev: string;
   attr: string;
   trusted: "yes" | "no";
+  secrets?: "stub" | "none";
 }
 
 // schemas/launch.json: what the launcher accepts. sender_tier is the thread's, from the supervisor.
@@ -65,6 +66,98 @@ const which = (name: string): string => {
 // The model writes the request; nothing in it may reach Nix as anything but a github coordinate.
 const coordinate = /^[A-Za-z0-9._-]+$/;
 
+// Generates a Nix wrapper expression to evaluate a NixOS configuration with agenix and sops-nix
+// secret paths overridden to placeholder store files and placeholder values substituted (plan E5, design §5.7).
+export function wrapperForNixOS(subpath: string): string {
+  const targetAccess = subpath ? `extended.${subpath}` : "extended";
+  return `host:
+let
+  placeholderFile = builtins.toFile "placeholder" "placeholder-secret\\n";
+  placeholderStr = "<placeholder>";
+  stubSecrets = secrets:
+    if builtins.isAttrs secrets
+    then builtins.mapAttrs (_: s: if builtins.isAttrs s then s // { path = placeholderFile; value = placeholderStr; } else s) secrets
+    else secrets;
+  extended =
+    if host ? extendModules then
+      host.extendModules {
+        modules = [
+          ({ lib ? null, ... }:
+          let
+            force = if lib ? mkForce then lib.mkForce else (x: x);
+          in {
+            age.secrets = builtins.mapAttrs (_: _: {
+              path = force placeholderFile;
+            }) (host.config.age.secrets or {});
+            sops.secrets = builtins.mapAttrs (_: _: {
+              path = force placeholderFile;
+            }) (host.config.sops.secrets or {});
+            sops.placeholder = builtins.mapAttrs (name: _:
+              "<placeholder:\${name}>"
+            ) (host.config.sops.secrets or {});
+          })
+        ];
+      }
+    else if host ? config then
+      host // {
+        config = host.config // {
+          age = (host.config.age or {}) // {
+            secrets = stubSecrets (host.config.age.secrets or {});
+          };
+          sops = (host.config.sops or {}) // {
+            secrets = stubSecrets (host.config.sops.secrets or {});
+            placeholder = (builtins.mapAttrs (name: _: "<placeholder:\${name}>") (host.config.sops.secrets or {})) // (host.config.sops.placeholder or {});
+          };
+        };
+      }
+    else
+      host;
+in
+  ${targetAccess}`;
+}
+
+export function wrapperForTarget(): string {
+  return `target:
+let
+  placeholderFile = builtins.toFile "placeholder" "placeholder-secret\\n";
+  placeholderStr = "<placeholder>";
+  stubSecrets = secrets:
+    if builtins.isAttrs secrets
+    then builtins.mapAttrs (_: s: if builtins.isAttrs s then s // { path = placeholderFile; value = placeholderStr; } else s) secrets
+    else secrets;
+in
+  if builtins.isAttrs target && (target ? path || target ? file) then
+    target // {
+      path = placeholderFile;
+      value = placeholderStr;
+    }
+  else if builtins.isAttrs target && target ? secrets then
+    target // { secrets = stubSecrets target.secrets; }
+  else if builtins.isAttrs target && target ? extendModules then
+    target.extendModules {
+      modules = [
+        ({ lib ? null, ... }:
+        let
+          force = if lib ? mkForce then lib.mkForce else (x: x);
+        in {
+          age.secrets = builtins.mapAttrs (_: _: {
+            path = force placeholderFile;
+          }) (target.config.age.secrets or {});
+          sops.secrets = builtins.mapAttrs (_: _: {
+            path = force placeholderFile;
+          }) (target.config.sops.secrets or {});
+          sops.placeholder = builtins.mapAttrs (name: _:
+            "<placeholder:\${name}>"
+          ) (target.config.sops.secrets or {});
+        })
+      ];
+    }
+  else if builtins.isString target && builtins.match "^/run/(agenix|secrets)/.*" target != null then
+    placeholderFile
+  else
+    target`;
+}
+
 // The effective tier is the only thing that opens the trusted path; a public eval's argv is E1's.
 export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string[] {
   const { request } = launch;
@@ -82,10 +175,31 @@ export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string
     "connect-timeout": "5",
   };
   const options = Object.entries(settings).flatMap(([k, v]) => ["--option", k, v]);
-  const command =
-    request.attr === "checks"
-      ? ["flake", "check", "--no-build", flakeRef]
-      : ["eval", `${flakeRef}#${request.attr}`];
+  let command: string[];
+  if (request.attr === "checks") {
+    command = ["flake", "check", "--no-build", flakeRef];
+  } else if (request.secrets === "stub") {
+    const nixosMatch = request.attr.match(/^nixosConfigurations\.([^.]+)\.(.*)$/);
+    if (nixosMatch) {
+      const host = nixosMatch[1];
+      const subpath = nixosMatch[2];
+      command = [
+        "eval",
+        `${flakeRef}#nixosConfigurations.${host}`,
+        "--apply",
+        wrapperForNixOS(subpath),
+      ];
+    } else {
+      command = [
+        "eval",
+        `${flakeRef}#${request.attr}`,
+        "--apply",
+        wrapperForTarget(),
+      ];
+    }
+  } else {
+    command = ["eval", `${flakeRef}#${request.attr}`];
+  }
   return [
     "--extra-experimental-features",
     "nix-command flakes",
@@ -150,6 +264,11 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   const nix = which("nix");
   const caBundle = resolveCaBundle(options.caBundle);
   const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-`);
+  if (request.secrets === "stub") {
+    const secretsDir = `${tmp}/secrets`;
+    mkdirSync(secretsDir);
+    writeFileSync(`${secretsDir}/placeholder`, "placeholder-secret\n");
+  }
   // ponytail: the whole host store is bound read-only for the nix binary's closure; bind only that
   // closure if this runner leaves the gVisor Job.
   const bwrap = [

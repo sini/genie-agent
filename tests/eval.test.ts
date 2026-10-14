@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { effectiveTier, resolveCaBundle, runEval, type EvalResult, type Tier } from "../src/eval/run.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/eval/${name}`, import.meta.url));
-const run = (name: string, attr: string, trusted: "yes" | "no", sender_tier: Tier) =>
-  runEval({ request: { repo: "local/fixture", rev: name, attr, trusted }, sender_tier }, {
+const run = (name: string, attr: string, trusted: "yes" | "no", sender_tier: Tier, secrets?: "stub" | "none") =>
+  runEval({ request: { repo: "local/fixture", rev: name, attr, trusted, ...(secrets ? { secrets } : {}) }, sender_tier }, {
     localFlake: fixture(name),
     timeoutMs: 60_000,
   });
@@ -231,3 +231,35 @@ test("a TLS fetch inside the jail succeeds with the resolved CA bundle", async (
   assert.match(r.stdout_tail.trim(), /^"\/work\/nix\/store\/[a-z0-9]+-example\.com"$/);
   assert.equal(r.limit_hit, "none");
 });
+
+test("a fixture flake reading an age secret evals with the stub", async () => {
+  const r = await run("secret", "nixosConfigurations.laptop.config.services.db.password", "no", "public", "stub");
+  assert.equal(r.exit, 0, r.stderr_tail);
+  assert.equal(r.stdout_tail.trim(), '"placeholder-secret\\n"');
+  assert.equal(r.limit_hit, "none");
+});
+
+test("mutant (oracle E5): a fixture flake reading an age secret without the stub fails to evaluate", async () => {
+  const r = await run("secret", "nixosConfigurations.laptop.config.services.db.password", "no", "public");
+  assert.notEqual(r.exit, 0);
+  assert.match(r.stderr_tail, /forbidden in pure eval(uation)? mode/);
+});
+
+test("a fixture flake with sops placeholder secret attrs evals with the stub", async () => {
+  const r1 = await run("secret", "nixosConfigurations.laptop.config.services.api.tokenPlaceholder", "no", "public", "stub");
+  assert.equal(r1.exit, 0, r1.stderr_tail);
+  assert.equal(r1.stdout_tail.trim(), '"<placeholder:api-token>"');
+  assert.equal(r1.limit_hit, "none");
+
+  const r2 = await run("secret", "nixosConfigurations.laptop.config.services.api.token", "no", "public", "stub");
+  assert.equal(r2.exit, 0, r2.stderr_tail);
+  assert.equal(r2.stdout_tail.trim(), '"placeholder-secret\\n"');
+  assert.equal(r2.limit_hit, "none");
+});
+
+test("mutant (oracle E5): a fixture flake reading a sops secret without the stub fails", async () => {
+  const r = await run("secret", "nixosConfigurations.laptop.config.services.api.token", "no", "public");
+  assert.notEqual(r.exit, 0);
+  assert.match(r.stderr_tail, /forbidden in pure eval(uation)? mode/);
+});
+

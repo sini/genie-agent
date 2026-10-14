@@ -18,6 +18,10 @@ never builds. Use it when the answer depends on a value Nix computes: an option'
   `nix flake check --no-build` on the whole flake instead.
 - `trusted` is `"no"` unless the thread is trusted and the eval needs import-from-derivation
   (IFD). It can only lower trust: `"yes"` on a public thread still runs untrusted.
+- `secrets` is optional (`"stub"`). Use when an agenix (`age.secrets.<name>.path`) or sops (`sops.secrets.<name>.path`)
+  secret path blocks evaluation under pure-eval mode. The runner stubs agenix/sops secret paths to placeholder
+  files in the jail scratch and substitutes placeholder secret attributes, allowing the expression to evaluate.
+  The result reflects stubbed secret paths and placeholder values, not real secrets.
 
 Evals run one at a time per thread.
 
@@ -36,9 +40,12 @@ limit that was hit as a finding, and add the unchecked claim to `gaps`.
 
 ## Secrets
 
-When an agenix or sops secret blocks the eval, stub its path or substitute a placeholder value
-in the attribute you evaluate. If that is not possible, say that a secret blocks the eval and what
-the eval would have checked.
+Eval never needs real secrets. When an agenix or sops secret path blocks the eval under pure-eval,
+set `secrets: "stub"` in the eval request. The runner evaluates the target through a wrapper expression
+that stubs `age.secrets.<name>.path` and `sops.secrets.<name>.path` with placeholder files and substitutes
+placeholder secret attributes (e.g. `sops.placeholder.<name>`). Say plainly in the answer that the result
+was evaluated with stubbed secret paths/values. If an eval is still blocked, say that a secret blocks the eval
+and what it would have checked.
 
 ## What to cite
 
@@ -49,8 +56,6 @@ in the `escalation` skill.
 ## Gaps in this skill
 
 - How tier 1 learns a thread is trusted is not in this skill.
-- An eval request carries only `repo`, `rev`, `attr` and `trusted`, so how a secret stub reaches
-  the evaluated configuration is not settled.
 - A trusted eval refused on a public thread becomes a pending action that a trusted person
   approves (plan C9). What tier 1 should say in that case is not settled here: describe the eval
   you would run and why, and list it in `gaps`.

@@ -143,7 +143,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
   const whole = (v: unknown) => v;
 
   const tools = [
-    c1("eval", "Evaluate one attribute of one repository at one rev (nix eval). Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
+    c1("eval", "Evaluate one attribute of one repository at one rev (nix eval). Set secrets: \"stub\" when agenix/sops secrets block pure-eval; the result is stubbed with placeholder paths/values. Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
     c1("recall", "Look up previously answered support questions.", object({ query: nonEmpty }), (v) => v.query),
     c1("escalate", "Hand this thread to the expert tier.", load("escalation"), whole),
     c1("reply", "Post the final draft answer. Call exactly once, last.", load("draft"), whole),

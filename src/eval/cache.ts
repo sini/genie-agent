@@ -14,7 +14,10 @@ export function cacheKeyFor(launch: Launch): CacheKey {
   const flags =
     (launch as unknown as { flags?: string[] }).flags ??
     (launch.request as unknown as { flags?: string[] }).flags ??
-    (effectiveTier(launch) === "trusted" ? ["trusted"] : []);
+    [
+      ...(effectiveTier(launch) === "trusted" ? ["trusted"] : []),
+      ...(launch.request.secrets === "stub" ? ["secrets:stub"] : []),
+    ];
   return {
     repo: launch.request.repo,
     rev: launch.request.rev,

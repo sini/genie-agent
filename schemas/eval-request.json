@@ -27,6 +27,13 @@
         "yes",
         "no"
       ]
+    },
+    "secrets": {
+      "description": "when a secret blocks eval, 'stub' substitutes agenix/sops paths and placeholder attrs",
+      "enum": [
+        "stub",
+        "none"
+      ]
     }
   }
 }

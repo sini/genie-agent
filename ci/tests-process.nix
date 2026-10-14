@@ -60,7 +60,11 @@
           "a fetch the network drops is limit egress before the runner's deadline" \
           'an eval SIGKILLed from outside with no OOM kill is limit unknown' \
           'the resolved CA bundle is a real file, not a symlink into /etc/static' \
-          'a TLS fetch inside the jail succeeds with the resolved CA bundle'; do
+          'a TLS fetch inside the jail succeeds with the resolved CA bundle' \
+          'a fixture flake reading an age secret evals with the stub' \
+          'mutant (oracle E5): a fixture flake reading an age secret without the stub fails to evaluate' \
+          'a fixture flake with sops placeholder secret attrs evals with the stub' \
+          'mutant (oracle E5): a fixture flake reading a sops secret without the stub fails'; do
           sed -n 's/^ok [0-9]* - //p' "$tap" | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
         done
         # Skipped where there is no systemd user scope to delegate, but never absent.

@@ -44,3 +44,10 @@ test("an effective trusted eval allows IFD and names the configured builders", (
   const value = a[a.indexOf("builders") + 1];
   assert.match(value, /^ssh(-ng)?:\/\/[^\s;]+ [a-z0-9_]+-[a-z]+$/);
 });
+
+test("secrets: stub adds --apply wrapper expression to argv", () => {
+  const a = nixArgv({ request: { repo: "a/b", rev: "main", attr: "nixosConfigurations.laptop.config.services.db.password", trusted: "no", secrets: "stub" }, sender_tier: "public" }, "github:a/b/main");
+  assert.ok(a.includes("--apply"));
+  assert.ok(a.includes("github:a/b/main#nixosConfigurations.laptop"));
+});
+
