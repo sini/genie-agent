@@ -7,7 +7,7 @@ import {
   DEFAULT_HINDSIGHT_ENDPOINT,
   DEN_LAW_BANK_ID,
   GENIE_BANK_ID,
-  HindsightBankClient,
+  HindsightRecallClient,
   verifyBankIsolation,
 } from "../src/bank/index.ts";
 
@@ -29,8 +29,8 @@ async function main() {
     process.exit(1);
   }
 
-  const genie = new HindsightBankClient(endpoint, GENIE_BANK_ID);
-  const denLaw = new HindsightBankClient(endpoint, DEN_LAW_BANK_ID);
+  const genie = new HindsightRecallClient(endpoint, GENIE_BANK_ID);
+  const denLaw = new HindsightRecallClient(endpoint, DEN_LAW_BANK_ID);
 
   console.log("Checking genie bank configuration...");
   const cfg = await genie.getConfig();

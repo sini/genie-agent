@@ -1,6 +1,7 @@
 { lib, ... }:
 let
   names = [
+    "candidate"
     "draft"
     "escalation"
     "eval-request"

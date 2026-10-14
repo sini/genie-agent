@@ -97,7 +97,9 @@ export const GENIE_BANK_CONFIG: BankConfig = {
   enable_reranking: true,
 };
 
-export class HindsightBankClient {
+// Recall-only client used by the genie process (supervisor, distiller, eval launcher, etc.).
+// Structural guarantee (Oracle 20): retains and bank-writes are impossible because retain is absent.
+export class HindsightRecallClient {
   readonly endpoint: string;
   readonly bankId: string;
 
@@ -118,16 +120,6 @@ export class HindsightBankClient {
     return res.json() as any;
   }
 
-  async createOrUpdate(config: BankConfig = GENIE_BANK_CONFIG): Promise<unknown> {
-    const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    if (!res.ok) throw new Error(`createOrUpdate failed (${res.status}): ${await res.text()}`);
-    return res.json();
-  }
-
   async recall(req: BankRecallRequest): Promise<BankRecallResponse> {
     const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}/memories/recall`, {
       method: "POST",
@@ -138,20 +130,53 @@ export class HindsightBankClient {
     return res.json() as Promise<BankRecallResponse>;
   }
 
-  async retain(req: BankRetainRequest): Promise<BankRetainResponse> {
-    const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}/memories`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    if (!res.ok) throw new Error(`retain failed (${res.status}): ${await res.text()}`);
-    return res.json() as Promise<BankRetainResponse>;
-  }
-
   async listMemories(): Promise<{ items: BankRecallItem[]; total: number }> {
     const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}/memories/list`);
     if (!res.ok) throw new Error(`listMemories failed (${res.status}): ${await res.text()}`);
     return res.json() as any;
+  }
+}
+
+// Write client used ONLY by the separate review CLI executable (genie-bank-review).
+// Requires human operator authorization credential (token).
+export class HindsightWriteClient extends HindsightRecallClient {
+  readonly writeCredential?: string;
+
+  constructor(
+    endpoint: string = DEFAULT_HINDSIGHT_ENDPOINT,
+    bankId: string = GENIE_BANK_ID,
+    writeCredential?: string,
+  ) {
+    super(endpoint, bankId);
+    this.writeCredential = writeCredential;
+  }
+
+  async createOrUpdate(config: BankConfig = GENIE_BANK_CONFIG): Promise<unknown> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.writeCredential) {
+      headers["Authorization"] = `Bearer ${this.writeCredential}`;
+    }
+    const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(config),
+    });
+    if (!res.ok) throw new Error(`createOrUpdate failed (${res.status}): ${await res.text()}`);
+    return res.json();
+  }
+
+  async retain(req: BankRetainRequest): Promise<BankRetainResponse> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.writeCredential) {
+      headers["Authorization"] = `Bearer ${this.writeCredential}`;
+    }
+    const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}/memories`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw new Error(`retain failed (${res.status}): ${await res.text()}`);
+    return res.json() as Promise<BankRetainResponse>;
   }
 }
 
@@ -165,8 +190,8 @@ export interface BankIsolationResult {
 }
 
 export async function verifyBankIsolation(
-  genieClient: HindsightBankClient,
-  denLawClient: HindsightBankClient,
+  genieClient: HindsightRecallClient,
+  denLawClient: HindsightRecallClient,
   query: string,
   expectedSeedDocId: string,
 ): Promise<BankIsolationResult> {
@@ -211,3 +236,9 @@ export async function verifyBankIsolation(
     positiveControlSeedFoundInDenLaw: false,
   };
 }
+
+// Re-exports for review queue, distiller, and human approval gate (Unit H2)
+export * from "./queue.ts";
+export * from "./distiller.ts";
+export * from "./cli.ts";
+

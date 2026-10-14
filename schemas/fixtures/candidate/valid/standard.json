@@ -1,0 +1,15 @@
+{
+  "document_id": "den-eval-no-build",
+  "title": "Evaluate Nix flake without building in den",
+  "problem": "How to inspect attributes of a flake without building derivation outputs",
+  "solution": "Use `den eval --no-build <flake>#<attr>` to inspect derivation attributes.",
+  "diagnostic_steps": [
+    "Run den eval --help to check flags",
+    "Verify no derivation build occurs during eval"
+  ],
+  "tags": [
+    "tier:support",
+    "den",
+    "eval"
+  ]
+}

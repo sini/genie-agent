@@ -149,6 +149,7 @@
                 ./tsconfig.json
                 ./src
                 ./schemas
+                ./bin
               ];
             };
             nativeBuildInputs = [ pkgs.typescript ];
@@ -929,6 +930,37 @@
                 grep -q "ok [0-9]* - mutant 2: seed entry absent from target bank triggers RED" $TMPDIR/tap || exit 1
                 grep -q "ok [0-9]* - mutant 3: positive control with 0 hits on den-law triggers RED" $TMPDIR/tap || exit 1
                 grep -q "ok [0-9]* - mutant 4: cross-contamination of seed entry in den-law triggers RED" $TMPDIR/tap || exit 1
+                touch $out
+              '';
+          # The distiller prompt and review queue (Unit H2, plan row H2, design §6, Oracle 20).
+          distiller =
+            pkgs.runCommand "genie-agent-distiller"
+              {
+                nativeBuildInputs = [ pkgs.nodejs ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src/bank
+                    ./bin
+                    ./prompts/distiller.md
+                    ./schemas/candidate.json
+                    ./tests/distiller.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/distiller.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 1: the genie root's bank client has no retain" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 2: accept => queue grows by 1 on disk and bank by 0" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 3: candidate enqueued by genie process is approved by separate CLI process, and bank grows by 1" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 4: check-passing entry with no approval stays out of the bank" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 5: deterministic checks run again at approve time and may still refuse" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 6: review CLI without valid write token fails and bank stays empty" $TMPDIR/tap || exit 1
+                grep -q "ok [0-9]* - Oracle 20 cell 7: deterministic checks refuse credentials and planted markers on enqueue" $TMPDIR/tap || exit 1
                 touch $out
               '';
         }

@@ -9,6 +9,7 @@ export const schemaNames = [
   "escalation",
   "proposal",
   "thread-state",
+  "candidate",
 ] as const;
 
 export type SchemaName = (typeof schemaNames)[number];

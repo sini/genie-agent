@@ -52,6 +52,18 @@ once at start and trimmed, sent as `Authorization: Bearer <key>` on `/v1/models`
 unreadable or empty exits 2; unset sends no header). `tests/guard-eval.ts` takes the same
 `--api-key-file`. `XDG_RUNTIME_DIR` is required. A bad setting exits 2 and names it.
 
+## Support Memory & Review Queue (Unit H2, Oracle 20)
+
+Accepted thread resolutions are distilled into candidates and enqueued to a persistent review queue on disk (`<queueDir>/pending/<id>.json`).
+
+The boundary is enforced across process and credential boundaries:
+
+- The genie root process has only enqueue access to the queue directory and uses `HindsightRecallClient`, which lacks the `retain` method and holds no bank-write credentials.
+- Approval is executed by the human owner running the standalone `genie-bank-review` CLI executable, configured with the write token.
+- Deterministic checks (credential shapes, private memory markers) run at enqueue time and re-run at approve time.
+
+Note: The boundary only holds if the live Hindsight API requires the write token (`Authorization: Bearer <token>`). If it accepts unauthenticated writes today, that is a deployment gap for the owner, not something to fix in code.
+
 ## Tests
 
 ```sh

@@ -9,7 +9,8 @@ import {
   DEN_LAW_BANK_ID,
   GENIE_BANK_CONFIG,
   GENIE_BANK_ID,
-  HindsightBankClient,
+  HindsightRecallClient,
+  HindsightWriteClient,
   verifyBankIsolation,
 } from "../src/bank/index.ts";
 
@@ -75,10 +76,10 @@ async function stubHindsight(handlers?: {
   };
 }
 
-test("HindsightBankClient: recall and retain serialization over HTTP", async () => {
+test("HindsightWriteClient: recall and retain serialization over HTTP", async () => {
   const stub = await stubHindsight();
   try {
-    const client = new HindsightBankClient(stub.endpoint, "genie");
+    const client = new HindsightWriteClient(stub.endpoint, "genie");
     const rec = await client.recall({ query: "pure eval limits" });
     assert.equal(rec.results.length, 1);
     assert.equal(rec.results[0].document_id, "eval-never-build");
@@ -96,8 +97,8 @@ test("HindsightBankClient: recall and retain serialization over HTTP", async () 
 test("oracle H1: bank isolation verification succeeds with seed entry and isolated banks", async () => {
   const stub = await stubHindsight();
   try {
-    const genie = new HindsightBankClient(stub.endpoint, "genie");
-    const denLaw = new HindsightBankClient(stub.endpoint, "den-law");
+    const genie = new HindsightRecallClient(stub.endpoint, "genie");
+    const denLaw = new HindsightRecallClient(stub.endpoint, "den-law");
 
     const res = await verifyBankIsolation(genie, denLaw, "pure eval", "eval-never-build");
     assert.equal(res.seedFound, true);
@@ -125,8 +126,8 @@ test("mutant 1: target bank leaking den-law entries triggers RED", async () => {
     },
   });
   try {
-    const genie = new HindsightBankClient(stub.endpoint, "genie");
-    const denLaw = new HindsightBankClient(stub.endpoint, "den-law");
+    const genie = new HindsightRecallClient(stub.endpoint, "genie");
+    const denLaw = new HindsightRecallClient(stub.endpoint, "den-law");
 
     await assert.rejects(
       () => verifyBankIsolation(genie, denLaw, "pure eval", "eval-never-build"),
@@ -147,8 +148,8 @@ test("mutant 2: seed entry absent from target bank triggers RED", async () => {
     },
   });
   try {
-    const genie = new HindsightBankClient(stub.endpoint, "genie");
-    const denLaw = new HindsightBankClient(stub.endpoint, "den-law");
+    const genie = new HindsightRecallClient(stub.endpoint, "genie");
+    const denLaw = new HindsightRecallClient(stub.endpoint, "den-law");
 
     await assert.rejects(
       () => verifyBankIsolation(genie, denLaw, "pure eval", "eval-never-build"),
@@ -171,8 +172,8 @@ test("mutant 3: positive control with 0 hits on den-law triggers RED", async () 
     },
   });
   try {
-    const genie = new HindsightBankClient(stub.endpoint, "genie");
-    const denLaw = new HindsightBankClient(stub.endpoint, "den-law");
+    const genie = new HindsightRecallClient(stub.endpoint, "genie");
+    const denLaw = new HindsightRecallClient(stub.endpoint, "den-law");
 
     await assert.rejects(
       () => verifyBankIsolation(genie, denLaw, "pure eval", "eval-never-build"),
@@ -199,8 +200,8 @@ test("mutant 4: cross-contamination of seed entry in den-law triggers RED", asyn
     },
   });
   try {
-    const genie = new HindsightBankClient(stub.endpoint, "genie");
-    const denLaw = new HindsightBankClient(stub.endpoint, "den-law");
+    const genie = new HindsightRecallClient(stub.endpoint, "genie");
+    const denLaw = new HindsightRecallClient(stub.endpoint, "den-law");
 
     await assert.rejects(
       () => verifyBankIsolation(genie, denLaw, "pure eval", "eval-never-build"),
