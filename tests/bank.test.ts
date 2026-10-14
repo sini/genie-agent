@@ -76,15 +76,30 @@ async function stubHindsight(handlers?: {
   };
 }
 
-test("HindsightWriteClient: recall and retain serialization over HTTP", async () => {
+test("HindsightWriteClient: recall and retain serialization over HTTP and fail-closed token enforcement", async () => {
   const stub = await stubHindsight();
   try {
-    const client = new HindsightWriteClient(stub.endpoint, "genie");
-    const rec = await client.recall({ query: "pure eval limits" });
+    const clientWithoutToken = new HindsightWriteClient(stub.endpoint, "genie");
+    const rec = await clientWithoutToken.recall({ query: "pure eval limits" });
     assert.equal(rec.results.length, 1);
     assert.equal(rec.results[0].document_id, "eval-never-build");
 
-    const ret = await client.retain({
+    // Fail-closed: retain and createOrUpdate refuse before any network call when no token is configured
+    await assert.rejects(
+      () =>
+        clientWithoutToken.retain({
+          items: [{ content: "sample content", document_id: "test-doc" }],
+        }),
+      /Hindsight write token required: provide via --write-token-file, HINDSIGHT_WRITE_TOKEN, or --write-token/,
+    );
+    await assert.rejects(
+      () => clientWithoutToken.createOrUpdate(),
+      /Hindsight write token required: provide via --write-token-file, HINDSIGHT_WRITE_TOKEN, or --write-token/,
+    );
+
+    // With token configured: retain succeeds
+    const clientWithToken = new HindsightWriteClient(stub.endpoint, "genie", "test-token-write");
+    const ret = await clientWithToken.retain({
       items: [{ content: "sample content", document_id: "test-doc" }],
     });
     assert.equal(ret.success, true);

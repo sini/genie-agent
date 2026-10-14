@@ -33,6 +33,7 @@ const SECRET_WRITE_TOKEN = "secret-owner-bank-token-987";
 // Stub hindsight HTTP server with optional Bearer token enforcement on /memories retain
 async function stubHindsightBank(requiredWriteToken?: string) {
   const retainedItems: { bank: string; item: any }[] = [];
+  const requests: { method: string; url: string; headers: Record<string, string | string[] | undefined>; body: string }[] = [];
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     let body = "";
@@ -40,6 +41,7 @@ async function stubHindsightBank(requiredWriteToken?: string) {
       body += chunk;
     });
     req.on("end", () => {
+      requests.push({ method: req.method ?? "GET", url: req.url ?? "", headers: req.headers, body });
       const u = new URL(req.url ?? "", "http://localhost");
 
       if (u.pathname.endsWith("/memories") && req.method === "POST") {
@@ -91,6 +93,7 @@ async function stubHindsightBank(requiredWriteToken?: string) {
   return {
     endpoint: `http://127.0.0.1:${port}`,
     retainedItems,
+    requests,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -369,5 +372,192 @@ test("Oracle 20 cell 7: deterministic checks refuse credentials and planted mark
     assert.equal(res2.candidate.status, "refused");
   } finally {
     fs.rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("Oracle H2.1 cell 1: no token => approve makes zero HTTP requests, exits non-zero, and entry is still pending", async () => {
+  const stub = await stubHindsightBank();
+  const queueDir = makeTempQueueDir();
+  try {
+    const queue = new ReviewQueue(queueDir);
+    const rootRecallClient = new HindsightRecallClient(stub.endpoint, "genie");
+    const distiller = new Distiller(queue, rootRecallClient);
+
+    const result = distiller.acceptResolution({
+      threadId: "thread-h2-1-1",
+      userQuestion: "How do I query bank without token?",
+      diagnosticSteps: ["check auth headers"],
+      acceptedSolution: "A writer must refuse to write without a token.",
+      documentIdSlug: "h2-1-no-token-refusal",
+      tags: ["tier:support", "h2-1"],
+    });
+
+    const candidateId = result.candidate.id;
+    assert.equal(result.admittedToQueue, true);
+    assert.equal(queue.size("pending"), 1);
+    assert.equal(stub.requests.length, 0);
+
+    // Run approve without ANY token (no --write-token, no --write-token-file, empty HINDSIGHT_WRITE_TOKEN in env)
+    await assert.rejects(
+      () =>
+        execFileAsync(
+          "node",
+          [
+            CLI_PATH,
+            "approve",
+            candidateId,
+            "--queue-dir",
+            queueDir,
+            "--endpoint",
+            stub.endpoint,
+          ],
+          {
+            env: {
+              ...process.env,
+              HINDSIGHT_WRITE_TOKEN: "",
+            },
+          },
+        ),
+      (err: any) => {
+        // Must exit non-zero
+        assert.notEqual(err.code, 0);
+        // Error message names the three sources
+        assert.ok(err.stderr.includes("--write-token-file"), "error must name --write-token-file");
+        assert.ok(err.stderr.includes("HINDSIGHT_WRITE_TOKEN"), "error must name HINDSIGHT_WRITE_TOKEN");
+        assert.ok(err.stderr.includes("--write-token"), "error must name --write-token");
+        return true;
+      },
+    );
+
+    // GATING ORACLE ASSERTION: fake server received ZERO HTTP requests
+    assert.equal(stub.requests.length, 0, "fake server must count zero HTTP requests");
+
+    // GATING ORACLE ASSERTION: entry is still pending on disk, never moved to approved
+    assert.equal(queue.size("pending"), 1);
+    assert.equal(queue.get(candidateId)?.status, "pending");
+    assert.ok(fs.existsSync(path.join(queueDir, "pending", `${candidateId}.json`)));
+    assert.ok(!fs.existsSync(path.join(queueDir, "approved", `${candidateId}.json`)));
+  } finally {
+    fs.rmSync(queueDir, { recursive: true, force: true });
+    await stub.close();
+  }
+});
+
+test("Oracle H2.1 cell 2: token set => exactly one write carrying Authorization: Bearer <token>", async () => {
+  const testToken = "test-token-oracle-2-xyz";
+  const stub = await stubHindsightBank(testToken);
+  const queueDir = makeTempQueueDir();
+  const tokenFile = path.join(queueDir, "write-token.txt");
+  fs.writeFileSync(tokenFile, testToken, "utf8");
+
+  try {
+    const queue = new ReviewQueue(queueDir);
+    const rootRecallClient = new HindsightRecallClient(stub.endpoint, "genie");
+    const distiller = new Distiller(queue, rootRecallClient);
+
+    const result = distiller.acceptResolution({
+      threadId: "thread-h2-1-2",
+      userQuestion: "How do I write bank with token file?",
+      diagnosticSteps: ["check write token file"],
+      acceptedSolution: "Pass token via --write-token-file securely.",
+      documentIdSlug: "h2-1-token-file-write",
+      tags: ["tier:support", "h2-1"],
+    });
+
+    const candidateId = result.candidate.id;
+    assert.equal(result.admittedToQueue, true);
+    assert.equal(stub.requests.length, 0);
+
+    const { stdout, stderr } = await execFileAsync(
+      "node",
+      [
+        CLI_PATH,
+        "approve",
+        candidateId,
+        "--queue-dir",
+        queueDir,
+        "--endpoint",
+        stub.endpoint,
+        "--write-token-file",
+        tokenFile,
+      ],
+      {
+        env: {
+          ...process.env,
+          HINDSIGHT_WRITE_TOKEN: "",
+        },
+      },
+    );
+
+    assert.ok(stdout.includes(`Approved candidate ${candidateId}`));
+    // With --write-token-file, stderr should not contain deprecation warning
+    assert.ok(!stderr.includes("Warning: --write-token is deprecated"));
+
+    // GATING ORACLE ASSERTION: exactly one write request
+    assert.equal(stub.requests.length, 1, "exactly one HTTP request made");
+    assert.equal(stub.requests[0].method, "POST");
+
+    // GATING ORACLE ASSERTION: carrying Authorization: Bearer <token>
+    assert.equal(
+      stub.requests[0].headers["authorization"],
+      `Bearer ${testToken}`,
+      "must carry Authorization: Bearer <token>",
+    );
+
+    // Candidate moved to approved
+    assert.equal(queue.get(candidateId)?.status, "approved");
+    assert.ok(fs.existsSync(path.join(queueDir, "approved", `${candidateId}.json`)));
+  } finally {
+    fs.rmSync(queueDir, { recursive: true, force: true });
+    await stub.close();
+  }
+});
+
+test("Oracle H2.1 cell 3: --write-token warns on stderr and recommends --write-token-file", async () => {
+  const testToken = "legacy-token-ps-warning";
+  const stub = await stubHindsightBank(testToken);
+  const queueDir = makeTempQueueDir();
+
+  try {
+    const queue = new ReviewQueue(queueDir);
+    const rootRecallClient = new HindsightRecallClient(stub.endpoint, "genie");
+    const distiller = new Distiller(queue, rootRecallClient);
+
+    const result = distiller.acceptResolution({
+      threadId: "thread-h2-1-3",
+      userQuestion: "How do I test legacy write token warning?",
+      diagnosticSteps: ["check stderr warning"],
+      acceptedSolution: "Warn on stderr when --write-token is passed.",
+      documentIdSlug: "h2-1-write-token-warning",
+      tags: ["tier:support", "h2-1"],
+    });
+
+    const candidateId = result.candidate.id;
+    assert.equal(result.admittedToQueue, true);
+
+    const { stdout, stderr } = await execFileAsync("node", [
+      CLI_PATH,
+      "approve",
+      candidateId,
+      "--queue-dir",
+      queueDir,
+      "--endpoint",
+      stub.endpoint,
+      "--write-token",
+      testToken,
+    ]);
+
+    // Token is still accepted and approval succeeds
+    assert.ok(stdout.includes(`Approved candidate ${candidateId}`));
+
+    // GATING ORACLE ASSERTION: warns on stderr and recommends --write-token-file
+    assert.match(
+      stderr,
+      /Warning:.*--write-token.*--write-token-file/,
+      "--write-token must emit warning on stderr recommending --write-token-file",
+    );
+  } finally {
+    fs.rmSync(queueDir, { recursive: true, force: true });
+    await stub.close();
   }
 });

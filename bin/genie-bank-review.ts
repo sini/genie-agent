@@ -38,9 +38,15 @@ function parseArgs(args: string[]) {
 async function main() {
   const { command, id, options } = parseArgs(process.argv.slice(2));
 
+  if (options["write-token"]) {
+    console.error(
+      "Warning: --write-token is deprecated (token is visible in ps); use --write-token-file instead",
+    );
+  }
+
   const queueDir = options["queue-dir"] ?? process.env.GENIE_REVIEW_QUEUE_DIR ?? path.join(process.cwd(), "review-queue");
   const endpoint = options["endpoint"] ?? process.env.HINDSIGHT_ENDPOINT;
-  const writeCredential = options["write-token"] ?? process.env.HINDSIGHT_WRITE_TOKEN;
+  const writeCredential = options["write-token"];
   const writeCredentialFile = options["write-token-file"];
 
   const approver = new ReviewApprover({

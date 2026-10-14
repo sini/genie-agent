@@ -137,6 +137,9 @@ export class HindsightRecallClient {
   }
 }
 
+export const WRITE_TOKEN_MISSING_ERROR =
+  "Hindsight write token required: provide via --write-token-file, HINDSIGHT_WRITE_TOKEN, or --write-token";
+
 // Write client used ONLY by the separate review CLI executable (genie-bank-review).
 // Requires human operator authorization credential (token).
 export class HindsightWriteClient extends HindsightRecallClient {
@@ -151,11 +154,19 @@ export class HindsightWriteClient extends HindsightRecallClient {
     this.writeCredential = writeCredential;
   }
 
-  async createOrUpdate(config: BankConfig = GENIE_BANK_CONFIG): Promise<unknown> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.writeCredential) {
-      headers["Authorization"] = `Bearer ${this.writeCredential}`;
+  private requireWriteToken(): string {
+    if (!this.writeCredential || this.writeCredential.trim() === "") {
+      throw new Error(WRITE_TOKEN_MISSING_ERROR);
     }
+    return this.writeCredential.trim();
+  }
+
+  async createOrUpdate(config: BankConfig = GENIE_BANK_CONFIG): Promise<unknown> {
+    const token = this.requireWriteToken();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
     const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}`, {
       method: "PUT",
       headers,
@@ -166,10 +177,11 @@ export class HindsightWriteClient extends HindsightRecallClient {
   }
 
   async retain(req: BankRetainRequest): Promise<BankRetainResponse> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.writeCredential) {
-      headers["Authorization"] = `Bearer ${this.writeCredential}`;
-    }
+    const token = this.requireWriteToken();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
     const res = await fetch(`${this.endpoint}/v1/default/banks/${encodeURIComponent(this.bankId)}/memories`, {
       method: "POST",
       headers,

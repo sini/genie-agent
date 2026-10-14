@@ -36,9 +36,16 @@ export class ReviewApprover {
     this.queue = new ReviewQueue(opts.queueDir);
     this.operatorId = opts.operatorId ?? "owner";
 
-    let cred = opts.writeCredential ?? process.env.HINDSIGHT_WRITE_TOKEN;
-    if (!cred && opts.writeCredentialFile && fs.existsSync(opts.writeCredentialFile)) {
+    let cred: string | undefined;
+    if (opts.writeCredentialFile) {
+      if (!fs.existsSync(opts.writeCredentialFile)) {
+        throw new Error(`Write token file not found: ${opts.writeCredentialFile}`);
+      }
       cred = fs.readFileSync(opts.writeCredentialFile, "utf8").trim();
+    } else if (opts.writeCredential && opts.writeCredential.trim() !== "") {
+      cred = opts.writeCredential.trim();
+    } else if (process.env.HINDSIGHT_WRITE_TOKEN && process.env.HINDSIGHT_WRITE_TOKEN.trim() !== "") {
+      cred = process.env.HINDSIGHT_WRITE_TOKEN.trim();
     }
 
     const endpoint = opts.endpoint ?? process.env.HINDSIGHT_ENDPOINT ?? DEFAULT_HINDSIGHT_ENDPOINT;
