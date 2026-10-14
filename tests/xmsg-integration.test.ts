@@ -1,31 +1,34 @@
 // Integration gating oracles for xmsg addressing migration (AM-1, AM-2, AM-3, AM-4).
-// Oracle 1: Guard round trip (bare genie-guard name, verdict relayed; mutant: svc:genie-guard refused).
-// Oracle 2: Two outstanding dispatcher sends to two instance fakes with distinct PIDs; fakes reply
-// in reverse order; turns matched by inReplyTo; mutant: taking next pushed reply gives Turn 1 Reply 2.
-// Run with: node --test tests/xmsg-integration.test.ts
+// Oracle 1: Guard round trip against real xmsg serve and mock ninfer.
+//   Mutant: in src/guard/main.ts, register as "svc:genie-guard" instead of "genie-guard" => RED.
+// Oracle 2: Two outstanding dispatcher sends through Delivery (D1b) to two instance fakes with distinct PIDs;
+//   fakes reply in reverse order; turns matched by inReplyTo; asserts through dispatcher's own replies
+//   and journal.
+//   Mutant: in src/dispatcher/delivery.ts:132, matching any outstanding turn (|| true) => RED.
+// Run with:
+//   XMSG_BIN=<path> GENIE_GUARD_BIN=<path> node --test tests/xmsg-integration.test.ts
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import { createConnection, createServer as createNetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
+import { Delivery, Dispatcher, SocketXmsg, type Inbound } from "../src/dispatcher/index.ts";
 
-const XMSG_BIN =
-  process.env.XMSG_BIN ??
-  (existsSync("/nix/store/c5xj0l24aqy8439rjsnrvlgw4r51qg7c-xmsg-0.1.0/bin/xmsg")
-    ? "/nix/store/c5xj0l24aqy8439rjsnrvlgw4r51qg7c-xmsg-0.1.0/bin/xmsg"
-    : "xmsg");
+const XMSG_BIN = process.env.XMSG_BIN;
+if (!XMSG_BIN || !existsSync(XMSG_BIN)) {
+  throw new Error(`XMSG_BIN environment variable is required and must point to a valid executable (got: ${XMSG_BIN})`);
+}
 
-const GENIE_GUARD_BIN =
-  process.env.GENIE_GUARD_BIN ??
-  (existsSync("/nix/store/x9c6bmg3hfjsm87crvz1pq6zjkd34kh1-genie-guard-0.1.0/bin/genie-guard")
-    ? "/nix/store/x9c6bmg3hfjsm87crvz1pq6zjkd34kh1-genie-guard-0.1.0/bin/genie-guard"
-    : "genie-guard");
+const GENIE_GUARD_BIN = process.env.GENIE_GUARD_BIN;
+if (!GENIE_GUARD_BIN || !existsSync(GENIE_GUARD_BIN)) {
+  throw new Error(
+    `GENIE_GUARD_BIN environment variable is required and must point to a valid executable (got: ${GENIE_GUARD_BIN})`,
+  );
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -157,8 +160,8 @@ function unixHttp(
 // -----------------------------------------------------------------------------
 // Oracle 1: Guard round trip
 // - genie-guard registers under bare name "genie-guard" (no "svc:" prefix)
-// - xmsg refuses registration attempting "svc:genie-guard" (mutant check)
-// - An envelope sent to genie-guard is reviewed via ninfer and the verdict replied
+// - An envelope sent to genie-guard is reviewed via mock ninfer and the verdict replied
+// Mutant: src/guard/main.ts registering as "svc:genie-guard" is refused by xmsg => RED.
 // -----------------------------------------------------------------------------
 test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { timeout: 30_000 }, async () => {
   const node = await startXmsg({
@@ -169,24 +172,6 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
   let guardProc: ChildProcess | null = null;
 
   try {
-    // Mutant test: registering as "svc:genie-guard" on register.sock is refused by xmsg.
-    const mutantSocket = createConnection(node.registerSock);
-    mutantSocket.setEncoding("utf8");
-    const mutantResult = await new Promise<{ status?: string; error?: string }>((resolve, reject) => {
-      mutantSocket.on("error", reject);
-      mutantSocket.on("data", (chunk: string) => {
-        const line = chunk.trim().split("\n")[0];
-        try {
-          resolve(JSON.parse(line));
-        } catch (e) {
-          reject(e);
-        }
-      });
-      mutantSocket.write(JSON.stringify({ harness: "svc", name: "svc:genie-guard" }) + "\n");
-    });
-    mutantSocket.destroy();
-    assert.equal(mutantResult.status, "error", "xmsg must refuse registration under svc:genie-guard");
-
     // Start mock ninfer server
     let receivedPrompt = "";
     ninferServer = createHttpServer((req, res) => {
@@ -282,10 +267,13 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
 });
 
 // -----------------------------------------------------------------------------
-// Oracle 2: Two outstanding dispatcher sends to two instance fakes with distinct PIDs
+// Oracle 2: Two outstanding dispatcher sends through Delivery (D1b) to two instance fakes
+// - Real Delivery and Dispatcher connected to real xmsg serve via SocketXmsg("genie-expert")
+// - Two distinct child processes running instance fakes with distinct PIDs
 // - Fakes reply in reverse order (inst-2 replies before inst-1)
-// - Turns are matched by inReplyTo
-// - Mutant: taking next pushed reply gives Turn 1 Reply 2 => RED
+// - Turns are matched by inReplyTo in Delivery.receive(): each supervisor message receives
+//   its own turn's reply, verified through xmsg replies and Dispatcher journal
+// Mutant: src/dispatcher/delivery.ts:132 matching any outstanding send (|| true) => RED
 // -----------------------------------------------------------------------------
 test(
   "oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order",
@@ -430,6 +418,7 @@ process.stdin.on("data", (chunk) => {
     const inst2 = spawnInstanceFake("inst-2");
 
     const dispatcherXmsg = new SocketXmsg(node.xmsgDir, "genie-expert");
+    let del: Delivery | null = null;
 
     try {
       // Wait for both instance fakes to be ready
@@ -442,14 +431,79 @@ process.stdin.on("data", (chunk) => {
       // Register dispatcher on register.sock
       await dispatcherXmsg.register();
 
-      // Dispatcher sends message 1 to inst-1 and message 2 to inst-2
-      const sent1Id = await dispatcherXmsg.send("inst-1", "question 1", "key-1");
-      const sent2Id = await dispatcherXmsg.send("inst-2", "question 2", "key-2");
-      assert.ok(sent1Id, "sent 1 must yield message id");
-      assert.ok(sent2Id, "sent 2 must yield message id");
-      assert.notEqual(sent1Id, sent2Id, "sent message IDs must be distinct");
+      // Open real Dispatcher and configure threads
+      const stateDir = join(node.dir, "dispatcher-state");
+      mkdirSync(stateDir, { recursive: true });
 
-      // Verify each instance receives its message
+      const d = await Dispatcher.open({
+        stateDir,
+        herdr: {
+          start: async () => "p1",
+          close: async () => {},
+          list: async () => [{ pane: "p1" }, { pane: "p2" }],
+        },
+        xmsg: dispatcherXmsg,
+        pickToken: () => ({ id: "tok-1", configDir: "/tmp" }),
+        cwd: "/tmp",
+      });
+
+      const t1 = d.thread("thread-1");
+      t1.session = "inst-1";
+      t1.state = "live";
+      t1.pane = "p1";
+      t1.launched = true;
+
+      const t2 = d.thread("thread-2");
+      t2.session = "inst-2";
+      t2.state = "live";
+      t2.pane = "p2";
+      t2.launched = true;
+      d.save();
+
+      // Wire real Delivery
+      del = new Delivery(d, dispatcherXmsg, {
+        threadOf: (m: Inbound) => m.text.split(":")[0],
+        replyTimeoutMs: 15_000,
+      });
+      del.start();
+
+      // Send two supervisor messages to genie-expert via xmsg HTTP POST /v1/messages
+      const supSend1 = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie-expert",
+        from: "supervisor",
+        text: "thread-1:question 1",
+      });
+      assert.equal(supSend1.status, 202);
+      const supMsg1Id = supSend1.json?.message_id;
+      assert.ok(supMsg1Id, "supervisor message 1 must have id");
+
+      const supSend2 = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie-expert",
+        from: "supervisor",
+        text: "thread-2:question 2",
+      });
+      assert.equal(supSend2.status, 202);
+      const supMsg2Id = supSend2.json?.message_id;
+      assert.ok(supMsg2Id, "supervisor message 2 must have id");
+
+      // Pump delivery twice to consume inbound supervisor messages and forward them to instances
+      const pumped1 = await del.pump(5000);
+      assert.equal(pumped1, true, "delivery must pump first supervisor message");
+      const pumped2 = await del.pump(5000);
+      assert.equal(pumped2, true, "delivery must pump second supervisor message");
+
+      // Wait for drains to settle
+      await del.settled();
+
+      // Check both threads now have outstanding sends in the journal
+      assert.equal(t1.outstanding.length, 1, "thread-1 must have 1 outstanding send");
+      assert.equal(t2.outstanding.length, 1, "thread-2 must have 1 outstanding send");
+
+      const sent1Id = t1.outstanding[0].sent;
+      const sent2Id = t2.outstanding[0].sent;
+      assert.notEqual(sent1Id, sent2Id, "sent IDs must differ");
+
+      // Wait for both instance fakes to receive their forwarded messages
       await inst1.waitLine(`DELIVERED ${sent1Id}`);
       await inst2.waitLine(`DELIVERED ${sent2Id}`);
 
@@ -460,45 +514,28 @@ process.stdin.on("data", (chunk) => {
       inst1.sendCmd(`REPLY ${sent1Id} Reply 1`);
       await inst1.waitLine(`REPLIED ${sent1Id}`);
 
-      // Dispatcher receives pushed replies via poll()
-      const pushedA = await dispatcherXmsg.poll(5000);
-      assert.ok(pushedA, "pushed reply A must not be null");
-      await dispatcherXmsg.ack(pushedA.id);
+      // Pump delivery twice to consume pushed replies and resolve turns
+      const pumpedReply1 = await del.pump(5000);
+      assert.equal(pumpedReply1, true, "delivery must pump first pushed reply");
+      const pumpedReply2 = await del.pump(5000);
+      assert.equal(pumpedReply2, true, "delivery must pump second pushed reply");
 
-      const pushedB = await dispatcherXmsg.poll(5000);
-      assert.ok(pushedB, "pushed reply B must not be null");
-      await dispatcherXmsg.ack(pushedB.id);
+      // Both outstanding sends must be cleared by Delivery
+      assert.equal(t1.outstanding.length, 0, "thread-1 outstanding must be cleared");
+      assert.equal(t2.outstanding.length, 0, "thread-2 outstanding must be cleared");
 
-      // Arrival order verification: pushedA was from inst-2, pushedB was from inst-1
-      assert.equal(pushedA.inReplyTo, sent2Id, "first pushed message should correspond to send 2");
-      assert.equal(pushedA.text, "Reply 2");
+      // Verify that each supervisor message received its own turn's reply from Delivery
+      const m1Replies = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(supMsg1Id)}/replies?wait=2`);
+      assert.equal(m1Replies.status, 200);
+      assert.ok(Array.isArray(m1Replies.json) && m1Replies.json.length > 0, "supervisor msg 1 must have reply");
+      assert.equal(m1Replies.json[0].text, "Reply 1", "thread-1 turn must be answered with Reply 1");
 
-      assert.equal(pushedB.inReplyTo, sent1Id, "second pushed message should correspond to send 1");
-      assert.equal(pushedB.text, "Reply 1");
-
-      // Matching by inReplyTo:
-      const turns = new Map<string, string>();
-      for (const p of [pushedA, pushedB]) {
-        if (p.inReplyTo) turns.set(p.inReplyTo, p.text);
-      }
-
-      const turn1Reply = turns.get(sent1Id);
-      const turn2Reply = turns.get(sent2Id);
-
-      assert.equal(turn1Reply, "Reply 1", "Turn 1 must receive Reply 1 matched by inReplyTo");
-      assert.equal(turn2Reply, "Reply 2", "Turn 2 must receive Reply 2 matched by inReplyTo");
-
-      // Mutant assertion:
-      // If dispatcher took the next pushed reply in FIFO arrival order without matching inReplyTo,
-      // Turn 1 would take pushedA.text ("Reply 2").
-      const naiveFifoTurn1Reply = pushedA.text;
-      assert.equal(naiveFifoTurn1Reply, "Reply 2");
-      assert.notEqual(
-        turn1Reply,
-        naiveFifoTurn1Reply,
-        "mutant check: Turn 1 would erroneously receive Reply 2 under naive FIFO taking",
-      );
+      const m2Replies = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(supMsg2Id)}/replies?wait=2`);
+      assert.equal(m2Replies.status, 200);
+      assert.ok(Array.isArray(m2Replies.json) && m2Replies.json.length > 0, "supervisor msg 2 must have reply");
+      assert.equal(m2Replies.json[0].text, "Reply 2", "thread-2 turn must be answered with Reply 2");
     } finally {
+      del?.stop();
       dispatcherXmsg.close();
       await inst1.stop();
       await inst2.stop();
