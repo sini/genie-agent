@@ -122,13 +122,11 @@ export interface RenderJobOptions {
   storeClaimName?: string;
   storeMountPath?: string;
   scratchMountPath?: string;
+  repoClaimName?: string;
+  repoMountPath?: string;
   builders?: string;
   localFlake?: string;
   labels?: Record<string, string>;
-  repoVolume?: K8sVolume;
-  repoVolumeMount?: K8sVolumeMount;
-  extraVolumes?: K8sVolume[];
-  extraVolumeMounts?: K8sVolumeMount[];
   env?: { name: string; value: string }[];
 }
 
@@ -142,26 +140,6 @@ export const DEFAULT_RESOURCES: K8sResourceRequirements = {
   requests: { cpu: "2", memory: "12Gi" },
   limits: { cpu: "2", memory: "12Gi" },
 };
-
-// Constructs a read-only PVC volume for the repository source under evaluation (design §5.2 layer 4).
-export function repoSourceVolume(claimName: string, name = "repo"): K8sVolume {
-  return {
-    name,
-    persistentVolumeClaim: {
-      claimName,
-      readOnly: true,
-    },
-  };
-}
-
-// Constructs a read-only volume mount for the repository source (design §5.2 layer 4).
-export function repoSourceMount(mountPath = "/src", name = "repo"): K8sVolumeMount {
-  return {
-    name,
-    mountPath,
-    readOnly: true,
-  };
-}
 
 // Renders the Kubernetes Job manifest for one eval launch.
 export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJob {
@@ -187,7 +165,13 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
       ? undefined
       : (options.runtimeClassName ?? "gvisor");
 
+  const repoVolumeName = "repo";
+  const storeVolumeName = "thread-store";
+  const scratchVolumeName = "scratch";
+
+  const repoMountPath = options.repoMountPath ?? "/src";
   const storeMountPath = options.storeMountPath ?? "/thread-store";
+  const scratchMountPath = options.scratchMountPath ?? "/tmp";
 
   // Nix eval arguments:
   // --store <mountPath> points to a local chroot store under the mounted PVC so fetched inputs persist
@@ -202,10 +186,16 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     ...nixArgv(launch, flakeRef, options.builders),
   ];
 
-  const storeVolumeName = "thread-store";
-  const scratchVolumeName = "scratch";
-
+  // Untrusted Job mount set (plan E10, design §5.2 layer 4, §6):
+  // exactly the repo source (read-only), the thread store, and the scratch emptyDir, with no Secret.
   const volumes: K8sVolume[] = [
+    {
+      name: repoVolumeName,
+      persistentVolumeClaim: {
+        claimName: options.repoClaimName ?? `repo-${thread}`,
+        readOnly: true,
+      },
+    },
     {
       name: storeVolumeName,
       persistentVolumeClaim: {
@@ -218,21 +208,22 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
         sizeLimit: options.scratchLimit ?? "10Gi",
       },
     },
-    ...(options.repoVolume ? [options.repoVolume] : []),
-    ...(options.extraVolumes ?? []),
   ];
 
   const volumeMounts: K8sVolumeMount[] = [
+    {
+      name: repoVolumeName,
+      mountPath: repoMountPath,
+      readOnly: true,
+    },
     {
       name: storeVolumeName,
       mountPath: storeMountPath,
     },
     {
       name: scratchVolumeName,
-      mountPath: options.scratchMountPath ?? "/tmp",
+      mountPath: scratchMountPath,
     },
-    ...(options.repoVolumeMount ? [options.repoVolumeMount] : []),
-    ...(options.extraVolumeMounts ?? []),
   ];
 
   const env = [

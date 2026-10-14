@@ -12,8 +12,6 @@ import {
   K8sClient,
   k8sRunner,
   renderJob,
-  repoSourceMount,
-  repoSourceVolume,
   runK8sEval,
   submitAndWatchJob,
   type K8sJob,
@@ -121,6 +119,11 @@ const SNAPSHOT: K8sJob = {
             },
             volumeMounts: [
               {
+                name: "repo",
+                mountPath: "/src",
+                readOnly: true,
+              },
+              {
                 name: "thread-store",
                 mountPath: "/thread-store",
               },
@@ -138,6 +141,13 @@ const SNAPSHOT: K8sJob = {
           },
         ],
         volumes: [
+          {
+            name: "repo",
+            persistentVolumeClaim: {
+              claimName: "repo-t1",
+              readOnly: true,
+            },
+          },
           {
             name: "thread-store",
             persistentVolumeClaim: {
@@ -220,6 +230,20 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
   assert.ok(scratchMount, "scratch volumeMount must exist");
   assert.equal(scratchMount.mountPath, "/tmp", "scratch must be mounted at /tmp");
 
+  // 5b. Repo source volume mounted read-only at /src
+  const repoVol = volumes.find((v) => v.name === "repo");
+  assert.ok(repoVol, "repo volume must exist");
+  assert.equal(repoVol.persistentVolumeClaim?.readOnly, true, "repo source must be mounted read-only");
+  assert.equal(
+    repoVol.persistentVolumeClaim?.claimName,
+    `repo-${expectedThread}`,
+    "repo PVC claimName must match thread",
+  );
+  const repoMount = mounts.find((m) => m.name === "repo");
+  assert.ok(repoMount, "repo volumeMount must exist");
+  assert.equal(repoMount.readOnly, true, "repo source must be mounted read-only");
+  assert.equal(repoMount.mountPath, "/src", "repo mount must be at /src");
+
   // 6. Labels on Job and pod template
   assert.equal(job.metadata.namespace, "genie-eval");
   assert.equal(job.metadata.labels?.["app.kubernetes.io/name"], "genie-eval");
@@ -279,7 +303,7 @@ function assertJobProperties(job: K8sJob, expectedThread = "t1", expectedTier = 
 // Oracle 22 (plan E10, design §5.2 layer 4, §6):
 // Untrusted Job mount set: exactly the repo source (read-only), the thread store,
 // and the scratch emptyDir, with no Secret. The thread-state volume never mounts.
-export function assertUntrustedJobMounts(job: K8sJob): void {
+export function assertUntrustedJobMounts(job: K8sJob, expectedThread?: string): void {
   const volumes = job.spec.template.spec.volumes ?? [];
   const mounts = job.spec.template.spec.containers[0]?.volumeMounts ?? [];
 
@@ -321,6 +345,13 @@ export function assertUntrustedJobMounts(job: K8sJob): void {
   const storeVol = volumes.find((v) => v.name === "thread-store");
   assert.ok(storeVol, "thread-store volume must exist");
   assert.ok(storeVol.persistentVolumeClaim, "thread-store volume must be a PVC");
+  if (expectedThread) {
+    assert.equal(
+      storeVol.persistentVolumeClaim?.claimName,
+      `thread-store-${expectedThread}`,
+      "thread-store PVC claimName must match thread",
+    );
+  }
   const storeMount = mounts.find((m) => m.name === "thread-store");
   assert.ok(storeMount, "thread-store volumeMount must exist");
   assert.equal(storeMount.mountPath, "/thread-store", "thread-store must be mounted at /thread-store");
@@ -335,15 +366,21 @@ export function assertUntrustedJobMounts(job: K8sJob): void {
   assert.equal(scratchMount.mountPath, "/tmp", "scratch must be mounted at /tmp");
 
   // Invariant 6: Repo source volume exists and is mounted read-only
-  const repoVol = volumes.find(
-    (v) => v.name !== "thread-store" && v.name !== "scratch",
-  );
+  const repoVol = volumes.find((v) => v.name === "repo");
   assert.ok(repoVol, "repo source volume must exist");
-  const repoMount = mounts.find(
-    (m) => m.name !== "thread-store" && m.name !== "scratch",
-  );
+  assert.ok(repoVol.persistentVolumeClaim, "repo source volume must be a PVC");
+  assert.equal(repoVol.persistentVolumeClaim?.readOnly, true, "repo source must be mounted read-only");
+  if (expectedThread) {
+    assert.equal(
+      repoVol.persistentVolumeClaim?.claimName,
+      `repo-${expectedThread}`,
+      "repo PVC claimName must match thread",
+    );
+  }
+  const repoMount = mounts.find((m) => m.name === "repo");
   assert.ok(repoMount, "repo source volumeMount must exist");
   assert.equal(repoMount.name, repoVol.name, "repo mount name must match repo volume name");
+  assert.equal(repoMount.mountPath, "/src", "repo source must be mounted at /src");
   assert.equal(repoMount.readOnly, true, "repo source must be mounted read-only");
 }
 
@@ -432,40 +469,63 @@ test("mutant: argv missing --store fails property check", () => {
   );
 });
 
-test("oracle 22: untrusted Job mount set has exactly repo source (read-only), thread store, scratch emptyDir, and no Secret", () => {
-  const repoVol = repoSourceVolume("repo-source-t1");
-  const repoMount = repoSourceMount("/src");
+test("oracle 22: k8sRunner submits untrusted Job with exactly repo (read-only), thread store, scratch emptyDir, and no Secret", async () => {
+  let submittedJob: K8sJob | undefined;
+  const server = await startStubK8sServer({
+    createJob: (job) => {
+      submittedJob = job;
+      return { status: 201, body: job };
+    },
+    getPodLog: () => ({ status: 200, body: '"hello"\n' }),
+  });
+  after(server.close);
+
+  const client = new K8sClient({ baseUrl: server.url, namespace: "genie-eval" });
+  const runner = k8sRunner({ client, thread: "t-untrusted" });
+  const result = await runner(sampleLaunch);
+
+  assert.equal(result.exit, 0);
+  assert.ok(submittedJob, "k8sRunner must submit a Job");
+  assertUntrustedJobMounts(submittedJob, "t-untrusted");
+  assertJobProperties(submittedJob, "t-untrusted", "public");
+});
+
+test("mutant (oracle 22): renderJob adds thread-state volume fails property check", () => {
   const job = renderJob(sampleLaunch, {
     name: "eval-t1-untrusted",
     thread: "t1",
-    extraVolumes: [repoVol],
-    extraVolumeMounts: [repoMount],
   });
-  assertUntrustedJobMounts(job);
-  assertJobProperties(job, "t1", "public");
-});
-
-test("mutant (oracle 22): adding thread-state volume fails property check", () => {
-  const repoVol = repoSourceVolume("repo-source-t1");
-  const repoMount = repoSourceMount("/src");
-  const mutantJob = renderJob(sampleLaunch, {
-    name: "eval-t1-untrusted",
-    thread: "t1",
-    extraVolumes: [
-      repoVol,
-      {
-        name: "thread-state",
-        persistentVolumeClaim: { claimName: "thread-state-t1" },
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: [
+            ...(job.spec.template.spec.volumes ?? []),
+            {
+              name: "thread-state",
+              persistentVolumeClaim: { claimName: "thread-state-t1" },
+            },
+          ],
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: [
+                ...(job.spec.template.spec.containers[0].volumeMounts ?? []),
+                {
+                  name: "thread-state",
+                  mountPath: "/state",
+                },
+              ],
+            },
+          ],
+        },
       },
-    ],
-    extraVolumeMounts: [
-      repoMount,
-      {
-        name: "thread-state",
-        mountPath: "/state",
-      },
-    ],
-  });
+    },
+  };
   assert.throws(
     () => assertUntrustedJobMounts(mutantJob),
     /thread-state volume must never mount/,
@@ -479,26 +539,41 @@ test("mutant (oracle 22): adding thread-state volume fails property check", () =
 });
 
 test("mutant (oracle 22): mounting Secret on untrusted Job fails property check", () => {
-  const repoVol = repoSourceVolume("repo-source-t1");
-  const repoMount = repoSourceMount("/src");
-  const mutantJob = renderJob(sampleLaunch, {
+  const job = renderJob(sampleLaunch, {
     name: "eval-t1-untrusted",
     thread: "t1",
-    extraVolumes: [
-      repoVol,
-      {
-        name: "builder-key",
-        secret: { secretName: "builder-key" },
-      },
-    ],
-    extraVolumeMounts: [
-      repoMount,
-      {
-        name: "builder-key",
-        mountPath: "/root/.ssh",
-      },
-    ],
   });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: [
+            ...(job.spec.template.spec.volumes ?? []),
+            {
+              name: "builder-key",
+              secret: { secretName: "builder-key" },
+            },
+          ],
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: [
+                ...(job.spec.template.spec.containers[0].volumeMounts ?? []),
+                {
+                  name: "builder-key",
+                  mountPath: "/root/.ssh",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  };
   assert.throws(
     () => assertUntrustedJobMounts(mutantJob),
     /untrusted Job must not mount any Secret/,
@@ -512,31 +587,68 @@ test("mutant (oracle 22): mounting Secret on untrusted Job fails property check"
 });
 
 test("mutant (oracle 22): repo source mounted read-write fails property check", () => {
-  const repoVol = repoSourceVolume("repo-source-t1");
-  const mutantJob = renderJob(sampleLaunch, {
+  const job = renderJob(sampleLaunch, {
     name: "eval-t1-untrusted",
     thread: "t1",
-    extraVolumes: [repoVol],
-    extraVolumeMounts: [
-      {
-        name: "repo",
-        mountPath: "/src",
-        readOnly: false,
-      },
-    ],
   });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: (job.spec.template.spec.containers[0].volumeMounts ?? []).map((m) =>
+                m.name === "repo" ? { ...m, readOnly: false } : m,
+              ),
+            },
+          ],
+        },
+      },
+    },
+  };
   assert.throws(
     () => assertUntrustedJobMounts(mutantJob),
     /repo source must be mounted read-only/,
     "property check must fail RED when repo source is mounted read-write",
   );
+  assert.throws(
+    () => assertJobProperties(mutantJob, "t1", "public"),
+    /repo source must be mounted read-only/,
+    "assertJobProperties must fail RED when repo source is mounted read-write",
+  );
 });
 
 test("mutant (oracle 22): missing repo source volume fails property check", () => {
-  const mutantJob = renderJob(sampleLaunch, {
+  const job = renderJob(sampleLaunch, {
     name: "eval-t1-untrusted",
     thread: "t1",
   });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: (job.spec.template.spec.volumes ?? []).filter((v) => v.name !== "repo"),
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: (job.spec.template.spec.containers[0].volumeMounts ?? []).filter(
+                (m) => m.name !== "repo",
+              ),
+            },
+          ],
+        },
+      },
+    },
+  };
   assert.throws(
     () => assertUntrustedJobMounts(mutantJob),
     /untrusted Job must have exactly 3 volumes/,
@@ -545,26 +657,41 @@ test("mutant (oracle 22): missing repo source volume fails property check", () =
 });
 
 test("mutant (oracle 22): unexpected fourth volume fails property check", () => {
-  const repoVol = repoSourceVolume("repo-source-t1");
-  const repoMount = repoSourceMount("/src");
-  const mutantJob = renderJob(sampleLaunch, {
+  const job = renderJob(sampleLaunch, {
     name: "eval-t1-untrusted",
     thread: "t1",
-    extraVolumes: [
-      repoVol,
-      {
-        name: "extra-cache",
-        emptyDir: {},
-      },
-    ],
-    extraVolumeMounts: [
-      repoMount,
-      {
-        name: "extra-cache",
-        mountPath: "/cache",
-      },
-    ],
   });
+  const mutantJob: K8sJob = {
+    ...job,
+    spec: {
+      ...job.spec,
+      template: {
+        ...job.spec.template,
+        spec: {
+          ...job.spec.template.spec,
+          volumes: [
+            ...(job.spec.template.spec.volumes ?? []),
+            {
+              name: "extra-cache",
+              emptyDir: {},
+            },
+          ],
+          containers: [
+            {
+              ...job.spec.template.spec.containers[0],
+              volumeMounts: [
+                ...(job.spec.template.spec.containers[0].volumeMounts ?? []),
+                {
+                  name: "extra-cache",
+                  mountPath: "/cache",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  };
   assert.throws(
     () => assertUntrustedJobMounts(mutantJob),
     /untrusted Job must have exactly 3 volumes/,
