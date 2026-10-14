@@ -46,6 +46,7 @@ export class Delivery {
   private readonly o: Required<Omit<DeliveryOptions, "clock" | "archive" | "ttlMs" | "sweepMs">>;
   private readonly chains = new Map<string, Promise<void>>();
   private readonly clock: Clock;
+  private readonly timeouts = new Map<Outstanding, unknown>();
   readonly gc?: DispatcherGc;
   private stopped = false;
 
@@ -77,10 +78,10 @@ export class Delivery {
   }
 
   // After a restart: re-arm the reply long-poll of every outstanding message and drain every
-  // journalled buffer.
+  // journalled buffer (replies long-poll stays only for restart recovery, §6 D6).
   start(): void {
     for (const [id, t] of Object.entries(this.d.journal.threads)) {
-      for (const o of t.outstanding) void this.awaitReply(t, o);
+      for (const o of t.outstanding) void this.awaitRecoveryReply(t, o);
       if (t.buffer.length) this.kick(id);
     }
     this.gc?.start();
@@ -89,7 +90,15 @@ export class Delivery {
   // Stop acting, as a kill would; the journal is what survives.
   stop(): void {
     this.stopped = true;
+    for (const timer of this.timeouts.values()) {
+      clearTimeout(timer as any);
+    }
+    this.timeouts.clear();
     this.gc?.stop();
+  }
+
+  isStopped(): boolean {
+    return this.stopped;
   }
 
   async sweep(): Promise<void> {
@@ -117,6 +126,26 @@ export class Delivery {
   }
 
   private async receive(m: Inbound): Promise<void> {
+    // Pushed replies are matched by in_reply_to to the outstanding send that caused them (AM-3; §6 D6).
+    if (m.inReplyTo) {
+      for (const t of Object.values(this.d.journal.threads)) {
+        const o = t.outstanding.find((x) => x.sent === m.inReplyTo);
+        if (o) {
+          const timer = this.timeouts.get(o);
+          if (timer !== undefined) {
+            clearTimeout(timer as any);
+            this.timeouts.delete(o);
+          }
+          await this.x.reply(o.id, m.text);
+          t.outstanding = t.outstanding.filter((x) => x !== o);
+          t.lastReply = this.o.now();
+          this.d.save();
+          return;
+        }
+      }
+      return;
+    }
+
     const known = Object.values(this.d.journal.threads).some(
       (t) => t.buffer.some((b) => b.id === m.id) || t.outstanding.some((o) => o.id === m.id),
     );
@@ -194,21 +223,37 @@ export class Delivery {
       t.buffer.shift();
       t.outstanding.push(o);
       this.d.save();
-      void this.awaitReply(t, o);
+      this.awaitTimeout(t, o);
     }
   }
 
-  // The session's first reply ends the turn and is relayed as the dispatcher's own. With none by
-  // the deadline the turn ends "expert unavailable", and a later reply is dropped.
-  private async awaitReply(t: Thread, o: Outstanding): Promise<void> {
+  // Waits for the deadline; if no pushed reply has arrived to resolve this turn, ends it unavailable.
+  private awaitTimeout(t: Thread, o: Outstanding): void {
+    const left = Math.max(0, o.deadline - this.o.now());
+    const timer = setTimeout(async () => {
+      this.timeouts.delete(o);
+      if (this.stopped) return;
+      if (t.outstanding.includes(o)) {
+        await this.x.reply(o.id, UNAVAILABLE);
+        t.outstanding = t.outstanding.filter((x) => x !== o);
+        this.d.save();
+      }
+    }, left);
+    this.timeouts.set(o, timer);
+  }
+
+  // Recovery after restart: the replies long-poll stays only for recovery after a restart (§6 D6).
+  private async awaitRecoveryReply(t: Thread, o: Outstanding): Promise<void> {
     let text: string | undefined;
     while (!this.stopped && text === undefined) {
+      if (!t.outstanding.includes(o)) return; // already resolved by pushed reply
       const left = o.deadline - this.o.now();
       if (left <= 0) break;
       const r = await this.x.replies(o.sent, left);
       if (r.length && this.o.now() <= o.deadline) text = r[0];
     }
     if (this.stopped) return;
+    if (!t.outstanding.includes(o)) return; // already resolved by pushed reply
     await this.x.reply(o.id, text ?? UNAVAILABLE);
     t.outstanding = t.outstanding.filter((x) => x !== o);
     if (text !== undefined) t.lastReply = this.o.now();

@@ -1,6 +1,6 @@
 // guard-in as the supervisor's side calls it (plan C3.2, "GA builds to these interfaces"): one
 // Envelope in, its Verdict out, or `unavailable` when the guard errs or does not answer in time.
-// Every consumer fails closed on `unavailable`. GA's adapter carries it to svc:genie-guard over
+// Every consumer fails closed on `unavailable`. GA's adapter carries it to genie-guard over
 // xmsg; tier 1 holds no GuardClient and reaches the guard only through Host.screen.
 import type { Envelope, Verdict } from "../guard/verdict.ts";
 import { verdictErrors } from "../guard/verdict.ts";

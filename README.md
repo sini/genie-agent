@@ -25,7 +25,7 @@ The deployment lives in nix-config; this repository owns the agent.
 
 `packages.<linux>.genie-guard` is guard-in as a service: a Node single executable, built like
 `genie-dispatcher`, with `prompts/guard-in.md` bundled in. It registers on the owner's xmsg
-(`$XDG_RUNTIME_DIR/xmsg`) as `svc:genie-guard` and answers each message with one reply, then
+(`$XDG_RUNTIME_DIR/xmsg`) as `genie-guard` and answers each message with one reply, then
 acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) as
 `tests/guard-eval.ts`.
 

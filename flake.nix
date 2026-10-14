@@ -75,7 +75,7 @@
         fileset = ./src/dispatcher;
         description = "genie-agent's dispatcher, as a Node single executable";
       };
-      # guard-in as `svc:genie-guard`, with its prompt bundled in (genie-solicit-design.md, G1).
+      # guard-in as `genie-guard`, with its prompt bundled in (genie-solicit-design.md, G1).
       genieGuard = sea {
         name = "genie-guard";
         main = "src/guard/main.ts";

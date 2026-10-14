@@ -1,4 +1,4 @@
-// The dispatcher's entrypoint (design §5.8, D1c): registers as `svc:genie-expert` on the tier's
+// The dispatcher's entrypoint (design §5.8, D1c): registers as `genie-expert` on the tier's
 // xmsg, reconciles the journal, and delivers until killed. The journal is what a kill leaves, so
 // no signal is handled. Built into the `genie-dispatcher` single executable, which is the path
 // xmsg's `--svc-exe` attests.

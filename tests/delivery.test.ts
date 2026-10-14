@@ -33,6 +33,7 @@ class FakeXmsg implements XmsgClient {
   answers = new Map<string, string>();
   // The next n sends deliver and then lose their response.
   lose = 0;
+  onReply?: () => void;
   private keys = new Map<string, string>();
 
   async poll(): Promise<Inbound | null> {
@@ -49,6 +50,10 @@ class FakeXmsg implements XmsgClient {
     const id = `sent-${this.deliveries.length}`;
     this.keys.set(key, id);
     if (this.lose-- > 0) throw new Error("response lost");
+    if (this.answers.has(id)) {
+      this.queue.push({ id: `reply-${id}`, text: this.answers.get(id)!, inReplyTo: id });
+      this.onReply?.();
+    }
     return id;
   }
   async replies(id: string, waitMs: number): Promise<string[]> {
@@ -66,7 +71,12 @@ class FakeXmsg implements XmsgClient {
   }
   // The session answers its n-th delivery.
   answer(n: number, text: string): void {
-    this.answers.set(`sent-${n}`, text);
+    const sent = `sent-${n}`;
+    this.answers.set(sent, text);
+    if (this.deliveries.length >= n) {
+      this.queue.push({ id: `reply-${sent}`, text, inReplyTo: sent });
+      this.onReply?.();
+    }
   }
 }
 
@@ -113,6 +123,9 @@ const setup = () => {
     cwd: "/cwd",
   };
   const live: Delivery[] = [];
+  x.onReply = () => {
+    for (const d of live) if (!d.isStopped()) void d.pump(0);
+  };
   let clock = 1_000_000;
   const tick = (ms: number) => (clock += ms);
   // `packages` boots the production thread key, the package's thread_id; otherwise a message
@@ -324,7 +337,10 @@ cell("a message that is not a package is answered expert unavailable, acknowledg
 test("the socket client speaks X9 on register.sock, attested sends on agent.sock and http.sock reads", async () => {
   const dir = mkdtempSync(`${tmpdir()}/xm-`);
   const frames: any[] = [];
+  const sockets = new Set<any>();
   const lines = (answer: (f: any) => object) => (c: any) => {
+    sockets.add(c);
+    c.on("close", () => sockets.delete(c));
     let buf = "";
     c.setEncoding("utf8");
     c.on("data", (d: string) => {
@@ -336,41 +352,45 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
     });
   };
   const reg = netServer(lines((f) =>
-    f.harness ? { status: "ok", sessionId: "svc:genie-expert" }
-    : f.action === "poll" ? { action: "deliver", messageId: "01A", text: "t:hi", fromName: "x", envelope: "e" }
+    f.harness ? { status: "ok", address: "genie-expert@node", node: "node" }
+    : f.action === "poll" ? { action: "deliver", messageId: "01A", text: "t:hi", fromName: "x", envelope: "e", inReplyTo: null }
     : { status: "ok" }));
   const agent = netServer(lines((f) =>
-    f.ref === "gone" ? { status: "error", error: "not_found", detail: "session 'gone'" }
-    : f.action === "send" ? { status: "ok", delivery: { messageId: "01B" } }
+    f.to === "gone" ? { status: "error", error: "not_found", detail: "session 'gone'" }
+    : f.action === "send" ? { status: "ok", message_id: "01B", address: `${f.to}@node`, outcome: "delivered" }
     : { status: "ok", reply: {} }));
   const http = httpServer((req: any, res: any) => {
     frames.push(req.url);
-    res.end(JSON.stringify(req.url === "/v1/sessions" ? [{ sessionId: "u-1" }] : [{ seq: 1, text: "r" }]));
+    res.end(JSON.stringify(req.url === "/v1/recipients?kind=instance" ? { recipients: [{ address: "u-1@node" }] } : [{ seq: 1, text: "r" }]));
   });
   await Promise.all([[reg, "register"], [agent, "agent"], [http, "http"]].map(
     ([s, n]: any) => new Promise((r) => s.listen(`${dir}/${n}.sock`, r))));
   const c = new SocketXmsg(dir, "genie-expert");
   try {
-    await c.register();
+    const regRes = await c.register();
+    assert.deepEqual(regRes, { address: "genie-expert@node", node: "node" });
     assert.deepEqual(await c.poll(30_000), { id: "01A", text: "t:hi" });
     await c.ack("01A");
     assert.equal(await c.send("u-1", "body", "01A#1"), "01B");
     await assert.rejects(c.send("gone", "body", "k"), (e: any) => e instanceof XmsgError && e.code === "not_found");
     await c.reply("01A", "answer");
-    assert.deepEqual(await c.list(), ["u-1"]);
+    assert.deepEqual(await c.list(), ["u-1@node", "u-1"]);
     assert.deepEqual(await c.replies("01B", 1500), ["r"]);
     assert.deepEqual(frames, [
       { harness: "svc", name: "genie-expert" },
       { action: "poll", waitSecs: 30 },
       { action: "ack", messageId: "01A" },
-      { action: "send", ref: "u-1", text: "body", push_replies: false, idempotency_key: "01A#1" },
-      { action: "send", ref: "gone", text: "body", push_replies: false, idempotency_key: "k" },
+      { action: "send", to: "u-1", text: "body", idempotency_key: "01A#1" },
+      { action: "send", to: "gone", text: "body", idempotency_key: "k" },
       { action: "reply", messageId: "01A", text: "answer" },
-      "/v1/sessions",
+      "/v1/recipients?kind=instance",
       "/v1/messages/01B/replies?wait=2",
     ]);
   } finally {
     c.close();
-    for (const s of [reg, agent, http]) s.close();
+    for (const s of sockets) s.destroy();
+    for (const s of [reg, agent]) s.close();
+    (http as any).closeAllConnections?.();
+    http.close();
   }
 });

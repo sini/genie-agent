@@ -127,14 +127,16 @@ export async function awaitModel(
 // Registers with xmsg, retrying on connection errors (absent socket, refused, or closed).
 // Backoff 1 s doubling to 30 s.
 export async function awaitRegister(
-  x: { register(): Promise<void> },
+  x: { register(): Promise<unknown> },
   sleep?: (ms: number) => Promise<void>,
   log?: (line: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
-  return backoff(
-    () => x.register(),
+  await backoff(
+    async () => {
+      await x.register();
+    },
     {
       startMs: 1_000,
       maxMs: 30_000,
@@ -149,7 +151,7 @@ export async function awaitRegister(
 // Wait for the model, then register: the guard is listed only once it can judge.
 export async function start(
   c: Config,
-  x: { register(): Promise<void> },
+  x: { register(): Promise<unknown> },
   system: string,
   systemWeb: string,
   wait?: (ms: number) => Promise<void>,
@@ -338,7 +340,7 @@ export async function step(
 // re-registers with backoff and resumes polling.
 export async function serve(
   c: Config,
-  x: Pick<XmsgClient, "poll" | "reply" | "ack"> & { register(): Promise<void> },
+  x: Pick<XmsgClient, "poll" | "reply" | "ack"> & { register(): Promise<unknown> },
   system: string,
   systemWeb: string,
   opts?: {

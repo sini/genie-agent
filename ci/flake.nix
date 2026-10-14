@@ -6,10 +6,17 @@
     # snapshot of the tree (den-hoag-lbtnv D1). So `outputs` below applies `../flake.nix`'s own
     # `outputs` to the `nixpkgs` declared here, line for line as `../flake.nix` declares it.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+    xmsg.url = "github:sini/xmsg/11d293d72e6f17c24fcdb206cca020d32239f4c1";
+    xmsg.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    inputs@{ gen-harness, nixpkgs, ... }:
+    inputs@{
+      gen-harness,
+      nixpkgs,
+      xmsg,
+      ...
+    }:
     let
       # The published surface of THIS tree.
       genie-agent = (import ../flake.nix).outputs {
@@ -109,6 +116,46 @@
             {
               checks = lib.optionalAttrs ((genie-agent.checks.${system} or { }) ? dispatcher-sea) {
                 inherit (genie-agent.checks.${system}) dispatcher-sea genie-guard-sea;
+              };
+            };
+        }
+        {
+          perSystem =
+            {
+              system,
+              lib,
+              pkgs,
+              ...
+            }:
+            {
+              checks = lib.optionalAttrs ((genie-agent.packages.${system} or { }) ? genie-guard) {
+                xmsg-integration =
+                  pkgs.runCommand "genie-agent-xmsg-integration"
+                    {
+                      nativeBuildInputs = [
+                        pkgs.nodejs
+                        xmsg.packages.${system}.default
+                        genie-agent.packages.${system}.genie-guard
+                      ];
+                      src = nixpkgs.lib.fileset.toSource {
+                        root = ../.;
+                        fileset = nixpkgs.lib.fileset.unions [
+                          ../package.json
+                          ../src/dispatcher
+                          ../tests/xmsg-integration.test.ts
+                        ];
+                      };
+                    }
+                    ''
+                      cd $src
+                      export XMSG_BIN="${xmsg.packages.${system}.default}/bin/xmsg"
+                      export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
+                      rc=0
+                      node --test --test-reporter=tap tests/xmsg-integration.test.ts > $TMPDIR/tap || rc=$?
+                      cat $TMPDIR/tap
+                      [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 1: guard round trip relays verdict and refuses svc: prefix$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                      touch $out
+                    '';
               };
             };
         }

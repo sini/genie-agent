@@ -6,7 +6,7 @@ import type { ThreadState, Tier } from "../state/index.ts";
 
 // Each tier's expert is the service `genie-expert` on that tier's own xmsg node (§5.8, row 19),
 // written in the addressing redesign's form: no kind prefix (A11), the node named `<user>.<host>`
-// (A9), and at most one `@` (B4). The live xmsg client speaks the old `svc:` form until GA, so these
+// (A9), and at most one `@` (B4). GA migrates xmsg clients to the redesign's bare service form, so these
 // are configuration; defaulted, reversible.
 export const EXPERTS: Record<Tier, string> = {
   trusted: "genie-expert@genie-trusted.bitstream",

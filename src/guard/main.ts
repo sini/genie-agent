@@ -1,4 +1,4 @@
-// genie-guard's entrypoint (genie-solicit-design.md, G1): registers as `svc:genie-guard` on the
+// genie-guard's entrypoint (genie-solicit-design.md, G1): registers as `genie-guard` on the
 // owner's xmsg and answers each envelope with guard-in's verdict until killed. Built into the
 // `genie-guard` single executable with prompts/guard-in.md bundled in, so the attested path
 // reviews with the prompt it was built with.

@@ -462,7 +462,7 @@ test("oracle 4: a stub register.sock with no agent.sock receives the reply frame
     });
   };
   const reg = createNetServer(lines((f) =>
-    f.harness ? { status: "ok", sessionId: "svc:genie-guard" }
+    f.harness ? { status: "ok", address: "genie-guard@node", node: "node" }
     : f.action === "poll" ? { action: "deliver", messageId: "01A", text: JSON.stringify(env) }
     : { status: "ok" }));
   await new Promise<void>((r) => reg.listen(`${dir}/register.sock`, r));
@@ -517,7 +517,7 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
         if (currentConn === 1) {
           framesConn1.push(f);
           if (f.harness) {
-            c.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+            c.write(`${JSON.stringify({ status: "ok", address: "genie-guard@node", node: "node" })}\n`);
           } else if (f.action === "poll") {
             // Drop connection while guard is polling
             c.destroy();
@@ -525,7 +525,7 @@ test("oracle 1: guard re-registers when xmsg drops connection and process does n
         } else {
           framesConn2.push(f);
           if (f.harness) {
-            c.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+            c.write(`${JSON.stringify({ status: "ok", address: "genie-guard@node", node: "node" })}\n`);
           } else if (f.action === "poll") {
             if (!deliveredConn2) {
               deliveredConn2 = true;
@@ -613,7 +613,7 @@ test("oracle 2: stub absent at start retries with backoff and registers once stu
                 const f = JSON.parse(buf.slice(0, buf.indexOf("\n")));
                 frames.push(f);
                 if (f.harness) {
-                  client.write(`${JSON.stringify({ status: "ok", sessionId: "svc:genie-guard" })}\n`);
+                  client.write(`${JSON.stringify({ status: "ok", address: "genie-guard@node", node: "node" })}\n`);
                 } else if (f.action === "poll") {
                   if (!delivered) {
                     delivered = true;

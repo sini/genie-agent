@@ -44,7 +44,7 @@ declare module "node:http" {
     end(): void;
   }
   export function request(
-    options: { socketPath: string; path: string },
+    options: { socketPath: string; path: string; agent?: boolean },
     callback: (res: IncomingMessage) => void,
   ): ClientRequest;
 }

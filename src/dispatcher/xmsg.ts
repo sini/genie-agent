@@ -1,6 +1,6 @@
-// The dispatcher's side of the tier's xmsg (design §5.8, Talk): it receives as `svc:<name>` by
+// The dispatcher's side of the tier's xmsg (design §5.8, Talk): it receives as `<name>` by
 // long-poll and replies on register.sock (X9), sends attested on agent.sock, so its idempotency
-// keys are scoped to its own session (X10), and reads sessions and replies on http.sock (X8).
+// keys are scoped to its own session (X10), and reads recipients on http.sock (X8).
 import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
 
@@ -12,6 +12,7 @@ export interface XmsgSessions {
 export interface Inbound {
   id: string;
   text: string;
+  inReplyTo?: string;
 }
 
 // A refusal by xmsg, by its error code: `not_found` is a session that is not running.
@@ -85,6 +86,8 @@ export class SocketXmsg implements XmsgClient {
   private readonly dir: string;
   private readonly name: string;
   private reg: Lines | null = null;
+  address?: string;
+  node?: string;
 
   constructor(dir: string, name: string) {
     this.dir = dir;
@@ -92,10 +95,13 @@ export class SocketXmsg implements XmsgClient {
   }
 
   // The registration lives as long as this connection; xmsg refuses a second live one.
-  async register(): Promise<void> {
+  async register(): Promise<{ address: string; node: string }> {
     this.reg?.close();
     this.reg = new Lines(`${this.dir}/register.sock`);
-    await this.reg.call({ harness: "svc", name: this.name });
+    const r = await this.reg.call({ harness: "svc", name: this.name });
+    this.address = r.address;
+    this.node = r.node;
+    return { address: r.address, node: r.node };
   }
 
   close(): void {
@@ -112,7 +118,9 @@ export class SocketXmsg implements XmsgClient {
     const r = await this.registered({ action: "poll", waitSecs: secs(waitMs) });
     if (r.action === "timeout") return null;
     if (r.action !== "deliver") throw new Error(`xmsg poll: unexpected ${JSON.stringify(r)}`);
-    return { id: r.messageId, text: r.text };
+    const ret: Inbound = { id: r.messageId, text: r.text };
+    if (r.inReplyTo) ret.inReplyTo = r.inReplyTo;
+    return ret;
   }
 
   async ack(id: string): Promise<void> {
@@ -129,10 +137,11 @@ export class SocketXmsg implements XmsgClient {
     }
   }
 
-  async send(session: string, text: string, key: string): Promise<string> {
-    // The turn ends on the reply, read by long-poll, so none is pushed back into the queue.
-    const r = await this.agent({ action: "send", ref: session, text, push_replies: false, idempotency_key: key });
-    return r.delivery.messageId;
+  async send(to: string, text: string, key: string): Promise<string> {
+    const r = await this.agent({ action: "send", to, text, idempotency_key: key });
+    // Reads address from result (AM-4)
+    const _address: string = r.address;
+    return r.message_id;
   }
 
   async reply(id: string, text: string): Promise<void> {
@@ -141,7 +150,7 @@ export class SocketXmsg implements XmsgClient {
 
   private http(path: string): Promise<any> {
     return new Promise((resolve, reject) => {
-      const req = request({ socketPath: `${this.dir}/http.sock`, path }, (res) => {
+      const req = request({ socketPath: `${this.dir}/http.sock`, path, agent: false }, (res) => {
         let body = "";
         res.setEncoding("utf8");
         res.on("data", (c: string) => (body += c));
@@ -161,7 +170,12 @@ export class SocketXmsg implements XmsgClient {
   }
 
   async list(): Promise<string[]> {
-    return (await this.http("/v1/sessions")).map((s: { sessionId: string }) => s.sessionId);
+    const r = await this.http("/v1/recipients?kind=instance");
+    const recipients: { address: string }[] = r.recipients ?? [];
+    return recipients.flatMap((s) => {
+      const bare = s.address.split("@")[0];
+      return bare === s.address ? [s.address] : [s.address, bare];
+    });
   }
 
   async replies(id: string, waitMs: number): Promise<string[]> {

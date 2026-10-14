@@ -72,6 +72,7 @@ class FakeXmsg implements XmsgClient {
   deliveries: { session: string; text: string }[] = [];
   relayed: { id: string; text: string }[] = [];
   answers = new Map<string, string>();
+  onReply?: () => void;
   private keys = new Map<string, string>();
 
   async poll(): Promise<Inbound | null> {
@@ -87,6 +88,12 @@ class FakeXmsg implements XmsgClient {
     this.deliveries.push({ session, text });
     const id = `sent-${this.deliveries.length}`;
     this.keys.set(key, id);
+    if (this.answers.has(id)) {
+      queueMicrotask(() => {
+        this.queue.push({ id: `reply-${id}`, text: this.answers.get(id)!, inReplyTo: id });
+        this.onReply?.();
+      });
+    }
     return id;
   }
   async replies(id: string, waitMs: number): Promise<string[]> {
@@ -103,7 +110,12 @@ class FakeXmsg implements XmsgClient {
     return [...this.listed];
   }
   answer(n: number, text: string): void {
-    this.answers.set(`sent-${n}`, text);
+    const sent = `sent-${n}`;
+    this.answers.set(sent, text);
+    if (this.deliveries.length >= n) {
+      this.queue.push({ id: `reply-${sent}`, text, inReplyTo: sent });
+      this.onReply?.();
+    }
   }
 }
 
@@ -156,6 +168,9 @@ const setup = (extra: Partial<DeliveryOptions> = {}) => {
     now: () => clock.now(),
   };
   const live: Delivery[] = [];
+  x.onReply = () => {
+    for (const d of live) if (!d.isStopped()) void d.pump(0);
+  };
   let failArchive = false;
   const boot = async (deliveryExtra: Partial<DeliveryOptions> = {}) => {
     const d = await Dispatcher.open(o);
