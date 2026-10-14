@@ -6,8 +6,9 @@ import type { Herdr } from "./herdr.ts";
 import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.ts";
 
 export type { Herdr } from "./herdr.ts";
-export type { Buffered, Journal, Outstanding, Thread } from "./journal.ts";
+export { loadJournal, saveJournal, type Buffered, type Journal, type Outstanding, type Thread } from "./journal.ts";
 export { Delivery, UNAVAILABLE, type DeliveryOptions } from "./delivery.ts";
+export { DispatcherGc, type DispatcherGcOptions } from "./gc.ts";
 export { SocketXmsg, XmsgError, type Inbound, type XmsgClient, type XmsgSessions } from "./xmsg.ts";
 import type { XmsgSessions } from "./xmsg.ts";
 
@@ -24,6 +25,7 @@ export interface Options {
   pickToken: (threadId: string) => TokenRef;
   cwd: string;
   model?: string;
+  now?: () => number;
 }
 
 export class Dispatcher {
@@ -78,6 +80,7 @@ export class Dispatcher {
         buffer: [],
         outstanding: [],
         lastReply: null,
+        createdAt: this.o.now ? this.o.now() : Date.now(),
         seq: 0,
       };
       this.journal.threads[threadId] = t;

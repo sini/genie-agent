@@ -207,7 +207,8 @@
                 touch $out
               '';
           # The dispatcher's gating oracles, core (design oracle 24) and delivery (oracle 28), against
-          # a recording herdr fake and an xmsg fake.
+          # The dispatcher's gating oracles, core (design oracle 24), delivery (oracle 28) and
+          # park & GC (oracle 26), against a recording herdr fake and an xmsg fake.
           dispatcher =
             pkgs.runCommand "genie-agent-dispatcher"
               {
@@ -218,15 +219,16 @@
                     ./src/dispatcher
                     ./tests/dispatcher.test.ts
                     ./tests/delivery.test.ts
+                    ./tests/dispatcher-gc.test.ts
                   ];
                 };
               }
               ''
                 cd $src
                 rc=0
-                node --test --test-reporter=tap tests/dispatcher.test.ts tests/delivery.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-reporter=tap tests/dispatcher.test.ts tests/delivery.test.ts tests/dispatcher-gc.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The verdict parser's gating oracle: any reply outside schemas/verdict.json, or breaking its

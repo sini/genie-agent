@@ -17,8 +17,8 @@ export const IDLE_TTL_MS = 96 * 60 * 60 * 1000;
 export const SWEEP_MS = 60 * 60 * 1000;
 
 // The TTL clock, shared with D3: whether an entry last active at lastActive has expired.
-export const expired = (lastActive: string, clock: Clock, ttlMs = IDLE_TTL_MS): boolean =>
-  clock.now() - Date.parse(lastActive) >= ttlMs;
+export const expired = (lastActive: string | number, clock: Clock, ttlMs = IDLE_TTL_MS): boolean =>
+  clock.now() - (typeof lastActive === "number" ? lastActive : Date.parse(lastActive)) >= ttlMs;
 
 export interface GcOptions {
   store: ThreadStateStore;

@@ -1,11 +1,13 @@
-// Dispatcher delivery (design §5.8, Talk and Park; D1b): a supervisor message is journalled into
+// Dispatcher delivery (design §5.8, Talk and Park; D1b, D3): a supervisor message is journalled into
 // its thread's FIFO buffer before it is acknowledged, the buffer drains to the thread's session
 // once xmsg lists it, every send carries a journalled idempotency key, and the session's xmsg
-// reply, relayed as the dispatcher's own, ends the turn. Nothing here parks: `parkable` is the
-// predicate D3 parks under.
+// reply, relayed as the dispatcher's own, ends the turn. Under D1b's park predicate, pane close
+// parks idle threads, and 96h GC hands expired transcripts to the archiver (D3).
 import type { Dispatcher } from "./index.ts";
 import { XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
 import type { Outstanding, Thread } from "./journal.ts";
+import { type Clock, systemClock } from "./clock.ts";
+import { DispatcherGc } from "./gc.ts";
 
 export const UNAVAILABLE = "expert unavailable";
 
@@ -30,6 +32,10 @@ export interface DeliveryOptions {
   idleMs?: number;
   sendAttempts?: number;
   now?: () => number;
+  clock?: Clock;
+  archive?: (threadId: string, session: string) => Promise<void>;
+  ttlMs?: number;
+  sweepMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,23 +43,37 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class Delivery {
   private readonly d: Dispatcher;
   private readonly x: XmsgClient;
-  private readonly o: Required<DeliveryOptions>;
+  private readonly o: Required<Omit<DeliveryOptions, "clock" | "archive" | "ttlMs" | "sweepMs">>;
   private readonly chains = new Map<string, Promise<void>>();
+  private readonly clock: Clock;
+  readonly gc?: DispatcherGc;
   private stopped = false;
 
   constructor(d: Dispatcher, x: XmsgClient, o: DeliveryOptions = {}) {
     this.d = d;
     this.x = x;
+    this.clock = o.clock ?? (o.now ? { now: o.now, setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (t) => clearTimeout(t as number) } : systemClock);
     this.o = {
       readyTimeoutMs: 30_000,
       readyPollMs: 250,
       replyTimeoutMs: 15 * 60_000,
       idleMs: 60 * 60_000, // the owner's 1 h live window after the last response (design row 21)
       sendAttempts: 3,
-      now: Date.now,
+      now: () => this.clock.now(),
       threadOf: packageThread,
       ...o,
     };
+    if (o.archive) {
+      this.gc = new DispatcherGc({
+        dispatcher: this.d,
+        delivery: this,
+        archive: o.archive,
+        clock: this.clock,
+        ttlMs: o.ttlMs,
+        idleMs: this.o.idleMs,
+        sweepMs: o.sweepMs,
+      });
+    }
   }
 
   // After a restart: re-arm the reply long-poll of every outstanding message and drain every
@@ -63,11 +83,23 @@ export class Delivery {
       for (const o of t.outstanding) void this.awaitReply(t, o);
       if (t.buffer.length) this.kick(id);
     }
+    this.gc?.start();
   }
 
   // Stop acting, as a kill would; the journal is what survives.
   stop(): void {
     this.stopped = true;
+    this.gc?.stop();
+  }
+
+  async sweep(): Promise<void> {
+    if (this.gc) {
+      await this.gc.sweep();
+    } else {
+      for (const id of Object.keys(this.d.journal.threads)) {
+        if (this.parkable(id)) await this.d.park(id);
+      }
+    }
   }
 
   // One long-poll round. The message is acknowledged only once it is journalled, so a crash

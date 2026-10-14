@@ -46,6 +46,8 @@ export interface Thread {
   outstanding: Outstanding[];
   // Epoch ms of the last relayed reply; the park predicate's idle clock starts here.
   lastReply: number | null;
+  // Epoch ms when the thread was created/first journalled.
+  createdAt?: number;
   // The count of messages journalled for the thread, the idempotency key's sequence number.
   seq: number;
 }
