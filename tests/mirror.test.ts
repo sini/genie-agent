@@ -365,3 +365,14 @@ test("oracle: the least-recently-used order survives a restart of the fetcher", 
     assert.deepEqual(mirrors().sort(), keys(kept), `after ${order.length} uses`);
   }
 });
+
+test("oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories", () => {
+  const dir = mkdtempSync(`${tmp}/bytes-`);
+  mkdirSync(`${dir}/sub`);
+  // 5-byte file: on ZFS and block filesystems, st.blocks * 512 (>= 1024) exceeds st.size (5).
+  writeFileSync(`${dir}/over-allocated`, "hello");
+  // 64 KiB of zeros: on compressed ZFS, st.blocks is minimal (or 0 before txg sync) while st.size is 65536.
+  writeFileSync(`${dir}/sub/unallocated`, Buffer.alloc(65536));
+  assert.equal(diskBytes(dir), 5 + 65536);
+});
+

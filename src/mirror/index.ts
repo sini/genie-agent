@@ -113,13 +113,15 @@ export const git: Runner = (args, signal) => {
   });
 };
 
-// Bytes under dir as allocated on disk, or as written where allocation lags (whichever is more).
+// Apparent bytes stored under dir: the sum of st.size over regular files, skipping directories.
+// The fetch cap and mirror quota bound apparent stored bytes and do not predict on-disk blocks
+// (on ZFS, st.blocks is 0 before a txg sync and includes block/dnode overhead after).
 export function diskBytes(dir: string): number {
   let n = 0;
   for (const e of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
     try {
-      const st = lstatSync(`${e.parentPath}/${e.name}`);
-      n += Math.max(st.size, st.blocks * 512);
+      n += lstatSync(`${e.parentPath}/${e.name}`).size;
     } catch {} // removed by git between the listing and the stat
   }
   return n;
@@ -210,11 +212,23 @@ async function fetchMirror(run: Runner, mirrorRoot: string, dir: string, url: st
   }
 }
 
-// A mirror's last use, the last fetch into it or worktree made from it, is this marker's mtime: it
-// lives on the mirror PVC, so the order survives a restart.
+// A mirror's last use, the last fetch into it or worktree made from it, is recorded in this marker
+// on the mirror PVC as a strictly monotonic timestamp, so the order is deterministic within a coarse
+// mtime tick and survives a restart.
 const USED = "genie-used";
-const touch = (dir: string) => writeFileSync(`${dir}/${USED}`, "");
-const usedAt = (dir: string) => statSync(`${dir}/${USED}`, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+let lastUsed = 0;
+function usedAt(dir: string): number {
+  const p = `${dir}/${USED}`;
+  if (!existsSync(p)) return 0;
+  return Number(readFileSync(p, "utf8").trim()) || (statSync(p, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+}
+function touch(dir: string, mirrorRoot: string): void {
+  const floor = readdirSync(mirrorRoot)
+    .filter((k) => !k.startsWith("."))
+    .reduce((m, k) => Math.max(m, usedAt(`${mirrorRoot}/${k}`)), lastUsed);
+  lastUsed = Math.max(Date.now(), floor + 1);
+  writeFileSync(`${dir}/${USED}`, `${lastUsed}\n`);
+}
 
 // Whether a worktree made from the mirror still exists. Read from git's own registry in the mirror,
 // <dir>/worktrees/*/gitdir, the record that makes the worktree work; a removed one goes stale there,
@@ -295,7 +309,7 @@ export async function worktreeFor(
   return locked(key, async () => {
     mkdirSync(cfg.mirrorRoot, { recursive: true, mode: 0o755 });
     await fetchMirror(run, cfg.mirrorRoot, dir, url, cfg.fetchCap ?? DEFAULT_FETCH_CAP);
-    touch(dir);
+    touch(dir, cfg.mirrorRoot);
     evict(cfg.mirrorRoot, key, cfg.quota ?? DEFAULT_QUOTA, url);
     const rev = (await run(["-C", dir, "rev-parse", "--verify", "HEAD^{commit}"])).trim();
     if (existsSync(path)) {
@@ -304,7 +318,7 @@ export async function worktreeFor(
       mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
       // --force: a removed worktree stays registered in the mirror and would refuse this path.
       await run(["-C", dir, "worktree", "add", "--force", "--detach", path, rev]);
-      touch(dir);
+      touch(dir, cfg.mirrorRoot);
     }
     return { path, rev };
   });

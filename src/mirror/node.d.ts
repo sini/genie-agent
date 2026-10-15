@@ -11,6 +11,7 @@ declare module "node:fs" {
   interface Dirent {
     name: string;
     parentPath: string;
+    isFile(): boolean;
   }
   export function readdirSync(path: string, options: { recursive: true; withFileTypes: true }): Dirent[];
   export function lstatSync(path: string): { size: number; blocks: number };
