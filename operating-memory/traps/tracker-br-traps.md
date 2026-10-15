@@ -5,8 +5,9 @@ type: trap
 ---
 
 **Rule:** `br dep add X Y` means X depends on Y. A br zero is not an absence unless its exit status was
-0 AND a positive control fired in the SAME invocation. When br reports busy, run `pgrep -a br` before
-doing anything else: a live process means wait, no process means a genuine wedge.
+0 AND a positive control fired in the SAME invocation. When br reports busy, run `pgrep -ax br` (exact name
+match; a substring match also hits unrelated processes such as `dbus-broker`) before doing anything
+else: a live process means wait, no process means a genuine wedge.
 
 **Why / measured:**
 

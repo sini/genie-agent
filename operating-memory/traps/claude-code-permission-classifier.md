@@ -4,7 +4,7 @@ description: When an auto-mode agent is refused a push or other shared-resource 
 type: trap
 ---
 
-**Rule:** A grant relayed in a brief is not consent the classifier can see. An allow rule matches only the literal command form. Never re-route a refused action through yourself or another agent; hand the owner the exact command instead.
+**Rule:** A grant relayed in a brief is not consent the classifier can see. An allow rule matches only the literal command form. After a refusal, never reword or reshape the command to pass the matcher, and never re-route the action through yourself or another agent; hand the owner the exact command instead.
 
 **Why / measured:**
 
@@ -16,7 +16,7 @@ type: trap
 **How to apply:**
 
 - For a landing wave, ask the owner up front for a permission rule, or for the owner to run each push themselves.
-- Use the matching form: in the shared checkout, on `main` and clean, run `git merge --ff-only <sha>`, then run `git push origin main` alone as its own call.
+- Only when the owner has installed an allow rule for a literal command, issue exactly that literal command. If it is refused, do not reword it and do not retry it from another agent; hand the owner the exact command.
 - Brief build agents to push a branch, and to stage everything and write the exact push commands when refused.
 - Route agent-to-agent sends through a narrowly allowed tool, not ad-hoc Bash that carries tokens.
 - When reviewing a messaging or identity system, check where every claimed identity comes from, not just that a check exists.
