@@ -4,7 +4,7 @@ description: When choosing between a principled design and one that preserves an
 type: practice
 ---
 
-**Rule:** Every design must be defensible as an expression of its theory. "The old system did
+**Rule:** Make every design defensible as an expression of its theory. "The old system did
 it this way", "this is the smaller change" and "the oracle differs" are not justifications.
 The priority order: (1) native expression and simplicity, (2) byte identity with the old
 output, but only if it comes for free.
@@ -33,7 +33,7 @@ output, but only if it comes for free.
   hand-roll a fixpoint or reachability, or smuggle a `__`-marker? Then dissolve it; do not
   patch it.
 - State parity claims as EQUIVALENCE unless identity is genuinely required, and say which you
-  mean. A `drvPath`-identical gate is sufficient, never necessary.
+  mean. A `drvPath`-identical gate is sufficient, not necessary.
 - Oracles and sample configurations are tools that catch mistakes. They do not define the
   design.
 - A shared-library change whose requirement the owner has not confirmed, especially one

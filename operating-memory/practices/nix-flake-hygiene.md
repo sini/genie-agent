@@ -4,7 +4,7 @@ description: When creating files in a flake, bumping a pinned input, or writing 
 type: practice
 ---
 
-**Rule:** Stage new files before any Nix command must see them. Bump one transitive input by its full
+**Rule:** Stage new files before any Nix command needs to see them. Bump one transitive input by its full
 resolution path, not by re-locking the whole closure. Write idiomatic Nix.
 
 **Why:**

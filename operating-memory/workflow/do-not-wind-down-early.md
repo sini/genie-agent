@@ -2,10 +2,15 @@
 name: do-not-wind-down-early
 description: Context-budget gates for an orchestrator session, and the false stop conditions that look like completion; applies whenever you feel like summarising and stopping.
 type: workflow
+scope: local
+values:
+  new-work-below-context: owner-set 2026-09-12
+  closeout-at-context: owner-set 2026-09-12
+  weekly-quota-closeout: provisional
 ---
 
 **Rule:** Below 75% context, keep starting new work. An idle fleet is a trigger to DISPATCH, not a
-finish. Never estimate your context usage; act only on a real reading.
+finish. Do not estimate your context usage; act only on a real reading.
 
 **Why:** Measured: a session closed six rows, published them, summarised and stopped at 54% context.
 The owner had to prod it back to work, which spent the owner's attention (the scarcest resource) on a
@@ -28,7 +33,7 @@ recoverable by construction (compaction, then re-boot from the resume prompt and
 - "In flight" means a stream of work, not a running agent.
 - The only admissible context values are the last real reading and a fresh one. Unknown? Say
   "unknown, last reading N%". Where truly unknown, KEEP WORKING.
-- `ctx ?%` is a broken instrument, never zero.
+- `ctx ?%` is a broken instrument, not zero.
 - If compaction happens anyway: re-boot from the resume prompt, then the handoff. Do not continue
   from the compaction summary.
 

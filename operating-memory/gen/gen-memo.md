@@ -2,6 +2,7 @@
 name: gen-memo
 description: Working in gen-memo, the incremental plane (reuse decisions, verifying traces, dirty cones, propagation, warm fold) over the gen evaluator.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the INCREMENTAL PLANE, a decision layer over the evaluator that never evaluates and only

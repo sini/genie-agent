@@ -2,6 +2,7 @@
 name: self-modifying-script-byte-offset
 description: Applies to git hooks, devshell startup scripts, or anything that may rewrite a script currently running.
 type: trap
+verified: 2026-10-15; bash 5.3.15
 ---
 
 **Rule:** Never write in place over a file that may be executing. Write to a temp file in the SAME

@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** The owner's own testimony is primary. An artefact describing what the owner approved is not.
-More generally, settle any claim that matters at its primary source, never at a summary, map,
+More generally, settle any claim that matters at its primary source, not at a summary, map,
 roadmap, index or prior report.
 
 **Why:**
@@ -27,7 +27,7 @@ roadmap, index or prior report.
   settled. Treat every agent-written "approved" as "an agent wrote that it was approved".
 - The asymmetry is deliberate: the owner saying "I did not review this" settles it; an artefact saying
   "the owner reviewed this" does not.
-- Deference runs two ways and must not blur: toward the assistant on the literature, away from it on
+- Deference runs two ways; keep them apart: toward the assistant on the literature, away from it on
   what the owner decided.
 - When two derived layers disagree, do not pick the newer one. Go to the primary: the paper, the
   source file, the owner's words.

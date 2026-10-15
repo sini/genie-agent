@@ -23,7 +23,7 @@ sample configuration happens to use.
 **How to apply:**
 
 - Scope by expressibility over the system's own surface. Use configs to prove a gap is real,
-  never to set the ceiling.
+  not to set the ceiling.
 - In core code: a tool name as a string DATA label is fine, and documentation references are
   fine. A hardcoded kernel TYPE or binding named for a consumer tool is a violation. Test with
   synthetic, generic fixtures.

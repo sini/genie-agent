@@ -2,6 +2,10 @@
 name: owner-sitting
 description: How to run a batched owner-decision session (a "sitting") beside a running build session; how to put questions, bank rulings, and wire blocked rows.
 type: workflow
+scope: local
+values:
+  open-sitting-items: owner-set 2026-09-30
+  agents-during-sitting: provisional
 ---
 
 # The owner sitting
@@ -13,7 +17,7 @@ separate BUILD session runs beside it in the same checkout and owns all of that.
 ## One tracker item per sitting
 
 - Exactly one open item labelled `sitting` exists at all times. It records what that sitting ruled
-  and closes with it. 0 or 2+ open at boot: STOP and ask the owner; never pick one.
+  and closes with it. 0 or 2+ open at boot: STOP and ask the owner; do not pick one.
 - The agenda is the set of rows wired `blocks` to it (rows whose only remaining work is the owner's).
 
 ## Boot
@@ -24,7 +28,7 @@ sitting is open and owns each row it rules while it runs.
 
 ## Agenda order
 
-1. the owner-agreed priority order (found by its heading, never by position);
+1. the owner-agreed priority order (found by its heading, not by position);
 2. the handoff commission's priority list;
 3. the rest.
    Rows carried from an earlier sitting are presumed STALE: dispatch ONE prep scout over all of them to
@@ -45,7 +49,7 @@ sitting is open and owns each row it rules while it runs.
 - When the owner misremembers a ruling, quote the banked ruling and offer readings; do not rule on
   the recollection.
 - End every turn on the pending question. Relay peer notifications in one verified line between
-  questions, never inside one.
+  questions, not inside one.
 - STOP MEANS STOP: an owner interruption halts all action, including recording.
 
 ## Banking a ruling (one act, every time)
@@ -57,20 +61,20 @@ sitting is open and owns each row it rules while it runs.
    ("agree", "a") is read as covering a recommendation, say so: "read as ..., reversible".
 3. Edges: remove the `blocks` edge to the sitting if the row now has agent work; keep it if only an
    owner act remains.
-4. Law text is queued for a batched law landing; the sitting never lands law itself.
+4. Law text is queued for a batched law landing; the sitting does not land law itself.
 5. Commit path-scoped; message the build session with the rulings and rows.
 
 ## Scouts (the only dispatch a sitting makes)
 
 At most 2-3 at once. Brief: quote the owner verbatim, tag premises, name a free report path,
-memory-cap heavy commands, positive control on every absence, NO tracker writes and never claim a
+memory-cap heavy commands, positive control on every absence, NO tracker writes and do not claim a
 row (a claimed row trips the build session's close gate).
 
 ## Close
 
 1. Append a CLOSE block: what was ruled (ids), what was filed, which rows are intentionally deferred
    and why each is owner-bound, which scouts still run.
-2. Read the blocking dependents row by row. Ruled rows must already be unwired. Every still-wired row
+2. Read the blocking dependents row by row. Check that ruled rows are already unwired. Every still-wired row
    (deferred, or never reached) is re-linked.
 3. In ONE act: create the next sitting item; move each still-wired edge to it; check the old item has
    0 blocking dependents; close the old item only if so. (Closing with a dependent left releases

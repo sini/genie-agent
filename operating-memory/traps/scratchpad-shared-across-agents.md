@@ -2,6 +2,7 @@
 name: scratchpad-shared-across-agents
 description: When deciding where probes, scripts, reports or retained artefacts live, naming scratch files, or symlinking a long scratchpad path
 type: trap
+verified: unverified
 ---
 
 **Rule:** Scratch space is volatile and shared. Anything someone will re-read goes into the repository's

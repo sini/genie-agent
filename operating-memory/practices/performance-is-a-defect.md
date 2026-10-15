@@ -4,7 +4,7 @@ description: When a design or audit shows a complexity blowup, an avoidable expo
 type: practice
 ---
 
-**Rule:** Performance problems are defects. File and track them like wrong answers. Never dismiss one
+**Rule:** Performance problems are defects. File and track them like wrong answers. Do not dismiss one
 as "an optimisation", "acceptable cost", or "only matters at scale we have not reached".
 
 **Why:** Correctness and cost fail the same way: silently, at a scale nobody probed. An orchestrator

@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** Reference container images through the repo's tracked image-metadata files and a digest
-accessor, never an inline tag. Let the updater tool re-resolve digests.
+accessor, not an inline tag. Let the updater tool re-resolve digests.
 
 **Why:** An inline tag can name an image that does not exist. A deploy broke with `ImagePullBackOff`
 because a GitHub *release* tag had no matching *container* tag; the registry only published a rolling

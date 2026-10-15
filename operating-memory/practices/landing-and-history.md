@@ -2,16 +2,17 @@
 name: landing-and-history
 description: When committing, merging, pushing or landing a unit of work onto main, and how often
 type: practice
+scope: local
 ---
 
 **Rule:** Commit after each verified logical unit. Land a gate-passed unit on its repository's
-main in the same dispatch, by its own build agent. Keep history linear: rebase, never a merge
+main in the same dispatch, by its own build agent. Keep history linear: rebase, not a merge
 commit. Revert shared history forward-only, never force-push.
 
 **Why:**
 
 - Commits are sync points: peer agents review by pulling them, so batching stalls the loop.
-  Messages must stand alone for a peer reader.
+  Write messages that stand alone for a peer reader.
 - **Exception: do not commit a generated export often.** 44 commits touching only a tracker
   export destroyed sha-based tree identity: every cross-revision claim then needed a scoped
   diff. Batch the export once per session phase.
@@ -34,7 +35,7 @@ commit. Revert shared history forward-only, never force-push.
 - Land the base first, then branch from main. Do not stack builds on unlanded bases.
 - Merge without PR ceremony where that is authorized: rebase or fast-forward and push, with
   the same green-suite and review requirements.
-- Diverged: `git rebase origin/main`, then a fast-forward push. Never `git pull` without
+- Diverged: `git rebase origin/main`, then a fast-forward push. Do not `git pull` without
   `--rebase`. In a shared checkout, tell the peer the new shas after a rebase.
 - Push authority covers existing refs. Creating new remote ref namespaces needs explicit
   authority.

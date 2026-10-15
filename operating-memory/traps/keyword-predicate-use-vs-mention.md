@@ -2,6 +2,7 @@
 name: keyword-predicate-use-vs-mention
 description: Applies to scripts that classify tracker rows or documents by keyword (e.g. "needs an owner reading").
 type: trap
+verified: unverified
 ---
 
 **Rule:** Treat a keyword-predicate hit as "the text contains the vocabulary", never as "the row is in

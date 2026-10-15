@@ -4,8 +4,8 @@ description: When writing findings, rulings or obligations into an issue tracker
 type: practice
 ---
 
-**Rule:** Write findings into the item's DESCRIPTION, never into comments or notes. Pass the
-prose from a FILE, never as a command-line argument, and verify the stored text by reading it
+**Rule:** Write findings into the item's DESCRIPTION, not into comments or notes. Pass the
+prose from a FILE, not as a command-line argument, and verify the stored text by reading it
 back.
 
 **Why:**

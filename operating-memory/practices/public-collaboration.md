@@ -2,6 +2,7 @@
 name: public-collaboration
 description: When creating a repository for an open project, or when a collaborator asks an assistant agent for a fix
 type: practice
+scope: local
 ---
 
 **Rule:** Develop in the open: create project repositories PUBLIC unless told otherwise. When a

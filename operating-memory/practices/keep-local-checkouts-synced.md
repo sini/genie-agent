@@ -2,6 +2,7 @@
 name: keep-local-checkouts-synced
 description: Before starting multi-repo work, and after any push to a repo that has a local checkout.
 type: practice
+scope: local
 ---
 
 **Rule:** The orchestrator and its agents own local repo state. Pull every target repo before
@@ -23,6 +24,6 @@ multi-repo work, and fast-forward a repo's local checkout in the same act as pus
 - Every dispatch granting commit+push says "after pushing, fast-forward the local checkout".
 - This never licenses a stash, reset or pull over a dirty or diverged shared checkout. Report that
   checkout; do not force it.
-- History is linear: rebase, never merge.
+- History is linear: rebase, not merge.
 
 Related: \[[ci-gate-discipline]\] \[[peer-sessions]\]

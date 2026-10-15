@@ -2,6 +2,7 @@
 name: flake-check-running-zero
 description: When citing a `nix flake check` pass, or planting a seeded red to prove a check discriminates
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** When you cite a `nix flake check` pass, quote `running N flake checks` with N > 0, or build /
@@ -13,7 +14,9 @@ CHANGED the check's derivation path: an unchanged drv with rc 0 means the plant 
 - Measured on a probe flake, four calls: first build exit 0 `running 1`; unchanged repeat exit 0
   `running 0` (cache hit); seeded red exit 1 `running 1`; reverted exit 0 `running 0`. The skip is
   SOUND: a store output exists only for a derivation that already built, and the hash covers every
-  input. But the reader cannot tell a fresh pass from a cache hit. A hosted CI runner starts from an
+  input. But the reader cannot tell a fresh pass from a cache hit. Re-measured 2026-10-15: Nix and
+  Determinate print `running 0` on the warm repeat; Lix 2.95.3 prints `running 1` on both runs, so on
+  Lix the count does not reveal a cache hit either way. A hosted CI runner starts from an
   empty store so it usually reads `running N`, but a store-path cache action could substitute.
 - The real trap is a change that never reaches a derivation at all: an untracked file is outside the
   git-filtered flake source, so the drv is unchanged, warm, `running 0`, green.

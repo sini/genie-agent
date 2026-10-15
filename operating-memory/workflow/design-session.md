@@ -6,7 +6,7 @@ type: workflow
 
 # Design session (N-class brainstorms)
 
-**Rule:** A NEW NAMED THING is designed with the owner present, before any spec. Agents never author
+**Rule:** A NEW NAMED THING is designed with the owner present, before any spec. Agents do not author
 a design outside this flow. This session brainstorms, banks the approved design and dispatches
 scouts; it does not spec, build or gate.
 
@@ -15,13 +15,13 @@ design nobody approved. Settling it in passing makes a decision nobody made.
 
 ## Prep, before the owner sits down
 
-Dispatch ONE scout over the session's items. Per item it must:
+Dispatch ONE scout over the session's items. Per item, it:
 
 1. re-read the row's newest entry and every report it cites;
 2. re-derive each premise at HEAD, tagged `[MEASURED <sha>]` / `[RELAYED]` / `[ASSUMED]`;
 3. quote the standing rulings that constrain the design, so the brainstorm neither re-litigates nor
    contradicts them;
-4. name prior art (a theory question is a dispatch, never a guess);
+4. name prior art (a theory question is a dispatch, not a guess);
 5. return a one-page brief: problem, constraints, what is measured, what is open, 2-3 approaches
    with trade-offs; one report file per item at a free path.
    The scout makes no tracker writes.
@@ -57,7 +57,7 @@ Dispatch ONE scout over the session's items. Per item it must:
 Append a dated RESTART (or CLOSE) block: each item approved / partial / deferred, doc shas, rows
 filed, scouts running, next items. Stop or bank every scout; message the build session with the specs
 now owed; verify each of your commits reached origin after the build session's next push
-(`git merge-base --is-ancestor <sha> origin/main`, with an unresolvable sha as control). Never write
+(`git merge-base --is-ancestor <sha> origin/main`, with an unresolvable sha as control). Do not write
 the handoff file.
 
 Related: \[[owner-sitting]\] \[[orchestrator-operating-rules]\] \[[shared-checkout-peer-sessions]\]

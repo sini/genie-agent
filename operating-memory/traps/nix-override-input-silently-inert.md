@@ -2,6 +2,7 @@
 name: nix-override-input-silently-inert
 description: When overriding, updating or relocking a Nix flake input (`--override-input`, `nix flake update <name>`, `--update-input`), especially one that is nested/transitive or reached from a `getFlake` probe.
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Naming an input the flake you are in does not declare directly is accepted silently. Prove
@@ -14,7 +15,8 @@ code. Two byte-identical arms are the signature of an inert override.
   input of this flake"), change nothing, and exit 0 when `foo` is nested under another input (`hub`).
   Measured four times on four inputs in one session. The slash path works: `nix flake update hub/foo`.
   A no-op relock followed by a green suite is a pure false green: nothing changed, so nothing broke.
-- `--override-input child <path>` on a TRANSITIVE input is accepted, no error, and the locked rev the
+- `--override-input child <path>` on a TRANSITIVE input is accepted at exit 0 (only a warning, "has an
+  override for a non-existent input"), and the locked rev the
   evaluation uses does not move. Where the same input is direct, stderr prints
   `Updated input '<name>': ...`, the proof. Use `--override-input parent/child <path>`.
 - On `nix eval --expr` / `--file` probes that reach the flake via `builtins.getFlake`, the flag does

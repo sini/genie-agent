@@ -5,10 +5,10 @@ type: practice
 ---
 
 **Rule:** A census PROVES EXISTENCE when it hits; a zero confirms nothing. Report it as "zero over
-<population> at <revisions>", never "absent", and draw no decision from it. A clean result is evidence
+<population> at <revisions>", not "absent", and draw no decision from it. A clean result is evidence
 only with an armed instrument: a live control from the same instrument in the same run, whose domain
 reaches past the predicate's, taken at an operating point where the defect would be visible; and every
-green must be shown to go red when you seed the thing it should catch.
+green is shown to go red when you seed the thing it should catch.
 
 **Why (each law was paid for by a false green):**
 

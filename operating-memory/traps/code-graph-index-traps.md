@@ -2,6 +2,7 @@
 name: code-graph-index-traps
 description: When using a code knowledge-graph index (e.g. codebase-memory) for absence, caller or dead-code claims
 type: trap
+verified: unverified
 ---
 
 **Rule:** Use a code graph for structure and shape questions. Derive every absence claim, including "zero callers" and "symbol not found", from grep with a live control.

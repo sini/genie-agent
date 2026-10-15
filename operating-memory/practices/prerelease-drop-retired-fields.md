@@ -5,8 +5,8 @@ type: practice
 ---
 
 **Rule:** Pre-release, a retired FIELD or option is dropped outright: no tombstone, no retired list.
-A renamed EXPORT still keeps a refused-by-name alias through the migration. Final documentation must
-be consistent and point to where the capability now lives.
+A renamed EXPORT still keeps a refused-by-name alias through the migration. Keep final documentation
+consistent, pointing to where the capability now lives.
 
 **Why:**
 

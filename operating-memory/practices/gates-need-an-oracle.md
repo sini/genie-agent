@@ -7,7 +7,7 @@ type: practice
 **Rule:** Before a gate, name what settles it. An executable oracle (a test, a differential)
 supports review rounds. A person's judgement gets ONE reading by that person, not rounds. No
 oracle means no gate. An oracle cell's RED and GREEN values are EVALUATED before the cell is
-written, never derived from reading the source.
+written, not derived from reading the source.
 
 **Why:**
 
@@ -42,7 +42,7 @@ written, never derived from reading the source.
 - Put "evaluate each cell's red and green before writing it" in the DISPATCH, not in the
   reviewer.
 - Split a large spec into a small frozen core (what gates attack) and a measurement ledger
-  (verified by re-running commands, never by re-reading). Commit artefacts at every round
+  (verified by re-running commands, not by re-reading). Commit artefacts at every round
   boundary.
 - Contact caps and reserved classes: \[[review-economy]\].
 

@@ -14,16 +14,16 @@ clean up. Each convention below was learned from a correction or a breakage.
 **How to apply:**
 
 - **One concern per file.** Split a multi-facet feature (daemon and firewall / its secret /
-  platform-specific parts), and open each file with a 1–2 line header naming its concern. Never
-  a kitchen-sink file mixing home, system and secrets.
+  platform-specific parts), and open each file with a 1–2 line header naming its concern. Do not
+  write a kitchen-sink file mixing home, system and secrets.
 - **Presence is a role decision, not an `enable` toggle.** To turn a feature off fleet-wide,
   remove it from the role's includes. Settings parameterise the behaviour of an included
   feature; they never gate whether it exists.
-- **Paths come from schema fields, never hand-built.** Anything forced during the BASE flake
-  evaluation (schema and registry option defaults) must not reference `self`: registry → `self`
+- **Paths come from schema fields, not hand-built.** Anything forced during the BASE flake
+  evaluation (schema and registry option defaults) cannot reference `self`: registry → `self`
   → flake outputs → registry recurses infinitely. Use a path literal such as `rootPath = ../..`
   there.
-- **Runtime files on REMOTE hosts must be real store-path dependencies.**
+- **Make runtime files on REMOTE hosts real store-path dependencies.**
   `toString (rootPath + "/x.crt")` makes the whole flake source the dependency, which a remote
   deploy tool did not copy, so it worked only on the build host. Use
   `"${builtins.path { path = …; name = "x.crt"; }}"`.

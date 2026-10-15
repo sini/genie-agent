@@ -2,6 +2,7 @@
 name: flake-lock-node-name-is-not-identity
 description: Applies when censusing or checking revs in a flake.lock with jq.
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Read a rev by walking `.nodes | to_entries[]` (or by node PATH from root), never by a single

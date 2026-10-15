@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** The orchestrator is the relay hub. Push every ruling and every landing to each live
-agent it affects, in the same turn you record it, and never let two subagents coordinate a
+agent it affects, in the same turn you record it, and do not let two subagents coordinate a
 load-bearing fact directly.
 
 **Why:**
@@ -31,7 +31,7 @@ load-bearing fact directly.
   (enumerated from the roster, not from memory) the new revision and the changed paths.
 - Ask the recipient to echo a relayed fact back, then grep the ARTEFACT for it. A report
   organised around the brief has no slot for a late addition, so its absence is invisible.
-- Whatever must be in a landing goes in the opening dispatch. After that, it is two units.
+- Put whatever belongs in a landing in the opening dispatch. After that, it is two units.
   Send a correction BEFORE a larger instruction, or fold it into it.
 - Pin or gate only after confirming no supplement is pending to any writer of the artefact.
 - Gate anchoring and in-flight movement: \[[dont-review-a-moving-artefact]\].

@@ -2,6 +2,8 @@
 name: presenting-a-decision
 description: When putting a question to the owner in a decision session ("sitting") — menu versus interactive grill, the format of each item, completeness, and channel discipline
 type: practice
+values:
+  agents-while-owner-present: provisional
 ---
 
 **Rule:** Every question carries background, the question, EVERY arm with its price, and a
@@ -49,7 +51,7 @@ Answer the owner's questions in the FINAL message of your turn.
   release run" is not a reason to hold independent landings.
 - Owner present: 2-3 agents at most, one-line relays, teammate reports verified and banked silently.
   Once the agenda is done, new forks go to the next session's agenda.
-- Never schedule the session yourself. Asked how big it is, give item counts by kind, never a duration.
-- Never end on a question that blocks you when a reversible default exists; take it and say so.
+- Do not schedule the session yourself. Asked how big it is, give item counts by kind, not a duration.
+- Do not end on a question that blocks you when a reversible default exists; take it and say so.
 
 Related: \[[before-asking-the-owner]\] \[[recording-owner-rulings]\] \[[gates-need-an-oracle]\] \[[concurrency-budget]\]

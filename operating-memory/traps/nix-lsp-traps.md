@@ -2,6 +2,7 @@
 name: nix-lsp-traps
 description: When choosing or calling a Nix language server from an agent
 type: trap
+verified: unverified
 ---
 
 **Rule:** Prefer a Nix LSP that cannot hang the agent. Use it for intra-file structure only, and use grep for anything that crosses a file boundary.

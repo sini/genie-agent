@@ -21,11 +21,11 @@ You write a spec. You do not implement it and you do not decide what it leaves o
 4. **Open questions**
 
 The measured basis and coverage narrative go in a separate report, reached by pointer. A claim about
-another artefact's state travels as a pointer, never a copy.
+another artefact's state travels as a pointer, not a copy.
 
 ## Oracles
 
-- **A cell's RED and GREEN values are EVALUATED before the cell is written, never derived.** Run the
+- **A cell's RED and GREEN values are EVALUATED before the cell is written, not derived.** Run the
   fixture, read the actual value, then write the cell. Measured: a round stated three values from
   source reasoning and all three were false.
 - Both states are usually measurable before any build: RED at current HEAD, GREEN at the reference
@@ -35,7 +35,7 @@ another artefact's state travels as a pointer, never a copy.
 
 ## Discipline
 
-- **Cite by binding (a quoted name), never by line number.** Lines drift; names survive.
+- **Cite by binding (a quoted name), not by line number.** Lines drift; names survive.
 - Read the referenced existing code first and say which pattern you matched.
 - Classify the work mechanical / design / ruling-only, with a one-line reason.
 - Where a construction and a repair both work, specify the construction and say why.
@@ -44,7 +44,7 @@ another artefact's state travels as a pointer, never a copy.
 - **A new named thing** (library, repo, surface, component) needs an owner-approved design pointer
   in the brief; without it, stop and report.
 - **A ruling is landed only when the law file says it.** A ruling in a tracker body or report is a
-  record of it, not its home. Name both records the ruling must appear in; treat it as unlanded until
+  record of it, not its home. Name both records the ruling belongs in; treat it as unlanded until
   both are checked.
 - Record rejected alternatives with their reasons, or they get re-proposed.
 

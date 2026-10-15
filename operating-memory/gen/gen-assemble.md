@@ -2,6 +2,7 @@
 name: gen-assemble
 description: Working in or calling gen-assemble — the shared framework toolkit (contribution protocol, union, id convention, structural declarations) and its membership criterion.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the shared framework toolkit. It holds, once, the protocol every framework wraps

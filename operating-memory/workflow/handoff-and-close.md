@@ -2,6 +2,7 @@
 name: handoff-and-close
 description: The ordered close procedure for an orchestrator session and the voice rules for the handoff file the next session boots from.
 type: workflow
+scope: local
 ---
 
 # Close procedure and handoff
@@ -17,12 +18,12 @@ STATE and OBLIGATIONS; the trail lives in git history and tracker bodies.
 br list --status in_progress --limit 0          # read every row, not a count
 
 # 2. EXPORT CURRENCY, then a PATH-SCOPED commit of the tracker
-br sync --status                                # dirty count must read 0
+br sync --status                                # dirty count reads 0
 git add .beads/ && git commit -m "beads: <what closed>" -- .beads/   # never -A
 
 # 3. MEMORY: list rules that changed this session; retain each into the memory bank and read it
 #    back from the durable side, not from the tool's response. Bank measured traps and owner
-#    rulings, never an account of your own work.
+#    rulings, not an account of your own work.
 
 # 4. THE HANDOFF: read the predecessor whole, then replace it. COMMISSION field first.
 git show HEAD:<handoff-file>
@@ -58,9 +59,9 @@ chain. An id with no stated why is dropped (acknowledged, not silent); it stays 
    HEAD, not when found. Measured: a handoff listed four live defects; three were already fixed by
    the same session's later commit, and the successor built a brief on the stale three. Prefer the
    fixing commit over a carrying tracker id; check for one first.
-4. **Vigilance is a procedure, not a mood.** Never tell the successor to distrust itself. Give the
+4. **Vigilance is a procedure, not a mood.** Do not tell the successor to distrust itself. Give the
    command, the predicate, and where it lives.
-5. **Emphasis marks load-bearing content**, never shame.
+5. **Emphasis marks load-bearing content**, not shame.
 6. **The commission field is forward-looking imperatives with ids only.**
 7. **Re-carry content, not register.** Extract a predecessor's obligations; drop its voice.
 
@@ -74,6 +75,6 @@ path. Otherwise it goes.
 ## Do not hand off early
 
 A handoff drafted before the close-out gate is rewritten at close; bank obligations into tracker
-bodies as you go instead. Never close with an agent still running: commit its results first.
+bodies as you go instead. Do not close with an agent still running: commit its results first.
 
 Related: \[[do-not-wind-down-early]\] \[[resume-prompt-template]\] \[[orchestrator-operating-rules]\]

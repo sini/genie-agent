@@ -13,7 +13,7 @@ by an existing ruling is not an arm. Every fork names what CHANGES under each an
 
 - **Timing.** Scope drifts in the gaps between owner contacts; sessions that execute the unambiguous
   while queuing questions compound in the wrong direction. Owner: "putting off input from me allows
-  defects to grow and scope to drift." A mechanical tier is a ceremony tier, never a priority tier.
+  defects to grow and scope to drift." A mechanical tier is a ceremony tier, not a priority tier.
 - **Readiness.** A fork that looked measured was inverted by two further passes; ruling early would
   have ruled wrong. Items queued for weeks as "decisions" were really work.
 - **Entailment.** Four times in a few days the owner was asked to re-rule something ruled ("Didn't I
@@ -48,7 +48,7 @@ by an existing ruling is not an arm. Every fork names what CHANGES under each an
 - A dated record and a spec section have no standing priority over each other: find the LATEST ACT on
   the question in both and cite it. Deeper-grilled prior records outrank a same-day recommendation.
 - Design text conflicting with law is fixed to conform without asking; raise it only if honouring it
-  needs a law AMENDMENT, said plainly. Law changes for a genuine error or advantage, never convenience.
+  needs a law AMENDMENT, said plainly. Law changes for a genuine error or advantage, not convenience.
 - A fork promoted by a subagent is a relayed claim; test it. Two instances in opposite directions is
   the minimum before writing a direction rule. Report a bounded result as bounded.
 - An unanswered offer is not consent; a one-word "agree" to a multi-arm question is not consent to a

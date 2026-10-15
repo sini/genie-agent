@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** Ship the complete design, not a half-measure plus a cleanup backlog. Fix discovered tech
-debt when you find it. If something genuinely must wait, give it a named, scheduled home.
+debt when you find it. If something genuinely has to wait, give it a named, scheduled home.
 
 **Why:**
 

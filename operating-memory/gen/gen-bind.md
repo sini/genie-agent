@@ -2,6 +2,7 @@
 name: gen-bind
 description: Working in or calling gen-bind — partial application of external bindings into module functions, config thunks, contracts, merge strategies, arg-env crossing primitives, and the boundary-crossing surface.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** partial application of external bindings into Nix module functions. It inspects a
@@ -110,4 +111,4 @@ identity minting (the caller supplies the identity string; the crossing takes th
 - Apply-only intakes accept functor chains up to 32 levels and refuse deeper ones (fail-closed,
   because the door cannot see remaining call depth).
 
-Related: \[[gen-overview]\] \[[gen-delivery]\] \[[gen-flake]\]
+Related: \[[gen-overview]\] \[[gen-delivery]\] \[[gen-retired]\]

@@ -45,10 +45,10 @@ EXIT:        the gating oracle (component landed, consumer builds, example green
 
 ## What every brief carries
 
-1. **Tagged premises.** A tracker-body citation is `[RELAYED]`, never `[MEASURED]`: the command
+1. **Tagged premises.** A tracker-body citation is `[RELAYED]`, not `[MEASURED]`: the command
    proves "the artefact SAYS this", not "this is TRUE". Measured across four sampled sets of past
    runs: the brief carried a false load-bearing claim in 4/8, 4/8, 5/8 and 8/8 of runs.
-2. **Quote the row, never the generalisation.** The likeliest false premise is YOUR summary of an
+2. **Quote the row, not the generalisation.** The likeliest false premise is YOUR summary of an
    agent's report. Measured: in one session, four of four false premises were the orchestrator
    compressing a report, and the counter-evidence sat in the report's own table. Distrust on sight:
    universals ("uniformly"), ratios over a population, "the only", borrowed warrant ("already
@@ -65,7 +65,7 @@ EXIT:        the gating oracle (component landed, consumer builds, example green
 8. **Every test cell that PINS a surface the edit touches**, not just the surface. Find them by
    seeding: plant the change and watch which cells go red.
 9. **Commit + push to a main** carries: "after pushing, fast-forward the shared local checkout
-   (`git -C <repo> merge --ff-only origin/main`, only if clean and on main; else report, never stash)".
+   (`git -C <repo> merge --ff-only origin/main`, only if clean and on main; else report, not stash)".
 
 ## Worktree and path hazards
 
@@ -75,7 +75,7 @@ EXIT:        the gating oracle (component landed, consumer builds, example green
 - `git clone --local` across filesystems fails (EXDEV); use `--local --no-hardlinks`.
 - A `--local` clone's `origin` is the local checkout. Set `origin` to the real remote URL before
   pushing, or the branch lands on the local disk (measured twice).
-- Read a dependency's revision from the lock file by node path, never from a clone's HEAD. Measured
+- Read a dependency's revision from the lock file by node path, not from a clone's HEAD. Measured
   over 22 repos: 6 differed outright.
 - Check report paths are free: `ls reports/ | grep <id>`. Measured: a gate told to write
   `<id>-gate-v0.md` overwrote a 580-line committed report. Name the SUBJECT, not just the role.

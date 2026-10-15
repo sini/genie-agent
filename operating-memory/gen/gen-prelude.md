@@ -2,6 +2,7 @@
 name: gen-prelude
 description: Working in gen-prelude, the zero-dependency utility base of the gen ecosystem (builtins aliases, vendored nixpkgs.lib helpers, the door/refusal constructs).
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the utility base every pure gen library stands on: `builtins` re-exports plus the pure

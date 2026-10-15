@@ -2,6 +2,7 @@
 name: gen-graph
 description: Working in gen-graph, accessor-based graph query combinators (reachability, SCC condensation, topological/phase order, edge-map algebra, pre-order folds).
 type: reference
+verified: unverified
 ---
 
 **Purpose:** pure graph algorithms over a graph the CALLER supplies as plain functions. gen-graph

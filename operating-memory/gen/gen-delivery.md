@@ -2,6 +2,7 @@
 name: gen-delivery
 description: Working in or calling gen-delivery — projecting declared delivery classes per node and folding each class's content into its terminal (project / realize), with the class-discipline refusals.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the delivery-class realization surface. `project` discovers, per node, which aspect
@@ -82,4 +83,4 @@ unapplied root inputs). Framework stratum. Used by the hub's interim `flakeModul
 - **Test renames at the SITE, not by token.** A token-scoped check goes green by renaming correct
   uses elsewhere. Pair a correct adapter with a wrongly-renamed one so the two differ observably.
 
-Related: \[[gen-overview]\] \[[gen-aspects]\] \[[gen-bind]\] \[[gen-flake]\]
+Related: \[[gen-overview]\] \[[gen-aspects]\] \[[gen-bind]\] \[[gen-retired]\]

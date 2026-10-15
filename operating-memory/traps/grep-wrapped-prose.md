@@ -2,6 +2,7 @@
 name: grep-wrapped-prose
 description: When grepping a multi-word phrase or concept in markdown, specs, comments or tracker bodies
 type: trap
+verified: 2026-10-15; GNU grep 3.12
 ---
 
 **Rule:** Flatten before you match any multi-word phrase, and strip markup prefixes in the same pass. Do it by construction, because remembering the rule does not prevent the error.

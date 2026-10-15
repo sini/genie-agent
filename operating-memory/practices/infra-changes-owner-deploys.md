@@ -2,6 +2,7 @@
 name: infra-changes-owner-deploys
 description: When a change touches live infrastructure config (host configs, secrets, cluster manifests) — agents author and commit, the owner approves and deploys.
 type: practice
+scope: local
 ---
 
 **Rule:** An agent may author and commit infrastructure-config changes like any other build, but it

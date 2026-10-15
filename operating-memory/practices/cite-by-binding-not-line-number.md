@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** Cite by binding name or verbatim expression (`global.nix:coScc`, "the `repCycle`
-binding"), never by a bare line number. A line number is admissible only as the output of a
+binding"), not by a bare line number. A line number is admissible only as the output of a
 stated command at a stated revision (`git grep -n <expr> <rev> -- <path>`).
 
 **Why:**

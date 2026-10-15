@@ -2,6 +2,7 @@
 name: memory-bank-derived-observations
 description: When recalling facts from a memory service that synthesizes observations from stored facts (e.g. hindsight)
 type: trap
+verified: unverified
 ---
 
 **Rule:** On any recalled claim about an instrument or a measurement, read its fact type first. Measured world/experience facts are evidence. Synthesized observations are hypotheses to re-derive at HEAD.

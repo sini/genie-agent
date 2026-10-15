@@ -2,6 +2,7 @@
 name: pdf-text-extraction-traps
 description: When grepping or quoting text extracted from PDFs (papers, specs), or verifying that an archived paper is the one its filename claims
 type: trap
+verified: unverified
 ---
 
 **Rule:** Text extracted from a PDF is a lossy instrument. Grep stems with `-a`, test ligature variants, never quote a formula from the extract, and verify a paper's identity by its title page and md5, never by its filename.

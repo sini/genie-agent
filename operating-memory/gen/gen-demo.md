@@ -2,6 +2,7 @@
 name: gen-demo
 description: Working in gen-demo, the acceptance corpus that exercises every landed gen component through the hub's published surface.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the **integration corpus** for gen. It is a consumer, not a library: no library code of its

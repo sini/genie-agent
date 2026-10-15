@@ -2,6 +2,7 @@
 name: control-must-differ-on-the-failing-axis
 description: Applies when you re-run a measurement "another way" to confirm it.
 type: trap
+verified: unverified
 ---
 
 **Rule:** A confirming arm must differ from the first in the step that could be broken, not merely in

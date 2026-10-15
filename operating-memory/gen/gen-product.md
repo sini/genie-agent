@@ -2,6 +2,7 @@
 name: gen-product
 description: Working in gen-product, the graph-product library (Cartesian/tensor/strong/lexicographic) with slices, fibers, restriction, quotient and containment chains.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** graph products as first-class operations over accessor-graphs. It builds the four standard

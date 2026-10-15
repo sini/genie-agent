@@ -2,6 +2,7 @@
 name: control-population-must-match-claim
 description: Applies to every absence claim ("X appears 0 times") and every relayed control figure.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Run the positive control on exactly the population the absence claims, and make the figure

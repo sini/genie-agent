@@ -2,6 +2,7 @@
 name: assert-which-refusal-fired
 description: Applies when writing tests whose observable is an error, throw, or refusal.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Where a refusal is the observable, design the cell so the expected refusal DIFFERS between

@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** Write the answer first, stated directly, and judge its size. Frame the work by its
-destination, never by the construct being removed.
+destination, not by the construct being removed.
 
 **Why:** A design dispatched as "retire the per-class content bucket" organised itself around the
 bucket: its vocabulary, its cost, what survives its retirement. Four review rounds and 1525 lines

@@ -2,6 +2,7 @@
 name: check-output-is-not-its-population
 description: When a failing check (including `nix flake check` without `--keep-going`) prints a list of failures and you are about to scope a repair or a count to it
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** A printed failure list is a lower bound, never a population. Derive the full set of offending
@@ -15,7 +16,9 @@ first failure is X", never "the failure is X".
   independent sweep found all three.
 - `nix flake check` without `--keep-going` stops at the first failing check. A consumer-repo arm was
   attributed to one failing cell. Fixing it left the arm still exit 1, now on a different cell that had
-  been failing all along. The fix looked like it accomplished nothing, and the tempting reading ("the
+  been failing all along. Re-measured 2026-10-15 with two failing checks: Nix named one, `--keep-going`
+  named both; Lix's summary line named both; Determinate Nix 3.23.1 aborted with rc 134 on an internal
+  assertion and named neither. Use `--keep-going`. The fix looked like it accomplished nothing, and the tempting reading ("the
   fix regressed something") was false: the mask lifted.
 - The reverse is worse: a cell that reads green only because an earlier cell aborted first was never
   evaluated at all.

@@ -2,6 +2,7 @@
 name: claude-code-discovery-traps
 description: When relying on Claude Code to load AGENTS.md, a skill, or a tool such as Agent
 type: trap
+verified: unverified
 ---
 
 **Rule:** Assume nothing loads unless you have measured it loading. Bridge `AGENTS.md` from `CLAUDE.md`, put skills at `.claude/skills/<name>/SKILL.md`, and load deferred tools by exact name before declaring them unavailable.

@@ -2,6 +2,7 @@
 name: nix-force-to-prove-supplied
 description: Applies when checking whether a module/harness supplies an argument, or a lazy value exists.
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Prove a value exists by forcing it (`builtins.seq x 1` in a test). Declaring it proves only

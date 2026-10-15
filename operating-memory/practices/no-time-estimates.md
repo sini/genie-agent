@@ -4,7 +4,7 @@ description: When sizing work, scoping a plan, or asked "how big is this".
 type: practice
 ---
 
-**Rule:** Never give a duration (days, hours, "sessions"). Size by delivered shape: artefacts, lines
+**Rule:** Do not give a duration (days, hours, "sessions"). Size by delivered shape: artefacts, lines
 of code, files/repos touched, risk tier, oracle surface, whether a spike is needed.
 
 **Why:**

@@ -4,7 +4,7 @@ description: When writing a dispatch brief for a fresh-context agent; the orches
 type: practice
 ---
 
-**Rule:** Treat every factual premise in a brief as a hypothesis the agent must try to break.
+**Rule:** Treat every factual premise in a brief as a hypothesis for the agent to try to break.
 Tag each one `[MEASURED]` (with the command), `[RELAYED]` (from a report, tracker row or
 document) or `[ASSUMED]`, and write "re-derive, do not copy" in every dispatch.
 
@@ -24,7 +24,7 @@ shapes:
 
 **How to apply:**
 
-- **Quote the measured row, never the sentence that generalises it.** An agent report is
+- **Quote the measured row, not the sentence that generalises it.** An agent report is
   measured rows plus a summarising sentence; the sentence is where defects live. Words that
   give a generalisation away: "uniformly", "systematic", "only", "already verified",
   "confirmed by the gate", any ratio over a population.

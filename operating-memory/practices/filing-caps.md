@@ -2,6 +2,9 @@
 name: filing-caps
 description: When deciding whether to file a tracker item, write a report, split oracles, or route an owner ask
 type: practice
+scope: local
+values:
+  reports-per-landing: owner-set 2026-09-16
 ---
 
 **Rule:** File a tracker item only for a COMPONENT or a RULING. Write one report per landing.
@@ -25,8 +28,8 @@ never surface it. An ask with no row vanishes.
   deferred row per component and re-armed once the consumer proves the value. Builders land
   value only.
 - **One unit, one session:** a unit lands in one dispatch with its integration arm green, or
-  it is split. It is never carried over.
-- A user-facing surface exits on the OWNER having run it, never on agents' green.
+  it is split. It is not carried over.
+- A user-facing surface exits on the OWNER having run it, not on agents' green.
 - Readings that wait for the sitting take the recommendation meanwhile, marked "defaulted,
   reversible".
 - **A row truly blocked on the owner is WIRED, not narrated:** give it a `blocks` edge to the

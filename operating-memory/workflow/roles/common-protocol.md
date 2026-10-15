@@ -16,7 +16,7 @@ type: workflow
   build whose edit silently wrote nothing returned `163/163` and its agent read that as success.
 - **A probe whose two arms agree has measured nothing**, and neither has a one-armed probe compared
   with a figure from a document. Exhibit both arms from your own instrument, measuring the same object.
-- **A report about an artefact is never a measurement of it.** Re-derive; do not relay.
+- **A report about an artefact is not a measurement of it.** Re-derive; do not relay.
 - **Your brief is a claim set, not ground.** Briefs carried a false load-bearing claim in roughly half
   of sampled runs: either stale (true once, since fixed) or simply wrong (a count, path, cause).
   Test load-bearing claims before building on them. Emphasis marks protect nothing.
@@ -27,7 +27,7 @@ type: workflow
 
 - The tool named "Bash" may run zsh: unquoted `$list` does not word-split; `$pipestatus` not
   `$PIPESTATUS`; brace `"${sha}:path"` (zsh history modifiers otherwise mangle it and return nothing
-  at exit 0); never name a variable `path` (it is tied to `PATH`). See \[[zsh-is-not-bash]\].
+  at exit 0); do not name a variable `path` (it is tied to `PATH`). See \[[zsh-is-not-bash]\].
 - Read exit status UNPIPED: `cmd > out; echo $?`. See \[[read-exit-status-unpiped]\].
 - Do not `2>/dev/null` a measurement: it turns a missing tool into an absence finding.
 - `grep -c` counts LINES; prose wraps. For phrases: `tr -s '[:space:]' ' ' | grep -o 'phrase' | wc -l`.
@@ -38,11 +38,11 @@ type: workflow
 
 ## Control tokens
 
-A negative-control token (a string that must match nothing) is generated FRESH per run and NEVER
+A negative-control token (a string that must match nothing) is generated FRESH per run and not
 written down. Once recorded in a report or prompt it is in the corpus, and later sweeps quoting it get
 a plausible non-zero. Measured: one token matched 65 files because agents wrote it into reports; its
 published replacement was burned by naming it in the warning. Use `/dev/urandom` or `$RANDOM`; report
-the count and method, never the string.
+the count and method, not the string.
 
 ## Reporting: three disclosures, each checkable
 
@@ -58,7 +58,7 @@ Write the deliverable file AND send a message to the orchestrator (a background 
 reaches nobody). Send: the path verbatim; the verdict in one line; any stop signal in full; your
 hand-off recommendation. If you wrote nothing or failed, send that.
 
-## Stop protocol (you never dispatch your own agents)
+## Stop protocol (you do not dispatch your own agents)
 
 - `NEEDS_CONTEXT`: name exactly what information, and where it likely lives.
 - `BLOCKED`: name the blocker (another writer, a missing ruling, a failed precondition).
@@ -67,15 +67,15 @@ hand-off recommendation. If you wrote nothing or failed, send that.
   A brief that contradicts itself is none of the three: take the arm whose failure a reader can SEE,
   and name both arms and your choice. If you cannot tell, that is STOP-AND-PROMOTE.
 
-## What you report, never file
+## What you report, not file
 
-Docs drift (counts, prose, anchors, README) is reported and fixed in a landing, never filed. The
+Docs drift (counts, prose, anchors, README) is reported and fixed in a landing, not filed. The
 tracker is the orchestrator's. A user-facing surface (tool, demo) is accepted only when the OWNER has
 run it; agents' green is not acceptance.
 
 ## Memory bank
 
-Recall BEFORE your first measurement, by subject (tool, library, kind of measurement), never by task
+Recall BEFORE your first measurement, by subject (tool, library, kind of measurement), not by task
 id (that returns nothing and reads as an empty bank). Filter recall to raw facts and experiences, not
 derived observations: measured, a derived observation inverted the source fact it summarised while
 keeping its "measured" tag. Retain a trap only if it would change what a stranger does months from

@@ -14,7 +14,7 @@ foreclosed. When arms hinge on an unmeasured fact, the right new arm is "measure
   parity against nixpkgs as a core objective. A proposal priced "cells refused where the upstream serves" as an acceptable
   shortfall. Owner: "anywhere that's true has a significant smell; we need to step back and look at
   why, regardless of past rulings." A rarity exemption was proposed and rejected: a census proves
-  presence, never absence, so "rare" cannot be established.
+  presence, not absence, so "rare" cannot be established.
 - An arm requiring a patch to the upstream library was recommended as "the only measured arm that
   meets both conditions". Owner: "impossible, we can't change it." Parity has to hold against releases
   already shipped, and upstream acceptance is outside your control.
@@ -28,7 +28,7 @@ foreclosed. When arms hinge on an unmeasured fact, the right new arm is "measure
   forcing it, look for the construction arm (thread the value, re-home it, fix the walk), and audit the
   ruling that forbids serving. Put the root-cause arm and a scout, not the shortfall. Challenge a past
   ruling if it is provably a design defect.
-- Landing rules that came with this: a landing never regresses a working cell; a landing that only
+- Landing rules that came with this: a landing does not regress a working cell; a landing that only
   moves cells up the severity ladder (abort to refusal to value, silent to loud) may land; order work
   by severity, then positive evidence of presence.
 - Upstream-change arms: list as foreclosed with the reason. Look for your side's form of the same

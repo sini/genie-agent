@@ -300,14 +300,14 @@
       ]
     },
     "q22": {
-      "query": "In the beads issue tracker, what is the meaning of br dep add X Y?",
+      "query": "When appending a block to a record in a store whose write replaces the whole record, what must you check before and after the write?",
       "results": [
         {
-          "document_id": "traps/tracker-br-traps.md",
-          "text": "Operating memory excerpt for traps/tracker-br-traps.md. Relevant guidance for In the beads issue tracker, what is the meaning of br dep add X Y?",
+          "document_id": "traps/redirect-truncates-before-read.md",
+          "text": "Operating memory excerpt for traps/redirect-truncates-before-read.md. Relevant guidance for When appending a block to a record in a store whose write replaces the whole record, what must you check before and after the write?",
           "tags": [
             "tier:memory",
-            "slug:traps/tracker-br-traps.md"
+            "slug:traps/redirect-truncates-before-read.md"
           ],
           "score": 0.95
         }

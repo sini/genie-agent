@@ -2,6 +2,7 @@
 name: hook-wiring-is-disposable
 description: Applies when chaining a custom check into `.git/hooks/pre-commit` alongside the pre-commit framework.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Keep the GATE (the script) tracked in the repo, and treat the hook wiring as disposable.

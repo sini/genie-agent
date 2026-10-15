@@ -2,6 +2,7 @@
 name: repo-has-more-than-one-lock
 description: When relocking a repository, checking that its locks are current, or trusting a library's own suite as evidence its published surface works
 type: trap
+verified: unverified
 ---
 
 **Rule:** Enumerate every lock in a repository before calling a relock complete. A suite passing is not

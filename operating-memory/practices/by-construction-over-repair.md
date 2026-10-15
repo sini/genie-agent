@@ -2,6 +2,8 @@
 name: by-construction-over-repair
 description: When a defect could be fixed by a guard, filter, dedup or normalisation pass, or when workarounds are piling up on one component
 type: practice
+values:
+  workarounds-before-redesign: provisional
 ---
 
 **Rule:** Prefer a construction where the defect cannot arise over one where it arises and is

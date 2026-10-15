@@ -2,6 +2,7 @@
 name: stderr-token-control-false-fires
 description: Applies to probe harnesses that detect success/failure by grepping nix stderr for a marker.
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Do not detect a control token by grepping stderr alone. Check the run parsed and evaluated

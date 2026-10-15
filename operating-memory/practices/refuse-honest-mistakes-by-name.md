@@ -29,7 +29,7 @@ covers four inputs:
 3. a curried under-application: the same result check catches the leftover lambda;
 4. a pattern formal (`{ x }: …`): `isFunction` is true and the call aborts inside
    application, uncatchably, so it is undecidable at the door. Land it as a falsifier cell
-   that expects that exact error, never as a claim that "the bound is closed".
+   that expects that exact error, not as a claim that "the bound is closed".
    At a landing gate for such a construct, run these four as seeds before anything else. In
    tests, "forged" fixtures remain useful stand-ins for mistakes, but rank the design arms by
    their error behaviour.

@@ -2,6 +2,7 @@
 name: treefmt-fail-on-change-writes-first
 description: Applies when using treefmt (or a pre-commit treefmt hook) as a format check.
 type: trap
+verified: 2026-10-15; treefmt 2.6.0
 ---
 
 **Rule:** Treat `treefmt --fail-on-change` as "format, then report whether anything changed". Decide

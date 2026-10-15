@@ -2,6 +2,7 @@
 name: gen-schema
 description: Working in gen-schema, the typed record registry (kinds, instances with content-addressed id_hash, registries, declaration vocabulary) on gen-merge.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the typed record registry. Schema **kinds** are deferred modules carrying collections, ref

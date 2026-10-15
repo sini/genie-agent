@@ -5,7 +5,7 @@ type: practice
 ---
 
 **Rule:** Run the repository's own formatter on the files you are committing, after the last
-edit, against the exact revision you will land. Never trust an earlier green, an agent's
+edit, against the exact revision you will land. Do not trust an earlier green, an agent's
 reported green, or a green from inside a linked worktree.
 
 **Why:** an unformatted commit is a guaranteed red CI. Four measured false greens:

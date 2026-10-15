@@ -2,12 +2,14 @@
 name: keep-the-fleet-full
 description: When a stream closes, an agent returns, or a session feels like a natural stopping point while context budget remains
 type: practice
+values:
+  dispatch-below-context: owner-set 2026-09-12
 ---
 
 **Rule:** Below about 75% context, an idle or shrinking fleet is a DISPATCH TRIGGER, not a
 finish. At every agent return, count live agents against the cap and fill EVERY free slot
 from the whole ready frontier in the same turn. End a turn on a dispatch, or on command output
-proving the queue is empty, never on a summary or a list of questions.
+proving the queue is empty, not on a summary or a list of questions.
 
 **Why:**
 
@@ -33,9 +35,9 @@ proving the queue is empty, never on a summary or a list of questions.
   unless asked for).
 - Dump every frontier row's tail in one script and classify each. Also look at rows this
   session filed and at the orchestrator's own repository.
-- The tell: a reply of the form "X is idle; still in flight: A, B" must also open a new lane, or
+- The tell: a reply of the form "X is idle; still in flight: A, B" also opens a new lane, or
   name the ready row being skipped and why.
-- Fold a landing that arrives mid-relock INTO that relock. Never queue a second one behind it.
+- Fold a landing that arrives mid-relock INTO that relock. Do not queue a second one behind it.
 - An owner question goes into a tracker row plus ONE line in the report, and then work
   continues. Resolve it provisionally where you can, with an overturn condition.
 - An owner override of a budget gate supersedes the hook's printed gate text for that session.

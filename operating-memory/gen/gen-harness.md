@@ -2,6 +2,7 @@
 name: gen-harness
 description: Working in gen-harness, the shared CI harness (mkCi) every gen library's ci/ flake is built from, or debugging a gen library's ci/devshell/hooks.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the CI harness for the whole gen ecosystem. `mkCi` wires flake-parts, nix-unit, treefmt,

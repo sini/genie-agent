@@ -2,6 +2,7 @@
 name: gen-merge
 description: Working in gen-merge, the pure-Nix byte-mode module merge engine (evalModuleTree) that reproduces lib.evalModules output with zero nixpkgs.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the module MERGE engine. `evalModuleTree` collects a module tree, ties one local `config`

@@ -24,7 +24,7 @@ summary and a zero failure count are not evidence on their own.
   short count.
 - **`N/N` can be an identity, not a check.** One runner computes `total = pass + fail`, so
   the two numbers match on any run that reaches the summary, including a truncated one.
-- **Never grep the diff renderer for a value.** It wraps values across padded columns, so
+- **Do not grep the diff renderer for a value.** It wraps values across padded columns, so
   both arms read 0. Assert the value as a cell and read ✅/❌.
 - **A non-git copy of a test flake escapes its root.** Every gen-\* library's `ci/flake.nix` imports `../lib`; under
   a non-git path flake the root resolves to `ci/` and the import points elsewhere. Readings of
@@ -42,13 +42,13 @@ summary and a zero failure count are not evidence on their own.
 - Read the command from the repository's README and CI workflow, and list the test planes
   from the runner's own help. Every oracle names ALL planes.
 
-- `cmd > out 2>&1; echo "exit=$?"` and then `tail -1 out`; never chain `&&` off a piped verify. Count ✅, ❌ and ☢️, and compare the
+- `cmd > out 2>&1; echo "exit=$?"` and then `tail -1 out`; do not chain `&&` off a piped verify. Count ✅, ❌ and ☢️, and compare the
   collected total to the expected baseline.
 
 - A red you cannot also produce on an unpatched copy of the same revision is not a finding.
   Prefer "my instrument moved" over "the library collapsed".
 
-- Measure in the real checkout. If you must use a copy, `git init` it or address it as
+- Measure in the real checkout. If you need a copy, `git init` it or address it as
   `git+file://<path>?dir=ci`.
 
 - Untracked files are invisible to flake evaluation. Use a guarded runner that refuses on

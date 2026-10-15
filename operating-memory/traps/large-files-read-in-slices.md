@@ -2,6 +2,9 @@
 name: large-files-read-in-slices
 description: Applies when an agent must work with markdown/spec files over ~25K tokens, or with large diffs.
 type: trap
+verified: unverified
+values:
+  script-above-sites: provisional
 ---
 
 **Rule:** Build a heading index once per session, then read by offset/limit. Never read a large spec or

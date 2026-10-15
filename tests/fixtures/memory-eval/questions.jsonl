@@ -19,6 +19,6 @@
 {"id":"q19","question":"Why is checking $? after a piped shell command risky for verifying command success?","expected_claims":["pipe","exit"],"expected_citations":["traps/read-exit-status-unpiped.md"]}
 {"id":"q20","question":"What happens when using cat file | sed ... > file to transform a file in place?","expected_claims":["truncate","redirect"],"expected_citations":["traps/redirect-truncates-before-read.md"]}
 {"id":"q21","question":"Why might newly created files fail to be evaluated by a Nix flake command?","expected_claims":["untracked","git add"],"expected_citations":["traps/nix-flake-filtered-tree-and-eval-cache.md"]}
-{"id":"q22","question":"In the beads issue tracker, what is the meaning of br dep add X Y?","expected_claims":["depends","x"],"expected_citations":["traps/tracker-br-traps.md"]}
+{"id":"q22","question":"When appending a block to a record in a store whose write replaces the whole record, what must you check before and after the write?","expected_claims":["empty","byte-identical"],"expected_citations":["traps/redirect-truncates-before-read.md"]}
 {"id":"q23","question":"When facing a difficult architectural fix, why should an agent avoid settling for a temporary workaround?","expected_claims":["off-ramp","avoidance"],"expected_citations":["lessons/avoidance-off-ramp.md"]}
 {"id":"q24","question":"What is the architectural purpose of the gen library ecosystem?","expected_claims":["graph","libraries"],"expected_citations":["gen/overview.md"]}

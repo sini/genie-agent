@@ -2,6 +2,7 @@
 name: gen
 description: Working in the gen hub repository — the roster (mkGenLibs), stratum buckets, flakeModules and the hub's CI gate.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the ecosystem hub. It owns no concern. It publishes the roster (`mkGenLibs`), the
@@ -82,4 +83,4 @@ gen-demo, and by any consumer wanting the whole roster. It does NOT ship `mkCi`:
   a live input or a registered row; a BACKTICKED retired key is refused (write `gen-pipe`, not the bare key).
 - `mkCore` (gen-class) rejects a hand-built `{ members; archetype; }`; the class must come from `mkClass`.
 
-Related: \[[gen-overview]\] \[[gen-class]\] \[[gen-flake]\]
+Related: \[[gen-overview]\] \[[gen-class]\] \[[gen-retired]\]
