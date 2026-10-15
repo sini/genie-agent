@@ -56,7 +56,9 @@ Off-roster: gen-harness (the CI harness, `mkCi`, pins no gen library), gen-vars 
 generation), gen-demo (the integration corpus that exercises every landed component).
 Retired and archived for reference (bind the destination, never these): gen-demand → gen-scope;
 gen-edge and gen-pipe → gen-view (and gen-select); gen-flake → the hub's `flakeModules.default`,
-gen-memo, gen-delivery; gen-resolve → view/bind/scope/memo.
+gen-memo, gen-delivery; gen-resolve → gen-scope (cold fold, `foldEquations`) and gen-memo (warm fold).
+One export has no destination yet: gen-resolve's `_scheduleWith` is still the sole producer of the
+schedule `foldEquations` takes, so a caller of the cold fold still reads it from the archived repository.
 
 ## Layering
 
