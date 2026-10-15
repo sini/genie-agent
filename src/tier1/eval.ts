@@ -1,20 +1,21 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
+import { type Record as PiRecord, Supervisor } from "../supervisor/index.ts";
 import { type Draft, draftOf, type Message } from "./draft.ts";
-import { BUILTINS, BUILTIN_TOOLS, confine, memoryPrompt, type Pi, TOOLS, tier1 } from "./index.ts";
+import { BUILTINS, confine, type Host, memoryPrompt } from "./index.ts";
+import { skillsPrompt, tier1Launch, writePiModelsJson } from "./launch.ts";
+
+export { skillsPrompt };
 
 const repoRoot = new URL("../../", import.meta.url);
-
-export function skillsPrompt(dir = new URL("skills", repoRoot).pathname): string {
-  try {
-    const skills = readdirSync(dir)
-      .sort()
-      .map((d) => `<skill name="${d}">\n${readFileSync(`${dir}/${d}/SKILL.md`, "utf8")}</skill>`);
-    return `# Skills\n\n${skills.join("\n\n")}\n`;
-  } catch {
-    return "";
-  }
-}
 
 export type PromptArm = "real" | "no-steps" | "no-citations";
 
@@ -139,150 +140,19 @@ export interface EvalOptions {
   model: string;
   base: string;
   apiKey?: string;
+  pi?: string;
   promptArms: Record<PromptArm, string>;
   questions: QuestionFixture[];
   worktreeRoot?: string;
   memoryRoot?: string;
   runs?: number;
   concurrency?: number;
-  turns?: number;
-  maxTokens?: number;
-  fetchFn?: typeof fetch;
+  timeoutMs?: number;
+  outPath?: string;
+  resume?: boolean;
+  host?: Partial<Host>;
 }
 
-export function tier1Tools(): { type: "function"; function: { name: string; description: string; parameters: unknown } }[] {
-  const byName = new Map<string, { description: string; parameters: unknown }>(
-    Object.entries(BUILTIN_TOOLS),
-  );
-  const recorder = {
-    registerTool: ({ name, description, parameters }) =>
-      byName.set(name, { description, parameters }),
-    on() {},
-    setActiveTools() {},
-  } as Pi;
-  const never = () => Promise.reject(new Error("not called"));
-  tier1(
-    { root: "/nonexistent", searxngUrl: "http://127.0.0.1:1", cluster: [] },
-    { host: { eval: never, recall: never, escalate: never, reply: never, propose: never, clone: never, screen: never } },
-  )(recorder);
-  return TOOLS.map((name) => {
-    const def = byName.get(name);
-    if (!def) throw new Error(`missing tool schema for ${name}`);
-    return { type: "function", function: { name, description: def.description, parameters: def.parameters } };
-  });
-}
-
-function globMatch(pattern: string, target: string): boolean {
-  const regexSrc = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\//g, "(?:.+/)?")
-    .replace(/\*\*/g, ".*")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]");
-  return new RegExp(`^${regexSrc}$`).test(target);
-}
-
-// Execute one of pi's four built-in source tools (read, grep, find, ls) against real files on disk,
-// confined by production confine(worktreeRoot, input.path, memoryRoot).
-export function executeBuiltinTool(
-  fnName: (typeof BUILTINS)[number],
-  toolArgs: Record<string, unknown>,
-  worktreeRoot: string,
-  memoryRoot: string,
-): { result: Record<string, unknown>; confinedPath?: string } {
-  let confinedPath: string;
-  try {
-    confinedPath = confine(worktreeRoot, toolArgs.path, memoryRoot);
-  } catch (err) {
-    return { result: { error: `refused: ${(err as Error).message}` } };
-  }
-
-  try {
-    if (fnName === "read") {
-      const raw = readFileSync(confinedPath, "utf8");
-      const lines = raw.split("\n");
-      const start = typeof toolArgs.offset === "number" && toolArgs.offset > 1 ? Math.floor(toolArgs.offset) - 1 : 0;
-      const count = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : lines.length;
-      const content = lines.slice(start, start + count).join("\n");
-      return { result: { content }, confinedPath };
-    }
-    if (fnName === "ls") {
-      const entries = readdirSync(confinedPath, { withFileTypes: true })
-        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-        .sort();
-      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : entries.length;
-      const sliced = entries.slice(0, limit);
-      return { result: { entries: sliced, content: sliced.join("\n") }, confinedPath };
-    }
-    if (fnName === "find") {
-      const pattern = String(toolArgs.pattern ?? "*");
-      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : 200;
-      const matches: string[] = [];
-      const walk = (dir: string, relBase: string) => {
-        if (matches.length >= limit) return;
-        for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-          if (entry.name === ".git") continue;
-          const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
-          const full = `${dir}/${entry.name}`;
-          if (globMatch(pattern, rel) || globMatch(pattern, entry.name)) {
-            matches.push(rel);
-            if (matches.length >= limit) return;
-          }
-          if (entry.isDirectory()) walk(full, rel);
-        }
-      };
-      const st = statSync(confinedPath);
-      if (st.isDirectory()) walk(confinedPath, "");
-      else if (globMatch(pattern, confinedPath.split("/").pop() ?? "")) matches.push(confinedPath);
-      return { result: { matches, content: matches.join("\n") }, confinedPath };
-    }
-    if (fnName === "grep") {
-      const patStr = String(toolArgs.pattern ?? "");
-      if (!patStr) return { result: { error: "pattern is required" } };
-      const ignoreCase = toolArgs.ignoreCase === "yes" || toolArgs.ignoreCase === true;
-      const literal = toolArgs.literal === "yes" || toolArgs.literal === true;
-      const source = literal ? patStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : patStr;
-      const regex = new RegExp(source, ignoreCase ? "i" : "");
-      const glob = typeof toolArgs.glob === "string" ? toolArgs.glob : undefined;
-      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : 100;
-      const matches: string[] = [];
-      const searchFile = (filePath: string, label: string) => {
-        if (matches.length >= limit) return;
-        const text = readFileSync(filePath, "utf8");
-        const lines = text.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          if (regex.test(lines[i])) {
-            matches.push(`${label}:${i + 1}:${lines[i]}`);
-            if (matches.length >= limit) return;
-          }
-        }
-      };
-      const st = statSync(confinedPath);
-      if (st.isFile()) {
-        searchFile(confinedPath, confinedPath);
-      } else if (st.isDirectory()) {
-        const walk = (dir: string, relBase: string) => {
-          if (matches.length >= limit) return;
-          for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-            if (entry.name === ".git") continue;
-            const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
-            const full = `${dir}/${entry.name}`;
-            if (entry.isDirectory()) {
-              walk(full, rel);
-            } else if (entry.isFile() && (!glob || globMatch(glob, rel) || globMatch(glob, entry.name))) {
-              searchFile(full, rel);
-            }
-          }
-        };
-        walk(confinedPath, "");
-      }
-      return { result: { matches, content: matches.join("\n") }, confinedPath };
-    }
-    return { result: { error: `${fnName} is unavailable in this evaluation` } };
-  } catch (err) {
-    return { result: { error: (err as Error).message } };
-  }
-}
 
 export function scoreQuestion(q: QuestionFixture, last: Message, calls: string[]): {
   draft?: Draft;
@@ -651,149 +521,497 @@ export async function pMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concur
   return results;
 }
 
-export async function runArm(
-  arm: PromptArm,
-  promptTextOrPath: string,
-  options: EvalOptions,
-  tools: unknown[],
-): Promise<ArmResult> {
-  const fetcher = options.fetchFn ?? fetch;
-  const runsCount = options.runs ?? 1;
-  const turns = options.turns ?? 6;
-  const maxTokens = options.maxTokens ?? 16384;
-  const concurrency = options.concurrency ?? 1;
+function writeCheckpoint(outPath: string, data: unknown): void {
+  mkdirSync(dirname(outPath), { recursive: true });
+  const tmpPath = `${outPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`);
+  renameSync(tmpPath, outPath);
+}
 
-  let promptContent = promptTextOrPath;
-  if (!promptTextOrPath.includes("\n") && promptTextOrPath.endsWith(".md")) {
-    promptContent = readFileSync(promptTextOrPath, "utf8");
-  }
-  const system = `${promptContent}\n\n${skillsPrompt()}`;
+interface SlotContext {
+  q: QuestionFixture;
+  calls: string[];
+  toolStarts: Map<string, { toolName: string; args: Record<string, unknown> }>;
+  readCalled: boolean;
+  recallCalled: boolean;
+  recallOmittedBank: number;
+  draft?: Draft;
+  finish: string;
+  last: Message;
+  error?: string;
+  settle: () => void;
+}
 
-  async function completeTurn(messages: unknown[]): Promise<{ message: Message; finish: string }> {
-    const res = await fetcher(`${options.base}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: options.model,
-        temperature: 0,
-        max_tokens: maxTokens,
-        messages,
-        tools,
-      }),
-      signal: AbortSignal.timeout(300_000),
-    });
-    const body = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
-    const choice = JSON.parse(body).choices?.[0];
-    if (!choice?.message) throw new Error(`No message choice in response: ${body.slice(0, 200)}`);
-    return { message: choice.message, finish: choice.finish_reason ?? "" };
-  }
+interface PiArmOptions {
+  arm: string;
+  promptTextOrPath: string;
+  memory: boolean;
+  memoryMdPath?: string;
+  effectiveMemoryRoot: string;
+  hasBank: boolean;
+  recallFixtures?: MemoryRecallFixture;
+  fixtureMissSet: Set<string>;
+  questions: QuestionFixture[];
+  runsCount: number;
+  concurrency: number;
+  timeoutMs: number;
+  model: string;
+  base: string;
+  apiKey?: string;
+  pi?: string;
+  worktreeRoot?: string;
+  hostOverrides?: Partial<Host>;
+  checkpointed?: Map<string, { scored: ScoredQuestion; retrieval?: MemoryRetrievalResult }>;
+  onQuestionDone?: (
+    runIndex: number,
+    runQuestions: ScoredQuestion[],
+    allRetrievals: MemoryRetrievalResult[],
+  ) => void;
+}
 
-  async function evaluateQuestion(q: QuestionFixture): Promise<ScoredQuestion> {
-    const messages: any[] = [
-      { role: "system", content: system },
-      { role: "user", content: q.question },
-    ];
-    const calls: string[] = [];
-    let last: Message = {};
-    let finish = "";
-
-    for (let turn = 0; turn < turns; turn++) {
-      ({ message: last, finish } = await completeTurn(messages));
-      const toolCalls = (last as any).tool_calls ?? [];
-      calls.push(...toolCalls.map((c: any) => c.function.name));
-      if (!toolCalls.length || toolCalls.some((c: any) => c.function.name === "reply")) break;
-      messages.push({ role: "assistant", content: last.content ?? "", tool_calls: toolCalls });
-      for (const c of toolCalls) {
-        const fnName = c.function.name;
-        let toolArgs: Record<string, unknown> = {};
-        try {
-          toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : (c.function.arguments ?? {});
-        } catch {}
-
-        if ((BUILTINS as readonly string[]).includes(fnName)) {
-          const { result } = executeBuiltinTool(
-            fnName as (typeof BUILTINS)[number],
-            toolArgs,
-            options.worktreeRoot ?? "",
-            options.memoryRoot ?? "",
-          );
-          messages.push({
-            role: "tool",
-            tool_call_id: c.id,
-            content: JSON.stringify(result),
-          });
-        } else {
-          messages.push({
-            role: "tool",
-            tool_call_id: c.id,
-            content: JSON.stringify({ error: `${fnName} is unavailable in this evaluation` }),
-          });
-        }
-      }
-    }
-
-    const scored = scoreQuestion(q, last, calls);
+function summarizeRuns(runResults: RunResult[]): {
+  mean_score: number;
+  mean_correctness: number;
+  mean_citation: number;
+  mean_calibration: number;
+  generation_noise_band: number;
+} {
+  if (runResults.length === 0) {
     return {
-      id: q.id,
-      question: q.question,
-      calls,
-      finish,
-      last,
-      ...scored,
+      mean_score: 0,
+      mean_correctness: 0,
+      mean_citation: 0,
+      mean_calibration: 0,
+      generation_noise_band: 0,
     };
   }
-
-  const runResults: RunResult[] = [];
-  for (let runIdx = 0; runIdx < runsCount; runIdx++) {
-    const questionsScored = await pMap(options.questions, evaluateQuestion, concurrency);
-    const meanScore = questionsScored.reduce((s, q) => s + q.overall, 0) / questionsScored.length;
-    const meanCorr = questionsScored.reduce((s, q) => s + q.correctness, 0) / questionsScored.length;
-    const meanCite = questionsScored.reduce((s, q) => s + q.citation, 0) / questionsScored.length;
-    const meanCalib = questionsScored.reduce((s, q) => s + q.calibration, 0) / questionsScored.length;
-
-    runResults.push({
-      run_index: runIdx + 1,
-      mean_score: Number(meanScore.toFixed(4)),
-      mean_correctness: Number(meanCorr.toFixed(4)),
-      mean_citation: Number(meanCite.toFixed(4)),
-      mean_calibration: Number(meanCalib.toFixed(4)),
-      questions: questionsScored,
-    });
-  }
-
   const armMeanScore = runResults.reduce((s, r) => s + r.mean_score, 0) / runResults.length;
   const armMeanCorr = runResults.reduce((s, r) => s + r.mean_correctness, 0) / runResults.length;
   const armMeanCite = runResults.reduce((s, r) => s + r.mean_citation, 0) / runResults.length;
   const armMeanCalib = runResults.reduce((s, r) => s + r.mean_calibration, 0) / runResults.length;
   const generationNoiseBand = computeGenerationNoiseBand(runResults.map((r) => r.mean_score));
-
   return {
-    arm,
-    prompt_path: promptTextOrPath,
-    runs: runResults,
     mean_score: Number(armMeanScore.toFixed(4)),
     mean_correctness: Number(armMeanCorr.toFixed(4)),
     mean_citation: Number(armMeanCite.toFixed(4)),
     mean_calibration: Number(armMeanCalib.toFixed(4)),
-    generation_noise_band: runsCount >= 2 ? generationNoiseBand : undefined,
+    generation_noise_band: generationNoiseBand,
   };
 }
 
-export async function runTier1PromptEval(options: EvalOptions): Promise<EvalReport> {
-  const tools = tier1Tools();
-  const armResults: Record<string, ArmResult> = {};
+function buildRunResult(runIndex: number, questionsScored: ScoredQuestion[]): RunResult {
+  const denom = Math.max(1, questionsScored.length);
+  const meanScore = questionsScored.reduce((s, q) => s + q.overall, 0) / denom;
+  const meanCorr = questionsScored.reduce((s, q) => s + q.correctness, 0) / denom;
+  const meanCite = questionsScored.reduce((s, q) => s + q.citation, 0) / denom;
+  const meanCalib = questionsScored.reduce((s, q) => s + q.calibration, 0) / denom;
+  return {
+    run_index: runIndex,
+    mean_score: Number(meanScore.toFixed(4)),
+    mean_correctness: Number(meanCorr.toFixed(4)),
+    mean_citation: Number(meanCite.toFixed(4)),
+    mean_calibration: Number(meanCalib.toFixed(4)),
+    questions: questionsScored,
+  };
+}
 
-  const armNames: PromptArm[] = ["real", "no-steps", "no-citations"];
-  for (const arm of armNames) {
-    if (options.promptArms[arm]) {
-      armResults[arm] = await runArm(arm, options.promptArms[arm], options, tools);
-    }
+async function executePiArm(opts: PiArmOptions): Promise<{
+  runResults: RunResult[];
+  allRetrievalResults: MemoryRetrievalResult[];
+}> {
+  const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-pi-`);
+  writePiModelsJson(agentDir, {
+    baseUrl: opts.base,
+    apiKey: opts.apiKey,
+    id: opts.model,
+  });
+
+  let promptPath = opts.promptTextOrPath;
+  if (!promptPath || promptPath.includes("\n") || !existsSync(promptPath)) {
+    const fallback = promptPath || readFileSync(new URL("prompts/tier1.md", repoRoot).pathname, "utf8");
+    promptPath = `${agentDir}/prompt.md`;
+    writeFileSync(promptPath, fallback);
   }
 
+  const launch = tier1Launch({
+    pi: opts.pi ?? process.env.PI ?? "pi",
+    prompt: promptPath,
+    memory: opts.memory,
+    memoryPath: opts.memory ? opts.memoryMdPath : undefined,
+    config: () => ({
+      root: opts.worktreeRoot ?? "",
+      memoryRoot: opts.effectiveMemoryRoot,
+      searxngUrl: "http://127.0.0.1:1",
+      cluster: [],
+    }),
+    args: () => ["--model", `genie/${opts.model}`, "--no-session"],
+  });
+
+  const slotContexts = new Map<string, SlotContext>();
+  const slotUsed = new Set<string>();
+
+  const supervisor = new Supervisor(
+    (t) => {
+      const l = launch(t);
+      return {
+        ...l,
+        env: {
+          ...l.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          PI_OFFLINE: "1",
+          PI_SKIP_VERSION_CHECK: "1",
+          PI_TELEMETRY: "0",
+        },
+      };
+    },
+    (t, record: PiRecord) => {
+      const ctx = slotContexts.get(t);
+      if (!ctx) return;
+      if (record.type === "tool_execution_start") {
+        const toolName = String(record.toolName ?? "");
+        const toolCallId = String(record.toolCallId ?? "");
+        const args = (
+          typeof record.args === "object" && record.args !== null ? record.args : {}
+        ) as Record<string, unknown>;
+        ctx.calls.push(toolName);
+        ctx.toolStarts.set(toolCallId, { toolName, args });
+      } else if (record.type === "tool_execution_end") {
+        const toolCallId = String(record.toolCallId ?? "");
+        const start = ctx.toolStarts.get(toolCallId);
+        const toolName = String(record.toolName ?? start?.toolName ?? "");
+        const isError = Boolean(record.isError);
+        const contentArr = (record.result as any)?.content;
+        const textOut = Array.isArray(contentArr)
+          ? contentArr.map((c: any) => c?.text ?? "").join("")
+          : "";
+        if (!isError && (BUILTINS as readonly string[]).includes(toolName)) {
+          try {
+            const confinedPath = confine(
+              opts.worktreeRoot ?? "",
+              start?.args?.path,
+              opts.effectiveMemoryRoot,
+            );
+            const matchesCitation = (ctx.q.expected_citations ?? []).some(
+              (cite) =>
+                confinedPath.endsWith(`/${cite}`) ||
+                confinedPath === cite ||
+                (toolName === "grep" && textOut.includes(cite)),
+            );
+            if (matchesCitation) ctx.readCalled = true;
+          } catch {}
+        }
+      } else if (record.type === "agent_settled") {
+        ctx.settle();
+      }
+    },
+    (t): Host => ({
+      eval: async (req) => {
+        if (opts.hostOverrides?.eval) return opts.hostOverrides.eval(req);
+        return { exit: 1, stdout_tail: "", stderr_tail: "eval is unavailable in this evaluation", limit_hit: "none" };
+      },
+      recall: async (arg) => {
+        const ctx = slotContexts.get(t);
+        if (opts.hostOverrides?.recall) return opts.hostOverrides.recall(arg);
+        const bankArg =
+          typeof arg === "object" && arg !== null ? (arg as { bank?: string }).bank : undefined;
+        if (bankArg === undefined) {
+          if (ctx) ctx.recallOmittedBank++;
+        }
+        // Production routing fidelity (Amendment 2): omitted bank or bank: "support" queries
+        // the support bank (genie), never genie-memory. Only bank: "memory" returns memory fixtures.
+        if (bankArg !== "memory") {
+          return { results: [] };
+        }
+        if (opts.hasBank && ctx) {
+          const fix = opts.recallFixtures?.fixtures?.[ctx.q.id];
+          if (fix && fix.results?.length) {
+            const citations = ctx.q.expected_citations ?? [];
+            const returnedExpectedCitation =
+              citations.length > 0 &&
+              citations.every((slug) =>
+                fix.results.some(
+                  (r) =>
+                    r.document_id === slug ||
+                    r.document_id?.endsWith(slug) ||
+                    r.tags?.some((tag) => tag.includes(slug)) ||
+                    r.text?.includes(slug),
+                ),
+              );
+            if (!opts.fixtureMissSet.has(ctx.q.id) && returnedExpectedCitation) {
+              ctx.recallCalled = true;
+            }
+            return { results: fix.results };
+          }
+        }
+        return { results: [] };
+      },
+      escalate: async (pkg) => {
+        if (opts.hostOverrides?.escalate) return opts.hostOverrides.escalate(pkg);
+        return { escalated: true };
+      },
+      reply: async (raw) => {
+        const ctx = slotContexts.get(t);
+        if (ctx) {
+          const d = raw as Draft;
+          ctx.draft = d;
+          ctx.finish = "stop";
+          ctx.last = {
+            content: null,
+            tool_calls: [
+              {
+                function: {
+                  name: "reply",
+                  arguments: JSON.stringify({
+                    ...d,
+                    escalate_forced: d.escalate_forced ? "yes" : "no",
+                  }),
+                },
+              },
+            ],
+          };
+          if (!ctx.calls.includes("reply")) ctx.calls.push("reply");
+          void supervisor.command(t, { type: "abort" }).catch(() => {});
+        }
+        if (opts.hostOverrides?.reply) return opts.hostOverrides.reply(raw);
+        return { posted: true };
+      },
+      propose: async (p) => {
+        if (opts.hostOverrides?.propose) return opts.hostOverrides.propose(p);
+        return { proposed: true };
+      },
+      clone: async (url) => {
+        if (opts.hostOverrides?.clone) return opts.hostOverrides.clone(url);
+        throw new Error("clone is unavailable in this evaluation");
+      },
+      screen: async (text) => {
+        if (opts.hostOverrides?.screen) return opts.hostOverrides.screen(text);
+        return text;
+      },
+    }),
+  );
+
+  const runResults: RunResult[] = [];
+  const allRetrievalResults: MemoryRetrievalResult[] = [];
+
+  try {
+    for (let runIdx = 0; runIdx < opts.runsCount; runIdx++) {
+      const runIndex = runIdx + 1;
+      const questionsScored: ScoredQuestion[] = new Array(opts.questions.length);
+      const runRetrievals: MemoryRetrievalResult[] = new Array(opts.questions.length);
+      let nextIdx = 0;
+      const workerCount = Math.max(1, Math.min(opts.concurrency, opts.questions.length));
+
+      const workers = Array.from({ length: workerCount }, async (_, wIdx) => {
+        const slotId = `slot-${wIdx}`;
+        while (nextIdx < opts.questions.length) {
+          const qIdx = nextIdx++;
+          const q = opts.questions[qIdx];
+          const checkpointKey = `${opts.arm}:${runIndex}:${q.id}`;
+          const existing = opts.checkpointed?.get(checkpointKey);
+          if (existing) {
+            questionsScored[qIdx] = existing.scored;
+            const restoredRetrieval: MemoryRetrievalResult = existing.retrieval ?? {
+              question_id: q.id,
+              expected_citation: q.expected_citations?.[0] ?? "",
+              read_called: false,
+              recall_called: false,
+              recall_omitted_bank: 0,
+              retrieved: false,
+            };
+            runRetrievals[qIdx] = restoredRetrieval;
+            allRetrievalResults.push(restoredRetrieval);
+            opts.onQuestionDone?.(
+              runIndex,
+              questionsScored.filter(Boolean),
+              [...allRetrievalResults],
+            );
+            continue;
+          }
+
+          if (slotUsed.has(slotId) && supervisor.pid(slotId) !== undefined) {
+            const ns = await supervisor
+              .command(slotId, { type: "new_session" })
+              .catch(() => ({ success: false }));
+            if (ns.success === false) {
+              await supervisor.teardown(slotId);
+              slotUsed.delete(slotId);
+            }
+          }
+
+          let settleFn = () => {};
+          const settledPromise = new Promise<void>((resolve) => {
+            settleFn = resolve;
+          });
+
+          const ctx: SlotContext = {
+            q,
+            calls: [],
+            toolStarts: new Map(),
+            readCalled: false,
+            recallCalled: false,
+            recallOmittedBank: 0,
+            finish: "unanswered",
+            last: {},
+            settle: settleFn,
+          };
+          slotContexts.set(slotId, ctx);
+
+          let timedOut = false;
+          const timer = setTimeout(() => {
+            timedOut = true;
+            ctx.finish = "timeout";
+            ctx.error = `timed out after ${opts.timeoutMs}ms`;
+            ctx.settle();
+          }, opts.timeoutMs);
+
+          const exitWatch = setInterval(() => {
+            if (slotUsed.has(slotId) && supervisor.pid(slotId) === undefined) {
+              ctx.finish = ctx.finish === "unanswered" ? "exited" : ctx.finish;
+              ctx.settle();
+            }
+          }, 50);
+
+          try {
+            slotUsed.add(slotId);
+            const cmdRes = await supervisor
+              .command(slotId, { type: "prompt", message: q.question })
+              .catch((err) => ({ type: "response", success: false, error: (err as Error).message }));
+            if (cmdRes.success === false) {
+              ctx.finish = "error";
+              ctx.error = String(cmdRes.error ?? "prompt failed");
+              ctx.settle();
+            }
+            await settledPromise;
+          } finally {
+            clearTimeout(timer);
+            clearInterval(exitWatch);
+            slotContexts.delete(slotId);
+          }
+
+          if (timedOut || ctx.finish === "error" || ctx.finish === "exited") {
+            await supervisor.teardown(slotId);
+            slotUsed.delete(slotId);
+          }
+
+          const scored = scoreQuestion(q, ctx.last, ctx.calls);
+          const fullScored: ScoredQuestion = {
+            id: q.id,
+            question: q.question,
+            calls: ctx.calls,
+            finish: ctx.finish,
+            last: ctx.last,
+            ...scored,
+            ...(ctx.error ? { error: ctx.error } : {}),
+          };
+          const retrieval: MemoryRetrievalResult = {
+            question_id: q.id,
+            expected_citation: q.expected_citations?.[0] ?? "",
+            read_called: ctx.readCalled,
+            recall_called: ctx.recallCalled,
+            recall_omitted_bank: ctx.recallOmittedBank,
+            retrieved: ctx.readCalled || ctx.recallCalled,
+          };
+
+          questionsScored[qIdx] = fullScored;
+          runRetrievals[qIdx] = retrieval;
+          allRetrievalResults.push(retrieval);
+          opts.onQuestionDone?.(
+            runIndex,
+            questionsScored.filter(Boolean),
+            [...allRetrievalResults],
+          );
+        }
+      });
+
+      await Promise.all(workers);
+      runResults.push(buildRunResult(runIndex, questionsScored));
+    }
+  } finally {
+    await supervisor.shutdown();
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+
+  return { runResults, allRetrievalResults };
+}
+
+export async function runArm(
+  arm: PromptArm,
+  promptTextOrPath: string,
+  options: EvalOptions,
+  _tools?: unknown[],
+  checkpointState?: {
+    checkpointed: Map<string, { scored: ScoredQuestion }>;
+    onArmUpdate?: (partialArm: ArmResult) => void;
+  },
+): Promise<ArmResult> {
+  const runsCount = options.runs ?? 1;
+  const concurrency = options.concurrency ?? 1;
+  const timeoutMs = options.timeoutMs ?? 300_000;
+
+  const completedRuns: RunResult[] = [];
+  const { runResults } = await executePiArm({
+    arm,
+    promptTextOrPath,
+    memory: Boolean(options.memoryRoot),
+    memoryMdPath: options.memoryRoot ? `${options.memoryRoot}/MEMORY.md` : undefined,
+    effectiveMemoryRoot: options.memoryRoot ?? "",
+    hasBank: false,
+    fixtureMissSet: new Set(),
+    questions: options.questions,
+    runsCount,
+    concurrency,
+    timeoutMs,
+    model: options.model,
+    base: options.base,
+    apiKey: options.apiKey,
+    pi: options.pi,
+    worktreeRoot: options.worktreeRoot,
+    hostOverrides: options.host,
+    checkpointed: checkpointState?.checkpointed,
+    onQuestionDone: (runIndex, runQuestions) => {
+      if (!checkpointState?.onArmUpdate) return;
+      const currentRun = buildRunResult(runIndex, runQuestions);
+      const runsSnapshot = [
+        ...completedRuns.filter((r) => r.run_index < runIndex),
+        currentRun,
+      ];
+      const summary = summarizeRuns(runsSnapshot);
+      checkpointState.onArmUpdate({
+        arm,
+        prompt_path: promptTextOrPath,
+        runs: runsSnapshot,
+        mean_score: summary.mean_score,
+        mean_correctness: summary.mean_correctness,
+        mean_citation: summary.mean_citation,
+        mean_calibration: summary.mean_calibration,
+        generation_noise_band: runsSnapshot.length >= 2 ? summary.generation_noise_band : undefined,
+      });
+      if (runQuestions.length === options.questions.length) {
+        const existingIdx = completedRuns.findIndex((r) => r.run_index === runIndex);
+        if (existingIdx >= 0) completedRuns[existingIdx] = currentRun;
+        else completedRuns.push(currentRun);
+      }
+    },
+  });
+
+  const summary = summarizeRuns(runResults);
+  return {
+    arm,
+    prompt_path: promptTextOrPath,
+    runs: runResults,
+    mean_score: summary.mean_score,
+    mean_correctness: summary.mean_correctness,
+    mean_citation: summary.mean_citation,
+    mean_calibration: summary.mean_calibration,
+    generation_noise_band: runsCount >= 2 ? summary.generation_noise_band : undefined,
+  };
+}
+
+function assemblePromptReport(
+  options: EvalOptions,
+  armResults: Record<string, ArmResult>,
+  armNames: PromptArm[],
+): EvalReport {
   const baseline = armResults["real"];
   const generationNoiseBand = baseline?.generation_noise_band;
   const comparisons: EvalComparison[] = [];
@@ -804,7 +1022,6 @@ export async function runTier1PromptEval(options: EvalOptions): Promise<EvalRepo
     }
   }
 
-  // Calibration curve computed over all evaluations of the baseline arm
   const allBaselineEvaluations: { confidence: number; correctness: number }[] = [];
   const allBaselineQuestions: ScoredQuestion[] = [];
   if (baseline) {
@@ -836,6 +1053,48 @@ export async function runTier1PromptEval(options: EvalOptions): Promise<EvalRepo
     threshold_analysis,
     exploratory_predictors,
   };
+}
+
+export async function runTier1PromptEval(options: EvalOptions): Promise<EvalReport> {
+  const armResults: Record<string, ArmResult> = {};
+  const checkpointed = new Map<string, { scored: ScoredQuestion }>();
+
+  if (options.resume && options.outPath && existsSync(options.outPath)) {
+    try {
+      const prev = JSON.parse(readFileSync(options.outPath, "utf8")) as EvalReport;
+      for (const [armName, armRes] of Object.entries(prev.arms ?? {})) {
+        for (const run of armRes.runs ?? []) {
+          for (const q of run.questions ?? []) {
+            checkpointed.set(`${armName}:${run.run_index}:${q.id}`, { scored: q });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const armNames: PromptArm[] = ["real", "no-steps", "no-citations"];
+  for (const arm of armNames) {
+    if (options.promptArms[arm]) {
+      armResults[arm] = await runArm(arm, options.promptArms[arm], options, undefined, {
+        checkpointed,
+        onArmUpdate: (partialArm) => {
+          armResults[arm] = partialArm;
+          if (options.outPath) {
+            writeCheckpoint(options.outPath, assemblePromptReport(options, armResults, armNames));
+          }
+        },
+      });
+      if (options.outPath) {
+        writeCheckpoint(options.outPath, assemblePromptReport(options, armResults, armNames));
+      }
+    }
+  }
+
+  const report = assemblePromptReport(options, armResults, armNames);
+  if (options.outPath) {
+    writeCheckpoint(options.outPath, report);
+  }
+  return report;
 }
 
 export function formatReportTables(report: EvalReport): string {
@@ -1055,6 +1314,7 @@ export interface MemoryRetrievalResult {
   expected_citation: string;
   read_called: boolean;
   recall_called: boolean;
+  recall_omitted_bank?: number;
   retrieved: boolean;
 }
 
@@ -1063,6 +1323,7 @@ export interface MemoryArmResult extends ArmResult {
   retrieval_rate: number;
   retrieval_miss_count: number;
   retrieval_misses: string[];
+  recall_omitted_bank_count: number;
   retrieval_results: MemoryRetrievalResult[];
 }
 
@@ -1086,6 +1347,7 @@ export interface MemoryEvalOptions {
   model: string;
   base: string;
   apiKey?: string;
+  pi?: string;
   basePromptPath?: string;
   worktreeRoot?: string;
   memoryRoot?: string;
@@ -1097,13 +1359,77 @@ export interface MemoryEvalOptions {
   arms?: MemoryArm[];
   runs?: number;
   concurrency?: number;
-  turns?: number;
-  maxTokens?: number;
+  timeoutMs?: number;
+  outPath?: string;
+  resume?: boolean;
   live?: boolean;
-  fetchFn?: typeof fetch;
+  host?: Partial<Host>;
 }
 
 export { memoryPrompt as memoryPromptFromIndex } from "./index.ts";
+
+function buildMemoryArmResult(
+  arm: MemoryArm,
+  runResults: RunResult[],
+  allRetrievalResults: MemoryRetrievalResult[],
+  runsCount: number,
+): MemoryArmResult {
+  const summary = summarizeRuns(runResults);
+  const totalRetrievals = allRetrievalResults.filter((r) => r.retrieved).length;
+  const retrievalRate =
+    allRetrievalResults.length > 0 ? totalRetrievals / allRetrievalResults.length : 0;
+  const armMissQids = Array.from(
+    new Set(allRetrievalResults.filter((r) => !r.retrieved).map((r) => r.question_id)),
+  );
+  const omittedBankCount = allRetrievalResults.reduce(
+    (s, r) => s + (r.recall_omitted_bank ?? 0),
+    0,
+  );
+  return {
+    arm,
+    runs: runResults,
+    mean_score: summary.mean_score,
+    mean_correctness: summary.mean_correctness,
+    mean_citation: summary.mean_citation,
+    mean_calibration: summary.mean_calibration,
+    generation_noise_band: runsCount >= 2 ? summary.generation_noise_band : undefined,
+    retrieval_rate: Number(retrievalRate.toFixed(4)),
+    retrieval_miss_count: armMissQids.length,
+    retrieval_misses: armMissQids,
+    recall_omitted_bank_count: omittedBankCount,
+    retrieval_results: allRetrievalResults,
+  };
+}
+
+function assembleMemoryReport(
+  options: MemoryEvalOptions,
+  runsCount: number,
+  concurrency: number,
+  retrievalCheck: MemoryRetrievalCheckResult,
+  armResults: Record<string, MemoryArmResult>,
+): MemoryEvalReport {
+  const noMemoryArm = armResults["no-memory"];
+  const genNoiseBand =
+    noMemoryArm?.generation_noise_band ?? armResults["wiki+bank"]?.generation_noise_band;
+  const comparisons: MemoryEvalComparison[] = [];
+
+  for (const arm of ["wiki", "bank", "wiki+bank"] as MemoryArm[]) {
+    if (armResults[arm] && noMemoryArm) {
+      comparisons.push(compareArms(armResults[arm] as any, noMemoryArm as any) as any);
+    }
+  }
+
+  return {
+    model: options.model,
+    runs_per_arm: runsCount,
+    concurrency,
+    generation_noise_band: genNoiseBand,
+    retrieval_misses: retrievalCheck.retrieval_misses,
+    arms: armResults as Record<MemoryArm, MemoryArmResult>,
+    comparisons,
+    model_free_retrieval: retrievalCheck,
+  };
+}
 
 export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<MemoryEvalReport> {
   let allQuestions = [...options.questions];
@@ -1160,213 +1486,102 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
 
   const basePromptPath =
     options.basePromptPath ?? new URL("prompts/tier1.md", repoRoot).pathname;
-  const basePrompt = readFileSync(basePromptPath, "utf8");
-
-  const tools = tier1Tools();
-  const fetcher = options.fetchFn ?? fetch;
   const runsCount = options.runs ?? 1;
-  const turns = options.turns ?? 6;
-  const maxTokens = options.maxTokens ?? 16384;
   const concurrency = options.concurrency ?? 1;
+  const timeoutMs = options.timeoutMs ?? 300_000;
+
+  const checkpointed = new Map<
+    string,
+    { scored: ScoredQuestion; retrieval?: MemoryRetrievalResult }
+  >();
+  if (options.resume && options.outPath && existsSync(options.outPath)) {
+    try {
+      const prev = JSON.parse(readFileSync(options.outPath, "utf8")) as MemoryEvalReport;
+      for (const [armName, armRes] of Object.entries(prev.arms ?? {})) {
+        const retrievals = armRes.retrieval_results ?? [];
+        let rCursor = 0;
+        for (const run of armRes.runs ?? []) {
+          for (const q of run.questions ?? []) {
+            const ret =
+              retrievals[rCursor++] ??
+              retrievals.find((r) => r.question_id === q.id);
+            checkpointed.set(`${armName}:${run.run_index}:${q.id}`, {
+              scored: q,
+              retrieval: ret,
+            });
+          }
+        }
+      }
+    } catch {}
+  }
 
   const armResults: Record<string, MemoryArmResult> = {};
 
   for (const arm of armNames) {
     const hasWikiMount = arm === "wiki" || arm === "wiki+bank";
+    const hasBank = arm === "bank" || arm === "wiki+bank";
     const effectiveMemoryRoot = hasWikiMount ? memoryDir : "";
-    let system = `${basePrompt}\n\n${skillsPrompt()}`;
-    if (hasWikiMount) {
-      system = `${system}\n\n${memoryPrompt(memoryMdPath)}`;
-    }
+    const completedRuns: RunResult[] = [];
 
-    async function completeTurn(messages: unknown[]): Promise<{ message: Message; finish: string }> {
-      const res = await fetcher(`${options.base}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: options.model,
-          temperature: 0,
-          max_tokens: maxTokens,
-          messages,
-          tools,
-        }),
-        signal: AbortSignal.timeout(300_000),
-      });
-      const body = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
-      const choice = JSON.parse(body).choices?.[0];
-      if (!choice?.message) throw new Error(`No message choice in response: ${body.slice(0, 200)}`);
-      return { message: choice.message, finish: choice.finish_reason ?? "" };
-    }
-
-    const allRetrievalResults: MemoryRetrievalResult[] = [];
-
-    async function evaluateQuestion(q: QuestionFixture): Promise<ScoredQuestion> {
-      const messages: any[] = [
-        { role: "system", content: system },
-        { role: "user", content: q.question },
-      ];
-      const calls: string[] = [];
-      let last: Message = {};
-      let finish = "";
-      let readCalled = false;
-      let recallCalled = false;
-
-      for (let turn = 0; turn < turns; turn++) {
-        ({ message: last, finish } = await completeTurn(messages));
-        const toolCalls = (last as any).tool_calls ?? [];
-        calls.push(...toolCalls.map((c: any) => c.function.name));
-        if (!toolCalls.length || toolCalls.some((c: any) => c.function.name === "reply")) break;
-        messages.push({ role: "assistant", content: last.content ?? "", tool_calls: toolCalls });
-
-        for (const c of toolCalls) {
-          const fnName = c.function.name;
-          let toolArgs: any = {};
-          try {
-            toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : (c.function.arguments ?? {});
-          } catch {}
-
-          if ((BUILTINS as readonly string[]).includes(fnName)) {
-            const { result, confinedPath } = executeBuiltinTool(
-              fnName as (typeof BUILTINS)[number],
-              toolArgs,
-              options.worktreeRoot ?? "",
-              effectiveMemoryRoot,
-            );
-            if (confinedPath && !("error" in result)) {
-              const matchesCitation = (q.expected_citations ?? []).some(
-                (cite) =>
-                  confinedPath.endsWith(`/${cite}`) ||
-                  confinedPath === cite ||
-                  (fnName === "grep" && typeof result.content === "string" && result.content.includes(cite)),
-              );
-              if (matchesCitation) readCalled = true;
-            }
-            messages.push({
-              role: "tool",
-              tool_call_id: c.id,
-              content: JSON.stringify(result),
-            });
-          } else if (fnName === "recall") {
-            const matchesCitation = (q.expected_citations ?? []).some((cite) =>
-              (toolArgs.query ?? "").toLowerCase().includes(cite.toLowerCase()),
-            );
-
-            let recallResp: any = { results: [] };
-            if (arm === "bank" || arm === "wiki+bank") {
-              const fix = recallFixtures?.fixtures?.[q.id];
-              if (fix && fix.results?.length) {
-                recallResp = { results: fix.results };
-                if (!fixtureMissSet.has(q.id) && (matchesCitation || toolArgs.bank === "memory")) {
-                  recallCalled = true;
-                }
-              }
-            }
-            messages.push({
-              role: "tool",
-              tool_call_id: c.id,
-              content: JSON.stringify(recallResp),
-            });
-          } else {
-            messages.push({
-              role: "tool",
-              tool_call_id: c.id,
-              content: JSON.stringify({ error: `${fnName} is unavailable in this evaluation` }),
-            });
-          }
-        }
-      }
-
-      const expectedCite = q.expected_citations?.[0] ?? "";
-      const retrieved = readCalled || recallCalled;
-      allRetrievalResults.push({
-        question_id: q.id,
-        expected_citation: expectedCite,
-        read_called: readCalled,
-        recall_called: recallCalled,
-        retrieved,
-      });
-
-      const scored = scoreQuestion(q, last, calls);
-      return {
-        id: q.id,
-        question: q.question,
-        calls,
-        finish,
-        last,
-        ...scored,
-      };
-    }
-
-    const runResults: RunResult[] = [];
-    for (let runIdx = 0; runIdx < runsCount; runIdx++) {
-      const questionsScored = await pMap(allQuestions, evaluateQuestion, concurrency);
-      const meanScore = questionsScored.reduce((s, q) => s + q.overall, 0) / questionsScored.length;
-      const meanCorr = questionsScored.reduce((s, q) => s + q.correctness, 0) / questionsScored.length;
-      const meanCite = questionsScored.reduce((s, q) => s + q.citation, 0) / questionsScored.length;
-      const meanCalib = questionsScored.reduce((s, q) => s + q.calibration, 0) / questionsScored.length;
-
-      runResults.push({
-        run_index: runIdx + 1,
-        mean_score: Number(meanScore.toFixed(4)),
-        mean_correctness: Number(meanCorr.toFixed(4)),
-        mean_citation: Number(meanCite.toFixed(4)),
-        mean_calibration: Number(meanCalib.toFixed(4)),
-        questions: questionsScored,
-      });
-    }
-
-    const armMeanScore = runResults.reduce((s, r) => s + r.mean_score, 0) / runResults.length;
-    const armMeanCorr = runResults.reduce((s, r) => s + r.mean_correctness, 0) / runResults.length;
-    const armMeanCite = runResults.reduce((s, r) => s + r.mean_citation, 0) / runResults.length;
-    const armMeanCalib = runResults.reduce((s, r) => s + r.mean_calibration, 0) / runResults.length;
-    const noiseBand = computeNoiseBand(runResults.map((r) => r.mean_score));
-
-    const totalRetrievals = allRetrievalResults.filter((r) => r.retrieved).length;
-    const retrievalRate = allRetrievalResults.length > 0 ? totalRetrievals / allRetrievalResults.length : 0;
-    const armMissQids = Array.from(
-      new Set(allRetrievalResults.filter((r) => !r.retrieved).map((r) => r.question_id)),
-    );
-
-    armResults[arm] = {
+    const { runResults, allRetrievalResults } = await executePiArm({
       arm,
-      runs: runResults,
-      mean_score: Number(armMeanScore.toFixed(4)),
-      mean_correctness: Number(armMeanCorr.toFixed(4)),
-      mean_citation: Number(armMeanCite.toFixed(4)),
-      mean_calibration: Number(armMeanCalib.toFixed(4)),
-      generation_noise_band: runsCount >= 2 ? noiseBand : undefined,
-      retrieval_rate: Number(retrievalRate.toFixed(4)),
-      retrieval_miss_count: armMissQids.length,
-      retrieval_misses: armMissQids,
-      retrieval_results: allRetrievalResults,
-    };
-  }
+      promptTextOrPath: basePromptPath,
+      memory: hasWikiMount,
+      memoryMdPath,
+      effectiveMemoryRoot,
+      hasBank,
+      recallFixtures,
+      fixtureMissSet,
+      questions: allQuestions,
+      runsCount,
+      concurrency,
+      timeoutMs,
+      model: options.model,
+      base: options.base,
+      apiKey: options.apiKey,
+      pi: options.pi,
+      worktreeRoot: options.worktreeRoot,
+      hostOverrides: options.host,
+      checkpointed,
+      onQuestionDone: (runIndex, runQuestions, retrievalsSoFar) => {
+        if (!options.outPath) return;
+        const currentRun = buildRunResult(runIndex, runQuestions);
+        const runsSnapshot = [
+          ...completedRuns.filter((r) => r.run_index < runIndex),
+          currentRun,
+        ];
+        armResults[arm] = buildMemoryArmResult(
+          arm,
+          runsSnapshot,
+          retrievalsSoFar,
+          runsCount,
+        );
+        writeCheckpoint(
+          options.outPath,
+          assembleMemoryReport(options, runsCount, concurrency, retrievalCheck, armResults),
+        );
+        if (runQuestions.length === allQuestions.length) {
+          const existingIdx = completedRuns.findIndex((r) => r.run_index === runIndex);
+          if (existingIdx >= 0) completedRuns[existingIdx] = currentRun;
+          else completedRuns.push(currentRun);
+        }
+      },
+    });
 
-  // Comparisons: each memory arm beats no-memory baseline
-  const noMemoryArm = armResults["no-memory"];
-  const genNoiseBand = noMemoryArm?.generation_noise_band ?? armResults["wiki+bank"]?.generation_noise_band;
-  const comparisons: MemoryEvalComparison[] = [];
-
-  for (const arm of ["wiki", "bank", "wiki+bank"] as MemoryArm[]) {
-    if (armResults[arm] && noMemoryArm) {
-      comparisons.push(compareArms(armResults[arm] as any, noMemoryArm as any) as any);
+    armResults[arm] = buildMemoryArmResult(arm, runResults, allRetrievalResults, runsCount);
+    if (options.outPath) {
+      writeCheckpoint(
+        options.outPath,
+        assembleMemoryReport(options, runsCount, concurrency, retrievalCheck, armResults),
+      );
     }
   }
 
-  return {
-    model: options.model,
-    runs_per_arm: runsCount,
-    concurrency,
-    generation_noise_band: genNoiseBand,
-    retrieval_misses: retrievalCheck.retrieval_misses,
-    arms: armResults as Record<MemoryArm, MemoryArmResult>,
-    comparisons,
-    model_free_retrieval: retrievalCheck,
-  };
+  const report = assembleMemoryReport(options, runsCount, concurrency, retrievalCheck, armResults);
+  if (options.outPath) {
+    writeCheckpoint(options.outPath, report);
+  }
+  return report;
 }
 
 export function formatMemoryReportTables(report: MemoryEvalReport): string {
@@ -1383,13 +1598,14 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
 
   lines.push("--- Memory Arms Performance ---");
   lines.push(
-    "Arm             Score   Correctness  Citation  Calibration  Retrieval  Misses  Runs Spread",
+    "Arm             Score   Correctness  Citation  Calibration  Retrieval  Misses  OmittedBank  Runs Spread",
   );
   for (const [arm, res] of Object.entries(report.arms)) {
     const spreadStr = res.generation_noise_band !== undefined ? res.generation_noise_band.toFixed(4) : "n/a (N=1)";
     const missCount = String(res.retrieval_miss_count ?? res.retrieval_misses?.length ?? 0);
+    const omittedBank = String(res.recall_omitted_bank_count ?? 0);
     lines.push(
-      `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${missCount.padEnd(7)} ${spreadStr}`,
+      `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${missCount.padEnd(7)} ${omittedBank.padEnd(12)} ${spreadStr}`,
     );
   }
   lines.push("");

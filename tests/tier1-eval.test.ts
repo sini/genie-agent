@@ -1,20 +1,23 @@
-// Hermetic test for tier-1 discriminating prompt evaluation (Unit C2.1 & C2.1.1, Oracle).
-// Runs hermetically against a stub model server on loopback without live ninfer.
+// Hermetic test for tier-1 discriminating prompt evaluation (Unit C2.1, C2.1.1 & C2.3, Oracles).
+// Runs hermetically through real pi (tier1Launch + Supervisor) against a loopback SSE stub server.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
+import { type Record as PiRecord, Supervisor } from "../src/supervisor/index.ts";
 import {
-  calcAuroc,
-  compareArms,
+   compareArms,
   computeExploratoryPredictors,
   computePairedBootstrapCI,
   formatReportTables,
   type ArmResult,
   type QuestionFixture,
   type ScoredQuestion,
+  runArm,
   runTier1PromptEval,
 } from "../src/tier1/eval.ts";
+import { TOOLS } from "../src/tier1/index.ts";
+import { tier1Launch, writePiModelsJson } from "../src/tier1/launch.ts";
 
 const root = new URL("..", import.meta.url);
 const questions: QuestionFixture[] = readFileSync(
@@ -24,6 +27,76 @@ const questions: QuestionFixture[] = readFileSync(
   .split("\n")
   .filter(Boolean)
   .map((l) => JSON.parse(l));
+
+export function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part: any) => (typeof part === "string" ? part : (part?.text ?? ""))).join("");
+  }
+  return "";
+}
+
+export function sseToolCalls(calls: { id: string; name: string; args: unknown }[]): string {
+  const chunks = calls.map((c, index) =>
+    `data: ${JSON.stringify({
+      id: "x",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "stub-qwen",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            ...(index === 0 ? { role: "assistant" } : {}),
+            tool_calls: [
+              {
+                index,
+                id: c.id,
+                type: "function",
+                function: {
+                  name: c.name,
+                  arguments: typeof c.args === "string" ? c.args : JSON.stringify(c.args),
+                },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    })}\n\n`,
+  );
+  chunks.push(
+    `data: ${JSON.stringify({
+      id: "x",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    })}\n\ndata: [DONE]\n\n`,
+  );
+  return chunks.join("");
+}
+
+export function sseTextStop(text: string): string {
+  return [
+    `data: ${JSON.stringify({
+      id: "x",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }],
+    })}`,
+    `data: ${JSON.stringify({
+      id: "x",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    })}`,
+    "data: [DONE]",
+    "",
+  ].join("\n\n");
+}
 
 let server: Server;
 let port = 0;
@@ -50,8 +123,8 @@ before(async () => {
         callCount++;
         const parsed = JSON.parse(body);
         const messages = parsed.messages ?? [];
-        const systemMsg = messages.find((m: any) => m.role === "system")?.content ?? "";
-        const userMsg = messages.find((m: any) => m.role === "user")?.content ?? "";
+        const systemMsg = textOf(messages.find((m: any) => m.role === "system" || m.role === "developer")?.content);
+        const userMsg = textOf(messages.find((m: any) => m.role === "user")?.content);
 
         // Identify which prompt arm is in flight
         const hasHowToAnswer = systemMsg.includes("## How to answer");
@@ -84,37 +157,21 @@ before(async () => {
           gaps.push("did not verify details");
         }
 
-        const replyArgs = JSON.stringify({
-          answer,
-          confidence,
-          gaps,
-          escalate_forced: q.id === "asks-for-expert" ? "yes" : "no",
-        });
-
-        const responsePayload = {
-          choices: [
-            {
-              finish_reason: "stop",
-              message: {
-                role: "assistant",
-                content: null,
-                tool_calls: [
-                  {
-                    id: "call_1",
-                    type: "function",
-                    function: {
-                      name: "reply",
-                      arguments: replyArgs,
-                    },
-                  },
-                ],
-              },
+        const sse = sseToolCalls([
+          {
+            id: "call_1",
+            name: "reply",
+            args: {
+              answer,
+              confidence,
+              gaps,
+              escalate_forced: q.id === "asks-for-expert" ? "yes" : "no",
             },
-          ],
-        };
+          },
+        ]);
 
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(responsePayload));
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(sse);
         inFlight--;
       });
       return;
@@ -182,6 +239,7 @@ function makeSyntheticArm(
 
 test("oracle: a degraded arm scores below real by more than paired bootstrap noise band", async () => {
   maxInFlight = 0;
+  const beforeCalls = callCount;
   const promptArms = {
     real: new URL("prompts/tier1.md", root).pathname,
     "no-steps": new URL("prompts/tier1-no-steps.md", root).pathname,
@@ -196,6 +254,13 @@ test("oracle: a degraded arm scores below real by more than paired bootstrap noi
     runs: 3,
     concurrency: 1,
   });
+
+  // Amendment 3: every model request in the 3 arms x 3 runs x 24 questions went to the loopback stub
+  assert.strictEqual(
+    callCount - beforeCalls,
+    questions.length * 3 * 3,
+    "every model request must be served by the loopback stub",
+  );
 
   // Verify concurrency cap at 1: inFlight never exceeded 1
   assert.strictEqual(maxInFlight, 1, `max concurrency must be 1 (got ${maxInFlight})`);
@@ -254,8 +319,6 @@ test("oracle: a degraded arm scores below real by more than paired bootstrap noi
 });
 
 test("oracle: compareArms reports inside_noise_band when paired bootstrap CI crosses zero", () => {
-  // Baseline and degraded where mean delta is positive (+0.05), but per-question differences
-  // cross zero with high variance.
   const baseline = makeSyntheticArm("real", [
     { id: "q1", overall: 0.8 },
     { id: "q2", overall: 0.2 },
@@ -280,7 +343,6 @@ test("oracle: compareArms reports inside_noise_band when paired bootstrap CI cro
 
   const comp = compareArms(baseline, degraded, { seed: 42 });
 
-  // Delta is positive (+0.0125), but CI crosses zero
   assert(comp.delta > 0, "sample delta must be positive");
   assert(comp.ci_low < 0, `ci_low must be negative to cross zero (got ${comp.ci_low})`);
   assert(comp.ci_high > 0, `ci_high must be positive (got ${comp.ci_high})`);
@@ -342,7 +404,6 @@ test("oracle: missing or unanswered questions count as score 0 and are tracked i
 
   assert.strictEqual(comp.n_paired, 2, "q1 and q2 are answered in both arms");
   assert.strictEqual(comp.n_missing, 2, "q3 is unanswered and q4 is missing");
-  // Total questions in comparison is n_paired + n_missing = 4
   assert.strictEqual(comp.n_paired + comp.n_missing, 4);
 });
 
@@ -410,110 +471,302 @@ test("oracle: exploratory correctness predictors calculate AUROC and lift on dis
 });
 
 test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement", async () => {
-  const { mkdtempSync, mkdirSync, realpathSync, writeFileSync } = await import("node:fs");
-  const { TOOLS } = await import("../src/tier1/index.ts");
-  const { runArm, tier1Tools } = await import("../src/tier1/eval.ts");
-
   const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c21-builtin-`));
   mkdirSync(`${tmp}/sub`, { recursive: true });
   writeFileSync(`${tmp}/sub/mod.nix`, "{ services.foo.enable = true; }\n");
 
-  const tools = tier1Tools();
-  assert.deepEqual(
-    tools.map((t) => t.function.name),
-    [...TOOLS],
-    "tier1Tools() must match production's 12 TOOLS",
-  );
-
   let offeredTools: string[] = [];
-  let toolOutputs: Record<string, any> = {};
+  const toolOutputs: Record<string, string> = {};
+  let stubRequests = 0;
 
-  const armRes = await runArm(
-    "real",
-    new URL("prompts/tier1.md", root).pathname,
-    {
-      model: "stub-qwen",
-      base: "http://127.0.0.1:1",
-      promptArms: { real: "", "no-steps": "", "no-citations": "" },
-      worktreeRoot: tmp,
-      questions: [
-        {
-          id: "q-builtin",
-          question: "How is services.foo.enable configured?",
-          expected_claims: ["services.foo.enable"],
-          expected_citations: ["sub/mod.nix"],
-        },
-      ],
-      fetchFn: async (_url, init) => {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        offeredTools = (body.tools ?? []).map((t: any) => t.function.name);
-        const msgs = body.messages ?? [];
-        if (msgs.length === 2) {
-          return new Response(
-            JSON.stringify({
-              choices: [
-                {
-                  finish_reason: "tool_calls",
-                  message: {
-                    role: "assistant",
-                    content: null,
-                    tool_calls: [
-                      { id: "c_ls", type: "function", function: { name: "ls", arguments: JSON.stringify({ path: "." }) } },
-                      { id: "c_find", type: "function", function: { name: "find", arguments: JSON.stringify({ pattern: "*.nix" }) } },
-                      { id: "c_grep", type: "function", function: { name: "grep", arguments: JSON.stringify({ pattern: "services.foo" }) } },
-                      { id: "c_read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "sub/mod.nix" }) } },
-                      { id: "c_esc", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "/etc/passwd" }) } },
-                    ],
-                  },
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        for (const m of msgs.filter((m: any) => m.role === "tool")) {
-          toolOutputs[m.tool_call_id] = JSON.parse(m.content);
-        }
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "stop",
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "c_reply",
-                      type: "function",
-                      function: {
-                        name: "reply",
-                        arguments: JSON.stringify({
-                          answer: `From sub/mod.nix: ${toolOutputs.c_read?.content ?? ""}`,
-                          confidence: 0.9,
-                          gaps: [],
-                          escalate_forced: "no",
-                        }),
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
+  const builtinServer = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      stubRequests++;
+      const parsed = JSON.parse(body);
+      offeredTools = (parsed.tools ?? []).map((t: any) => t.function.name);
+      const msgs = parsed.messages ?? [];
+      const toolMsgs = msgs.filter((m: any) => m.role === "tool");
+      res.writeHead(200, { "content-type": "text/event-stream" });
+
+      if (toolMsgs.length === 0) {
+        res.end(
+          sseToolCalls([
+            { id: "c_ls", name: "ls", args: { path: "." } },
+            { id: "c_find", name: "find", args: { pattern: "*.nix" } },
+            { id: "c_grep", name: "grep", args: { pattern: "services.foo" } },
+            { id: "c_read", name: "read", args: { path: "sub/mod.nix" } },
+            { id: "c_esc", name: "read", args: { path: "/etc/passwd" } },
+          ]),
         );
-      },
-    },
-    tools,
+        return;
+      }
+
+      for (const m of toolMsgs) {
+        toolOutputs[m.tool_call_id] = textOf(m.content);
+      }
+      res.end(
+        sseToolCalls([
+          {
+            id: "c_reply",
+            name: "reply",
+            args: {
+              answer: `From sub/mod.nix: ${toolOutputs.c_read ?? ""}`,
+              confidence: 0.9,
+              gaps: [],
+              escalate_forced: "no",
+            },
+          },
+        ]),
+      );
+    });
+  });
+
+  const builtinPort = await new Promise<number>((resolve) =>
+    builtinServer.listen(0, "127.0.0.1", () => resolve((builtinServer.address() as { port: number }).port)),
   );
 
-  assert.deepEqual(offeredTools, [...TOOLS]);
-  assert.deepEqual(toolOutputs.c_ls.entries, ["sub/"]);
-  assert.deepEqual(toolOutputs.c_find.matches, ["sub/mod.nix"]);
-  assert.match(toolOutputs.c_grep.content, /sub\/mod\.nix:1:\{ services\.foo\.enable = true; \}/);
-  assert.equal(toolOutputs.c_read.content, "{ services.foo.enable = true; }\n");
-  assert.match(toolOutputs.c_esc.error, /refused: \/etc\/passwd is outside the thread's worktrees and memory mount/);
-  assert.equal(armRes.runs[0].questions[0].correctness, 1);
-  assert.equal(armRes.runs[0].questions[0].citation, 1);
+  try {
+    const armRes = await runArm(
+      "real",
+      new URL("prompts/tier1.md", root).pathname,
+      {
+        model: "stub-qwen",
+        base: `http://127.0.0.1:${builtinPort}`,
+        promptArms: { real: "", "no-steps": "", "no-citations": "" },
+        worktreeRoot: tmp,
+        questions: [
+          {
+            id: "q-builtin",
+            question: "How is services.foo.enable configured?",
+            expected_claims: ["services.foo.enable"],
+            expected_citations: ["sub/mod.nix"],
+          },
+        ],
+      },
+    );
+
+    assert.equal(stubRequests, 2, "both turns must be served by the loopback stub");
+    assert.deepEqual(offeredTools, [...TOOLS]);
+    assert.equal(toolOutputs.c_ls.trim(), "sub/");
+    assert.equal(toolOutputs.c_find.trim(), "sub/mod.nix");
+    assert.match(toolOutputs.c_grep, /sub\/mod\.nix:1:.*\{ services\.foo\.enable = true; \}/);
+    assert.equal(toolOutputs.c_read, "{ services.foo.enable = true; }\n");
+    assert.match(toolOutputs.c_esc, /refused: \/etc\/passwd is outside the thread's worktrees and memory mount/);
+    assert.equal(armRes.runs[0].questions[0].correctness, 1);
+    assert.equal(armRes.runs[0].questions[0].citation, 1);
+  } finally {
+    builtinServer.close();
+  }
 });
+
+test("oracle C2.3 (Cell 1): eval tool set and system prompt equal production tier1Launch byte-for-byte", async () => {
+  const captured: { system: string; tools: unknown[] }[] = [];
+  const parityServer = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      const sys = textOf((parsed.messages ?? []).find((m: any) => m.role === "system" || m.role === "developer")?.content);
+      captured.push({ system: sys, tools: parsed.tools ?? [] });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        sseToolCalls([
+          {
+            id: "c_reply",
+            name: "reply",
+            args: { answer: "ok", confidence: 0.9, gaps: [], escalate_forced: "no" },
+          },
+        ]),
+      );
+    });
+  });
+
+  const parityPort = await new Promise<number>((resolve) =>
+    parityServer.listen(0, "127.0.0.1", () => resolve((parityServer.address() as { port: number }).port)),
+  );
+
+  try {
+    // 1. Run via eval's runArm
+    await runArm("real", new URL("prompts/tier1.md", root).pathname, {
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${parityPort}`,
+      promptArms: { real: "", "no-steps": "", "no-citations": "" },
+      questions: [{ id: "q-parity", question: "parity check" }],
+    });
+    assert.equal(captured.length, 1, "eval runArm must send 1 request to loopback stub");
+    const evalCapture = captured[0];
+
+    // 2. Run directly via production tier1Launch + Supervisor
+    const prodAgentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c23-prod-`);
+    writePiModelsJson(prodAgentDir, { baseUrl: `http://127.0.0.1:${parityPort}`, id: "stub-qwen" });
+    const prodLaunch = tier1Launch({
+      pi: process.env.PI ?? "pi",
+      config: () => ({ root: "", searxngUrl: "http://127.0.0.1:1", cluster: [] }),
+      args: () => ["--model", "genie/stub-qwen", "--no-session"],
+    });
+    const events: PiRecord[] = [];
+    const prodSupervisor = new Supervisor(
+      (th) => {
+        const l = prodLaunch(th);
+        return { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: prodAgentDir, PI_OFFLINE: "1" } };
+      },
+      (_th, r) => events.push(r),
+      (th) => ({
+        eval: async () => ({}),
+        recall: async () => ({}),
+        escalate: async () => ({}),
+        reply: async () => {
+          void prodSupervisor.command(th, { type: "abort" }).catch(() => {});
+          return { posted: true };
+        },
+        propose: async () => ({}),
+        clone: async () => ({ path: "", rev: "x" }),
+        screen: async (x) => x,
+      }),
+    );
+    try {
+      await prodSupervisor.command("prod-t1", { type: "prompt", message: "parity check" });
+      while (!events.some((r) => r.type === "agent_settled")) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      await prodSupervisor.shutdown();
+    }
+
+    assert.equal(captured.length, 2, "production tier1Launch must also send 1 request to loopback stub");
+    const prodCapture = captured[1];
+
+    assert.strictEqual(evalCapture.system, prodCapture.system, "eval system prompt must equal production tier1Launch byte-for-byte");
+    assert.deepStrictEqual(evalCapture.tools, prodCapture.tools, "eval tool set and schemas must equal production tier1Launch");
+  } finally {
+    parityServer.close();
+  }
+});
+
+test("oracle C2.3 (Cell 2): checkpointed run with --resume skips finished questions without calling pi", async () => {
+  const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c23-resume-`);
+  const outPath = `${tmp}/checkpoint.json`;
+  const seenQuestions: string[] = [];
+
+  const resumeServer = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      const usr = textOf((parsed.messages ?? []).find((m: any) => m.role === "user")?.content);
+      seenQuestions.push(usr);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        sseToolCalls([
+          {
+            id: "c_reply",
+            name: "reply",
+            args: { answer: `ans for ${usr}`, confidence: 0.9, gaps: [], escalate_forced: "no" },
+          },
+        ]),
+      );
+    });
+  });
+
+  const resumePort = await new Promise<number>((resolve) =>
+    resumeServer.listen(0, "127.0.0.1", () => resolve((resumeServer.address() as { port: number }).port)),
+  );
+
+  try {
+    const q1: QuestionFixture = { id: "q-res-1", question: "First question?", expected_claims: ["ans for First question?"] };
+    const q2: QuestionFixture = { id: "q-res-2", question: "Second question?", expected_claims: ["ans for Second question?"] };
+
+    // Step 1: Run with only q1 and write checkpoint to outPath
+    await runTier1PromptEval({
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${resumePort}`,
+      promptArms: { real: new URL("prompts/tier1.md", root).pathname, "no-steps": "", "no-citations": "" },
+      questions: [q1],
+      outPath,
+    });
+    assert.deepEqual(seenQuestions, ["First question?"]);
+
+    // Step 2: Resume with [q1, q2] and resume: true -> q1 must be skipped, only q2 must run
+    seenQuestions.length = 0;
+    const resumedReport = await runTier1PromptEval({
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${resumePort}`,
+      promptArms: { real: new URL("prompts/tier1.md", root).pathname, "no-steps": "", "no-citations": "" },
+      questions: [q1, q2],
+      outPath,
+      resume: true,
+    });
+
+    assert.deepEqual(seenQuestions, ["Second question?"], "resume must not re-run already checkpointed q1");
+    assert.equal(resumedReport.arms.real.runs[0].questions.length, 2);
+    assert.equal(resumedReport.arms.real.runs[0].questions[0].id, "q-res-1");
+    assert.equal(resumedReport.arms.real.runs[0].questions[0].correctness, 1);
+    assert.equal(resumedReport.arms.real.runs[0].questions[1].id, "q-res-2");
+    assert.equal(resumedReport.arms.real.runs[0].questions[1].correctness, 1);
+  } finally {
+    resumeServer.close();
+  }
+});
+
+test("oracle C2.3 (Cell 3): unanswered question (pi settles without reply or times out) has draft undefined, score 0, and counts in n_missing", async () => {
+  let reqCount = 0;
+  const unansweredServer = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      reqCount++;
+      const parsed = JSON.parse(body);
+      const usr = textOf((parsed.messages ?? []).find((m: any) => m.role === "user")?.content);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      if (usr === " settles-without-reply ") {
+        res.end(sseTextStop("I am stopping without calling the reply tool."));
+        return;
+      }
+      res.end(
+        sseToolCalls([
+          {
+            id: "c_reply",
+            name: "reply",
+            args: { answer: "answered", confidence: 1.0, gaps: [], escalate_forced: "no" },
+          },
+        ]),
+      );
+    });
+  });
+
+  const uPort = await new Promise<number>((resolve) =>
+    unansweredServer.listen(0, "127.0.0.1", () => resolve((unansweredServer.address() as { port: number }).port)),
+  );
+
+  try {
+    const armRes = await runArm("no-steps", new URL("prompts/tier1-no-steps.md", root).pathname, {
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${uPort}`,
+      promptArms: { real: "", "no-steps": "", "no-citations": "" },
+      questions: [
+        { id: "q-ans", question: "answered-q", expected_claims: ["answered"] },
+        { id: "q-unans", question: " settles-without-reply ", expected_claims: ["answered"] },
+      ],
+    });
+
+    assert.equal(reqCount, 2, "both questions must hit the loopback stub");
+    const [qAns, qUnans] = armRes.runs[0].questions;
+    assert.ok(qAns.draft !== undefined, "q-ans must have a captured draft");
+    assert.equal(qAns.overall, 1);
+    assert.equal(qUnans.draft, undefined, "question settling without reply must have draft: undefined");
+    assert.equal(qUnans.overall, 0, "unanswered question must score 0");
+
+    const baseline = makeSyntheticArm("real", [
+      { id: "q-ans", overall: 1.0 },
+      { id: "q-unans", overall: 1.0 },
+    ]);
+    const comp = compareArms(baseline, armRes);
+    assert.equal(comp.n_paired, 1);
+    assert.equal(comp.n_missing, 1);
+  } finally {
+    unansweredServer.close();
+  }
+});
+

@@ -41,8 +41,8 @@ const { values: args } = parseArgs({
       type: "string",
       multiple: true,
     },
-    turns: { type: "string", default: "6" },
-    "max-tokens": { type: "string", default: "16384" },
+    "timeout-ms": { type: "string", default: "300000" },
+    resume: { type: "boolean", default: false },
   },
 });
 
@@ -69,8 +69,7 @@ const questions: QuestionFixture[] = questionFiles.flatMap((file) =>
 
 const runs = Number.parseInt(args.runs, 10);
 const concurrency = Number.parseInt(args.concurrency, 10);
-const turns = Number.parseInt(args.turns, 10);
-const maxTokens = Number.parseInt(args["max-tokens"], 10);
+const timeoutMs = Number.parseInt(args["timeout-ms"], 10);
 
 // Memory arms mode (Unit C2.2 live runner)
 if (args["memory-arms"]) {
@@ -111,8 +110,9 @@ if (args["memory-arms"]) {
     arms: ["no-memory", "wiki", "bank", "wiki+bank"],
     runs,
     concurrency,
-    turns,
-    maxTokens,
+    timeoutMs,
+    outPath: args.out,
+    resume: args.resume,
     live: true,
   });
 
@@ -158,8 +158,9 @@ const report = await runTier1PromptEval({
   questions,
   runs,
   concurrency,
-  turns,
-  maxTokens,
+  timeoutMs,
+  outPath: args.out,
+  resume: args.resume,
 });
 
 console.log(formatReportTables(report));

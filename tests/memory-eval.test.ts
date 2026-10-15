@@ -293,6 +293,144 @@ test("Retrieval Oracle: verifyModelFreeRetrieval validates all 24 questions, and
   );
 });
 
+function sseToolCalls(
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+): string {
+  const chunks: string[] = [];
+  chunks.push(
+    `data: ${JSON.stringify({
+      id: "chatcmpl-stub",
+      object: "chat.completion.chunk",
+      created: 1700000000,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+    })}\n\n`,
+  );
+  toolCalls.forEach((tc, idx) => {
+    chunks.push(
+      `data: ${JSON.stringify({
+        id: "chatcmpl-stub",
+        object: "chat.completion.chunk",
+        created: 1700000000,
+        model: "stub-qwen",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: idx,
+                  id: tc.id,
+                  type: "function",
+                  function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      })}\n\n`,
+    );
+  });
+  chunks.push(
+    `data: ${JSON.stringify({
+      id: "chatcmpl-stub",
+      object: "chat.completion.chunk",
+      created: 1700000000,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+    })}\n\n`,
+  );
+  chunks.push("data: [DONE]\n\n");
+  return chunks.join("");
+}
+
+function sseTextStop(text: string): string {
+  return [
+    `data: ${JSON.stringify({
+      id: "chatcmpl-stub",
+      object: "chat.completion.chunk",
+      created: 1700000000,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      id: "chatcmpl-stub",
+      object: "chat.completion.chunk",
+      created: 1700000000,
+      model: "stub-qwen",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+}
+
+function extractMsgText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("");
+  }
+  return "";
+}
+
+async function withStubServer<T>(
+  onChat: (body: any) => string,
+  fn: (baseUrl: string, getStats: () => { calls: number; maxInFlight: number }) => Promise<T>,
+): Promise<T> {
+  let calls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const server: Server = createServer((req, res) => {
+    inFlight++;
+    if (inFlight > maxInFlight) maxInFlight = inFlight;
+    if (req.method === "POST" && req.url === "/chat/completions") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(raw || "{}");
+        const msgs = parsed.messages ?? [];
+        const alreadyReplied = msgs.some(
+          (m: any) =>
+            m.role === "assistant" &&
+            Array.isArray(m.tool_calls) &&
+            m.tool_calls.some((c: any) => c.function?.name === "reply"),
+        );
+        if (alreadyReplied) {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.end(sseTextStop("done"));
+          inFlight--;
+          return;
+        }
+        calls++;
+        const sse = onChat(parsed);
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(sse);
+        inFlight--;
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+    inFlight--;
+  });
+
+  let port = 0;
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      port = (server.address() as { port: number }).port;
+      resolve();
+    });
+  });
+
+  try {
+    return await fn(`http://127.0.0.1:${port}`, () => ({ calls, maxInFlight }));
+  } finally {
+    server.close();
+  }
+}
+
 test("Oracle C2.2.1: a live run with a fixture miss proceeds and reports retrieval_misses: [qid], while unindexed slugs and missing fixture entries still refuse", async () => {
   const subset = questions.slice(0, 2); // q01, q02
   const missFixtures: MemoryRecallFixture = {
@@ -319,110 +457,70 @@ test("Oracle C2.2.1: a live run with a fixture miss proceeds and reports retriev
   assert.deepEqual(check.retrieval_misses, [subset[0].id]);
 
   // Full live run proceeds, scores all questions, and reports retrieval_misses at top level and per arm
-  const report = await runTier1MemoryEval({
-    model: "stub-qwen",
-    base: "http://127.0.0.1:1",
-    memoryRoot: `${repoRoot}/operating-memory`,
-    memoryMdPath,
-    recallFixtures: missFixtures,
-    questions: subset,
-    arms: ["no-memory", "wiki", "bank", "wiki+bank"],
-    runs: 1,
-    concurrency: 1,
-    live: true,
-    fetchFn: async (_url, init) => {
-      const body = JSON.parse(String(init?.body ?? "{}"));
+  await withStubServer(
+    (body) => {
       const msgs = body.messages ?? [];
-      const sys = msgs.find((m: any) => m.role === "system")?.content ?? "";
-      const usr = msgs.find((m: any) => m.role === "user")?.content ?? "";
+      const sys = extractMsgText(msgs.find((m: any) => m.role === "system")?.content);
+      const usr = extractMsgText(msgs.find((m: any) => m.role === "user")?.content);
       const q = subset.find((item) => item.question === usr) ?? subset[0];
       const cite = q.expected_citations?.[0] ?? "";
       const claims = q.expected_claims ?? [];
       const hasWiki = sys.includes("# Operating Memory Index");
       const toolMsg = msgs.find((m: any) => m.role === "tool");
 
-      if (msgs.length === 2) {
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "tool_calls",
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    hasWiki
-                      ? {
-                          id: "c1",
-                          type: "function",
-                          function: {
-                            name: "read",
-                            arguments: JSON.stringify({ path: `${repoRoot}/operating-memory/${cite}` }),
-                          },
-                        }
-                      : {
-                          id: "c1",
-                          type: "function",
-                          function: {
-                            name: "recall",
-                            arguments: JSON.stringify({ query: q.question, bank: "memory" }),
-                          },
-                        },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+      if (!toolMsg) {
+        return sseToolCalls([
+          hasWiki
+            ? { id: "c1", name: "read", arguments: { path: `/memory/${cite}` } }
+            : { id: "c1", name: "recall", arguments: { query: q.question, bank: "memory" } },
+        ]);
       }
 
-      const got = (toolMsg?.content ?? "").includes(cite) || (toolMsg?.content ?? "").includes("---");
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: "stop",
-              message: {
-                role: "assistant",
-                content: null,
-                tool_calls: [
-                  {
-                    id: "c2",
-                    type: "function",
-                    function: {
-                      name: "reply",
-                      arguments: JSON.stringify({
-                        answer: got ? `Per ${cite}: ${claims.join(" ")}` : "Unknown",
-                        confidence: got ? 0.9 : 0.5,
-                        gaps: [],
-                        escalate_forced: "no",
-                      }),
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      const toolText = extractMsgText(toolMsg.content);
+      const got = toolText.includes(cite) || toolText.includes("---");
+      return sseToolCalls([
+        {
+          id: "c2",
+          name: "reply",
+          arguments: {
+            answer: got ? `Per ${cite}: ${claims.join(" ")}` : "Unknown",
+            confidence: got ? 0.9 : 0.5,
+            gaps: [],
+            escalate_forced: "no",
+          },
+        },
+      ]);
     },
-  });
+    async (baseUrl, getStats) => {
+      const report = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures: missFixtures,
+        questions: subset,
+        arms: ["no-memory", "wiki", "bank", "wiki+bank"],
+        runs: 1,
+        concurrency: 1,
+        live: true,
+      });
 
-  assert.deepEqual(report.retrieval_misses, [subset[0].id]);
-  assert.deepEqual(report.model_free_retrieval?.retrieval_misses, [subset[0].id]);
-  // Both questions are still scored in every arm
-  assert.equal(report.arms["bank"].runs[0].questions.length, 2);
-  // Bank arm missed q01 and retrieved q02
-  assert.deepEqual(report.arms["bank"].retrieval_misses, [subset[0].id]);
-  assert.equal(report.arms["bank"].retrieval_miss_count, 1);
-  // Wiki arm retrieved both via read
-  assert.deepEqual(report.arms["wiki"].retrieval_misses, []);
-  assert.equal(report.arms["wiki"].retrieval_miss_count, 0);
+      assert.ok(getStats().calls >= 16, "stub server must receive all model requests");
+      assert.deepEqual(report.retrieval_misses, [subset[0].id]);
+      assert.deepEqual(report.model_free_retrieval?.retrieval_misses, [subset[0].id]);
+      // Both questions are still scored in every arm
+      assert.equal(report.arms["bank"].runs[0].questions.length, 2);
+      // Bank arm missed q01 and retrieved q02
+      assert.deepEqual(report.arms["bank"].retrieval_misses, [subset[0].id]);
+      assert.equal(report.arms["bank"].retrieval_miss_count, 1);
+      // Wiki arm retrieved both via read
+      assert.deepEqual(report.arms["wiki"].retrieval_misses, []);
+      assert.equal(report.arms["wiki"].retrieval_miss_count, 0);
 
-  const tables = formatMemoryReportTables(report);
-  assert.match(tables, new RegExp(`retrieval_misses: \\["${subset[0].id}"\\]`));
+      const tables = formatMemoryReportTables(report);
+      assert.match(tables, new RegExp(`retrieval_misses: \\["${subset[0].id}"\\]`));
+    },
+  );
 });
 
 // --- System Prompt & Launch Integration (Amendment 2 & Unit C2.2.2 Item 2) ---
@@ -517,78 +615,52 @@ test("Oracle C2.2.2 (Item 3): eval read serves real bytes from operating-memory 
 
   // 1. Valid read via /memory/<slug> returns exact file bytes from operating-memory/ and sets read_called: true
   let observedReadContent = "";
-  const goodReport = await runTier1MemoryEval({
-    model: "stub-qwen",
-    base: "http://127.0.0.1:1",
-    memoryRoot: `${repoRoot}/operating-memory`,
-    memoryMdPath,
-    recallFixtures,
-    questions: [q1],
-    arms: ["wiki"],
-    runs: 1,
-    fetchFn: async (_url, init) => {
-      const msgs = JSON.parse(String(init?.body ?? "{}")).messages ?? [];
-      if (msgs.length === 2) {
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "tool_calls",
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "c1",
-                      type: "function",
-                      function: { name: "read", arguments: JSON.stringify({ path: `/memory/${cite}` }) },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
+  await withStubServer(
+    (body) => {
+      const msgs = body.messages ?? [];
       const toolMsg = msgs.find((m: any) => m.role === "tool");
-      observedReadContent = JSON.parse(toolMsg.content).content;
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: "stop",
-              message: {
-                role: "assistant",
-                content: null,
-                tool_calls: [
-                  {
-                    id: "c2",
-                    type: "function",
-                    function: {
-                      name: "reply",
-                      arguments: JSON.stringify({
-                        answer: `Per ${cite}: ${(q1.expected_claims ?? []).join(" ")}`,
-                        confidence: 0.9,
-                        gaps: [],
-                        escalate_forced: "no",
-                      }),
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      if (!toolMsg) {
+        return sseToolCalls([
+          { id: "c1", name: "read", arguments: { path: `/memory/${cite}` } },
+        ]);
+      }
+      observedReadContent = extractMsgText(toolMsg.content);
+      return sseToolCalls([
+        {
+          id: "c2",
+          name: "reply",
+          arguments: {
+            answer: `Per ${cite}: ${(q1.expected_claims ?? []).join(" ")}`,
+            confidence: 0.9,
+            gaps: [],
+            escalate_forced: "no",
+          },
+        },
+      ]);
     },
-  });
+    async (baseUrl, getStats) => {
+      const goodReport = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures,
+        questions: [q1],
+        arms: ["wiki"],
+        runs: 1,
+      });
 
-  assert.equal(observedReadContent, expectedBytes, "read must return exact bytes from operating-memory/, never a placeholder");
-  assert.ok(!observedReadContent.includes("[wiki content for"), "placeholder must not appear");
-  assert.equal(goodReport.arms["wiki"].retrieval_results[0].read_called, true);
-  assert.equal(goodReport.arms["wiki"].retrieval_rate, 1);
+      assert.equal(getStats().calls, 2, "stub server must receive 2 turns");
+      assert.equal(
+        observedReadContent.trimEnd(),
+        expectedBytes.trimEnd(),
+        "read must return exact bytes from operating-memory/, never a placeholder",
+      );
+      assert.ok(!observedReadContent.includes("[wiki content for"), "placeholder must not appear");
+      assert.equal(goodReport.arms["wiki"].retrieval_results[0].read_called, true);
+      assert.equal(goodReport.arms["wiki"].retrieval_rate, 1);
+    },
+  );
 
   // 2. Failed reads (nonexistent /memory/..., relative without worktree, /etc/passwd, /memory/../escape)
   //    return tool errors and record read_called: false
@@ -598,285 +670,310 @@ test("Oracle C2.2.2 (Item 3): eval read serves real bytes from operating-memory 
     "/etc/passwd",
     "/memory/../package.json",
   ]) {
-    let toolResponse: any = {};
-    const badReport = await runTier1MemoryEval({
-      model: "stub-qwen",
-      base: "http://127.0.0.1:1",
-      memoryRoot: `${repoRoot}/operating-memory`,
-      memoryMdPath,
-      recallFixtures,
-      questions: [q1],
-      arms: ["wiki"],
-      runs: 1,
-      fetchFn: async (_url, init) => {
-        const msgs = JSON.parse(String(init?.body ?? "{}")).messages ?? [];
-        if (msgs.length === 2) {
-          return new Response(
-            JSON.stringify({
-              choices: [
-                {
-                  finish_reason: "tool_calls",
-                  message: {
-                    role: "assistant",
-                    content: null,
-                    tool_calls: [
-                      {
-                        id: "c1",
-                        type: "function",
-                        function: { name: "read", arguments: JSON.stringify({ path: badPath }) },
-                      },
-                    ],
-                  },
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
+    let toolResponseText = "";
+    await withStubServer(
+      (body) => {
+        const msgs = body.messages ?? [];
         const toolMsg = msgs.find((m: any) => m.role === "tool");
-        toolResponse = JSON.parse(toolMsg.content);
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "stop",
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "c2",
-                      type: "function",
-                      function: {
-                        name: "reply",
-                        arguments: JSON.stringify({
-                          answer: "Unable to read memory file.",
-                          confidence: 0.3,
-                          gaps: ["read failed"],
-                          escalate_forced: "no",
-                        }),
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        if (!toolMsg) {
+          return sseToolCalls([{ id: "c1", name: "read", arguments: { path: badPath } }]);
+        }
+        toolResponseText = extractMsgText(toolMsg.content);
+        return sseToolCalls([
+          {
+            id: "c2",
+            name: "reply",
+            arguments: {
+              answer: "Unable to read memory file.",
+              confidence: 0.3,
+              gaps: ["read failed"],
+              escalate_forced: "no",
+            },
+          },
+        ]);
       },
-    });
+      async (baseUrl, getStats) => {
+        const badReport = await runTier1MemoryEval({
+          model: "stub-qwen",
+          base: baseUrl,
+          memoryRoot: `${repoRoot}/operating-memory`,
+          memoryMdPath,
+          recallFixtures,
+          questions: [q1],
+          arms: ["wiki"],
+          runs: 1,
+        });
 
-    assert.match(String(toolResponse.error ?? ""), /^refused: /, `badPath ${badPath} must return a refusal error`);
-    assert.equal(badReport.arms["wiki"].retrieval_results[0].read_called, false, `badPath ${badPath} must record read_called: false`);
-    assert.equal(badReport.arms["wiki"].retrieval_rate, 0);
+        assert.equal(getStats().calls, 2);
+        assert.match(toolResponseText, /refused: /, `badPath ${badPath} must return a refusal error`);
+        assert.equal(
+          badReport.arms["wiki"].retrieval_results[0].read_called,
+          false,
+          `badPath ${badPath} must record read_called: false`,
+        );
+        assert.equal(badReport.arms["wiki"].retrieval_rate, 0);
+      },
+    );
   }
+});
+
+// --- Oracle C2.3 (Amendment 2): Recall Bank Routing Fidelity ---
+test("Oracle C2.3 (Amendment 2): recall without bank or with bank: support returns empty support results and recall_called: false; bank: memory returns fixture results and recall_called: true", async () => {
+  const q1 = questions[0];
+  const cite = q1.expected_citations![0];
+
+  // 1. Omitted bank: returns { results: [] }, recall_called: false, recall_omitted_bank_count: 1
+  let omittedToolResult = "";
+  await withStubServer(
+    (body) => {
+      const msgs = body.messages ?? [];
+      const toolMsg = msgs.find((m: any) => m.role === "tool");
+      if (!toolMsg) {
+        return sseToolCalls([
+          { id: "c1", name: "recall", arguments: { query: q1.question } },
+        ]);
+      }
+      omittedToolResult = extractMsgText(toolMsg.content);
+      return sseToolCalls([
+        {
+          id: "c2",
+          name: "reply",
+          arguments: {
+            answer: "No memory results when bank is omitted.",
+            confidence: 0.4,
+            gaps: ["omitted bank"],
+            escalate_forced: "no",
+          },
+        },
+      ]);
+    },
+    async (baseUrl, getStats) => {
+      const report = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures,
+        questions: [q1],
+        arms: ["bank"],
+        runs: 1,
+      });
+
+      assert.equal(getStats().calls, 2, "stub server must receive 2 turns");
+      assert.deepEqual(JSON.parse(omittedToolResult), { results: [] });
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_called, false);
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_omitted_bank, 1);
+      assert.equal(report.arms["bank"].recall_omitted_bank_count, 1);
+      assert.equal(report.arms["bank"].retrieval_rate, 0);
+
+      const tables = formatMemoryReportTables(report);
+      assert.match(tables, /OmittedBank/);
+    },
+  );
+
+  // 2. Explicit bank: "support": returns { results: [] }, recall_called: false, recall_omitted_bank_count: 0
+  let supportToolResult = "";
+  await withStubServer(
+    (body) => {
+      const msgs = body.messages ?? [];
+      const toolMsg = msgs.find((m: any) => m.role === "tool");
+      if (!toolMsg) {
+        return sseToolCalls([
+          { id: "c1", name: "recall", arguments: { query: q1.question, bank: "support" } },
+        ]);
+      }
+      supportToolResult = extractMsgText(toolMsg.content);
+      return sseToolCalls([
+        {
+          id: "c2",
+          name: "reply",
+          arguments: {
+            answer: "Support bank queried.",
+            confidence: 0.4,
+            gaps: [],
+            escalate_forced: "no",
+          },
+        },
+      ]);
+    },
+    async (baseUrl, getStats) => {
+      const report = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures,
+        questions: [q1],
+        arms: ["bank"],
+        runs: 1,
+      });
+
+      assert.equal(getStats().calls, 2);
+      assert.deepEqual(JSON.parse(supportToolResult), { results: [] });
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_called, false);
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_omitted_bank, 0);
+      assert.equal(report.arms["bank"].recall_omitted_bank_count, 0);
+    },
+  );
+
+  // 3. Explicit bank: "memory": returns recorded fixture results and recall_called: true
+  let memoryToolResult = "";
+  await withStubServer(
+    (body) => {
+      const msgs = body.messages ?? [];
+      const toolMsg = msgs.find((m: any) => m.role === "tool");
+      if (!toolMsg) {
+        return sseToolCalls([
+          { id: "c1", name: "recall", arguments: { query: q1.question, bank: "memory" } },
+        ]);
+      }
+      memoryToolResult = extractMsgText(toolMsg.content);
+      return sseToolCalls([
+        {
+          id: "c2",
+          name: "reply",
+          arguments: {
+            answer: `Per ${cite}: ${(q1.expected_claims ?? []).join(" ")}`,
+            confidence: 0.9,
+            gaps: [],
+            escalate_forced: "no",
+          },
+        },
+      ]);
+    },
+    async (baseUrl, getStats) => {
+      const report = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures,
+        questions: [q1],
+        arms: ["bank"],
+        runs: 1,
+      });
+
+      assert.equal(getStats().calls, 2);
+      const parsed = JSON.parse(memoryToolResult);
+      assert.deepEqual(parsed, { results: recallFixtures.fixtures[q1.id].results });
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_called, true);
+      assert.equal(report.arms["bank"].retrieval_results[0].recall_omitted_bank, 0);
+      assert.equal(report.arms["bank"].recall_omitted_bank_count, 0);
+      assert.equal(report.arms["bank"].retrieval_rate, 1);
+    },
+  );
 });
 
 // --- Hermetic Memory Eval Runner (4 Arms Discrimination & Noise Band) ---
 test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs", async () => {
-  let inFlight = 0;
-  let maxInFlight = 0;
   let callCount = 0;
+  await withStubServer(
+    (parsed) => {
+      callCount++;
+      const messages = parsed.messages ?? [];
+      const systemMsg = extractMsgText(messages.find((m: any) => m.role === "system")?.content);
+      const userMsg = extractMsgText(messages.find((m: any) => m.role === "user")?.content);
 
-  const server: Server = createServer((req, res) => {
-    inFlight++;
-    if (inFlight > maxInFlight) maxInFlight = inFlight;
+      const hasWiki = systemMsg.includes("# Operating Memory Index");
 
-    if (req.method === "POST" && req.url === "/chat/completions") {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
-        callCount++;
-        const parsed = JSON.parse(body);
-        const messages = parsed.messages ?? [];
-        const systemMsg = messages.find((m: any) => m.role === "system")?.content ?? "";
-        const userMsg = messages.find((m: any) => m.role === "user")?.content ?? "";
+      // Identify which question
+      const q = questions.find((item) => item.question === userMsg) ?? questions[0];
+      const cite = q.expected_citations?.[0] ?? "";
+      const claims = q.expected_claims ?? [];
 
-        const hasWiki = systemMsg.includes("# Operating Memory Index");
+      const toolResultMsg = messages.find((m: any) => m.role === "tool");
+      const toolData = toolResultMsg ? extractMsgText(toolResultMsg.content) : "";
 
-        // Identify which question
-        const q = questions.find((item) => item.question === userMsg) ?? questions[0];
-        const cite = q.expected_citations?.[0] ?? "";
-        const claims = q.expected_claims ?? [];
-
-        // Check if previous turn had tool call
-        const toolResultMsg = messages.find((m: any) => m.role === "tool");
-        let toolData = "";
-        if (toolResultMsg) {
-          toolData = toolResultMsg.content;
+      // First turn: if wiki or bank available, model calls tool
+      if (!toolResultMsg) {
+        if (hasWiki) {
+          return sseToolCalls([
+            { id: "call_read_1", name: "read", arguments: { path: `/memory/${cite}` } },
+          ]);
         }
+        return sseToolCalls([
+          {
+            id: "call_recall_1",
+            name: "recall",
+            arguments: { query: q.question, bank: "memory" },
+          },
+        ]);
+      }
 
-        // First turn: if wiki or bank available, model calls tool
-        if (messages.length === 2) {
-          if (hasWiki) {
-            // Wiki arm calls read using the /memory/<slug> path rendered in MEMORY.md
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end(
-              JSON.stringify({
-                choices: [
-                  {
-                    finish_reason: "tool_calls",
-                    message: {
-                      role: "assistant",
-                      content: null,
-                      tool_calls: [
-                        {
-                          id: "call_read_1",
-                          type: "function",
-                          function: {
-                            name: "read",
-                            arguments: JSON.stringify({ path: `/memory/${cite}` }),
-                          },
-                        },
-                      ],
-                    },
-                  },
-                ],
-              }),
-            );
-            inFlight--;
-            return;
-          } else {
-            // Check if recall can be called
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end(
-              JSON.stringify({
-                choices: [
-                  {
-                    finish_reason: "tool_calls",
-                    message: {
-                      role: "assistant",
-                      content: null,
-                      tool_calls: [
-                        {
-                          id: "call_recall_1",
-                          type: "function",
-                          function: {
-                            name: "recall",
-                            arguments: JSON.stringify({ query: q.question, bank: "memory" }),
-                          },
-                        },
-                      ],
-                    },
-                  },
-                ],
-              }),
-            );
-            inFlight--;
-            return;
-          }
-        }
+      // Final turn: reply with answers based on real retrieved memory (never placeholder text)
+      const gotMemory =
+        !toolData.includes("[wiki content for") &&
+        (toolData.includes("Operating memory excerpt") ||
+          toolData.includes("**Rule:**") ||
+          (toolData.includes("---") && toolData.includes("description:")));
 
-        // Final turn: reply with answers based on real retrieved memory (never placeholder text)
-        const gotMemory =
-          !toolData.includes("[wiki content for") &&
-          (toolData.includes("Operating memory excerpt") ||
-            toolData.includes("**Rule:**") ||
-            (toolData.includes("---") && toolData.includes("description:")));
+      let answer = "";
+      let confidence = 0.5;
 
-        let answer = "";
-        let confidence = 0.5;
+      if (gotMemory) {
+        const jitter = (callCount % 2) * 0.02;
+        confidence = Number((0.92 - jitter).toFixed(2));
+        answer = `Based on ${cite}, we must apply ${claims.join(" and ")}.`;
+      } else {
+        confidence = 0.6;
+        answer = "I don't have access to the operating rules for this case.";
+      }
 
-        if (gotMemory) {
-          // Memory arm with successful retrieval
-          const jitter = (callCount % 2) * 0.02;
-          confidence = Number((0.92 - jitter).toFixed(2));
-          answer = `Based on ${cite}, we must apply ${claims.join(" and ")}.`;
-        } else {
-          // No-memory arm: generic answer without claims or citations
-          confidence = 0.6;
-          answer = "I don't have access to the operating rules for this case.";
-        }
-
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "stop",
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "call_reply_1",
-                      type: "function",
-                      function: {
-                        name: "reply",
-                        arguments: JSON.stringify({
-                          answer,
-                          confidence,
-                          gaps: gotMemory ? [] : ["missing memory context"],
-                          escalate_forced: "no",
-                        }),
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-        );
-        inFlight--;
+      return sseToolCalls([
+        {
+          id: "call_reply_1",
+          name: "reply",
+          arguments: {
+            answer,
+            confidence,
+            gaps: gotMemory ? [] : ["missing memory context"],
+            escalate_forced: "no",
+          },
+        },
+      ]);
+    },
+    async (baseUrl, getStats) => {
+      const report = await runTier1MemoryEval({
+        model: "stub-qwen",
+        base: baseUrl,
+        memoryRoot: `${repoRoot}/operating-memory`,
+        memoryMdPath,
+        recallFixtures,
+        questions: questions.slice(0, 4), // 4 questions across arms
+        arms: ["no-memory", "wiki", "bank", "wiki+bank"],
+        runs: 2,
+        concurrency: 1,
       });
-      return;
-    }
 
-    res.writeHead(404);
-    res.end();
-    inFlight--;
-  });
+      // Concurrency cap & stub contact verified
+      assert.strictEqual(getStats().maxInFlight, 1, `concurrency must be 1 (got ${getStats().maxInFlight})`);
+      assert.ok(getStats().calls >= 64, "stub server must serve all model turns");
 
-  let port = 0;
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      port = (server.address() as { port: number }).port;
-      resolve();
-    });
-  });
+      // Retrieval rate checks
+      assert.equal(report.arms["no-memory"].retrieval_rate, 0, "no-memory arm must have 0 retrieval");
+      assert.equal(report.arms["wiki"].retrieval_rate, 1, "wiki arm must retrieve 100%");
+      assert.equal(report.arms["bank"].retrieval_rate, 1, "bank arm must retrieve 100%");
+      assert.equal(report.arms["wiki+bank"].retrieval_rate, 1, "wiki+bank arm must retrieve 100%");
 
-  try {
-    const report = await runTier1MemoryEval({
-      model: "stub-qwen",
-      base: `http://127.0.0.1:${port}`,
-      memoryRoot: `${repoRoot}/operating-memory`,
-      memoryMdPath,
-      recallFixtures,
-      questions: questions.slice(0, 4), // 4 questions across arms
-      arms: ["no-memory", "wiki", "bank", "wiki+bank"],
-      runs: 2,
-      concurrency: 1,
-    });
+      // Use checks: each memory arm scores higher than no-memory
+      const noMemScore = report.arms["no-memory"].mean_score;
+      assert.ok(report.arms["wiki"].mean_score > noMemScore, "wiki must beat no-memory");
+      assert.ok(report.arms["bank"].mean_score > noMemScore, "bank must beat no-memory");
+      assert.ok(report.arms["wiki+bank"].mean_score > noMemScore, "wiki+bank must beat no-memory");
 
-    // Concurrency cap verified
-    assert.strictEqual(maxInFlight, 1, `concurrency must be 1 (got ${maxInFlight})`);
+      // Comparisons against baseline (no-memory)
+      assert.equal(report.comparisons.length, 3);
+      for (const comp of report.comparisons) {
+        assert.ok(comp.delta > 0, `${comp.baseline_arm} delta must be positive`);
+        assert.equal(comp.status, "discriminating");
+      }
 
-    // Retrieval rate checks
-    assert.equal(report.arms["no-memory"].retrieval_rate, 0, "no-memory arm must have 0 retrieval");
-    assert.equal(report.arms["wiki"].retrieval_rate, 1, "wiki arm must retrieve 100%");
-    assert.equal(report.arms["bank"].retrieval_rate, 1, "bank arm must retrieve 100%");
-    assert.equal(report.arms["wiki+bank"].retrieval_rate, 1, "wiki+bank arm must retrieve 100%");
-
-    // Use checks: each memory arm scores higher than no-memory
-    const noMemScore = report.arms["no-memory"].mean_score;
-    assert.ok(report.arms["wiki"].mean_score > noMemScore, "wiki must beat no-memory");
-    assert.ok(report.arms["bank"].mean_score > noMemScore, "bank must beat no-memory");
-    assert.ok(report.arms["wiki+bank"].mean_score > noMemScore, "wiki+bank must beat no-memory");
-
-    // Comparisons against baseline (no-memory)
-    assert.equal(report.comparisons.length, 3);
-    for (const comp of report.comparisons) {
-      assert.ok(comp.delta > 0, `${comp.baseline_arm} delta must be positive`);
-      assert.equal(comp.status, "discriminating");
-    }
-
-    // Report table output
-    const tables = formatMemoryReportTables(report);
-    assert.ok(tables.includes("Tier-1 Operating Memory Eval Summary"));
-    assert.ok(tables.includes("wiki+bank"));
-    assert.ok(tables.includes("discriminating"));
-  } finally {
-    server.close();
-  }
+      // Report table output
+      const tables = formatMemoryReportTables(report);
+      assert.ok(tables.includes("Tier-1 Operating Memory Eval Summary"));
+      assert.ok(tables.includes("wiki+bank"));
+      assert.ok(tables.includes("discriminating"));
+    },
+  );
 });
+

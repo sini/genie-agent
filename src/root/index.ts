@@ -29,7 +29,7 @@ import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
-import { tier1Launch } from "../tier1/launch.ts";
+import { tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 
 export interface ApproveControl {
@@ -166,7 +166,7 @@ export function main(configFile: string, io: Io, run?: Runner) {
   // pi reads its model from its agent dir; the key goes into a file there, never argv or env.
   const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
   const { baseUrl, api, id, keyFile } = c.model;
-  writeFileSync(`${agentDir}/models.json`, JSON.stringify({ providers: { genie: { baseUrl, api, apiKey: secret(keyFile), models: [{ id }] } } }));
+  writePiModelsJson(agentDir, { baseUrl, api, apiKey: secret(keyFile), id });
   const launch = tier1Launch({
     pi: c.pi,
     config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),

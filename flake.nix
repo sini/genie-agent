@@ -351,28 +351,46 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/tier1
-                    ./src/guard/verdict.ts
-                    ./src/supervisor/guard-client.ts
+                    ./src/supervisor
+                    ./src/bank
+                    ./src/guard
                     ./src/mirror
                     ./schemas
                     ./skills
                     ./prompts
+                    ./operating-memory
                     ./tests/tier1.test.ts
                     ./tests/tier1-draft.test.ts
                     ./tests/tier1-eval.test.ts
                     ./tests/tier1-questions.test.ts
+                    ./tests/memory-eval.test.ts
+                    ./tests/tier1-eval.ts
                     ./tests/fixtures/tier1-draft
                     ./tests/fixtures/tier1-eval
-                    ./tests/fixtures/memory-eval/questions.jsonl
+                    ./tests/fixtures/memory-eval
+                    ./tests/fixtures/supervisor
                   ];
                 };
               }
               ''
                 cd $src
+                export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
-                node --test --test-reporter=tap tests/tier1.test.ts tests/tier1-draft.test.ts tests/tier1-eval.test.ts tests/tier1-questions.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-reporter=tap tests/tier1.test.ts tests/tier1-draft.test.ts tests/tier1-eval.test.ts tests/tier1-questions.test.ts tests/memory-eval.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the draft parser accepts every valid reply and rejects every invalid one$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a degraded arm scores below real by more than paired bootstrap noise band$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: compareArms reports inside_noise_band when paired bootstrap CI crosses zero$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement$' $TMPDIR/tap && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] \
+                  && grep -q '^ok [0-9]* - oracle: the tool list is exactly the twelve$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle: the draft parser accepts every valid reply and rejects every invalid one$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle: a degraded arm scores below real by more than paired bootstrap noise band$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle: compareArms reports inside_noise_band when paired bootstrap CI crosses zero$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C2.3 (Cell 1): eval tool set and system prompt equal production tier1Launch byte-for-byte$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C2.3 (Cell 2): checkpointed run with --resume skips finished questions without calling pi$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C2.3 (Cell 3): unanswered question (pi settles without reply or times out) has draft undefined, score 0, and counts in n_missing$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - Oracle C2.3 (Amendment 2): recall without bank or with bank: support returns empty support results and recall_called: false; bank: memory returns fixture results and recall_called: true$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
+                  && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The tier-1 supervisor: one pi process per thread, so a fact planted in one thread is

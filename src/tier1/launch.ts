@@ -3,7 +3,7 @@
 // a skill's path for the model to `read`, and C1 confines `read` to worktrees, so each body goes in
 // through `--append-system-prompt` instead. pi's own discovery of extensions, skills, prompt
 // templates and context files is off.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { Launch } from "../supervisor/index.ts";
 import { CONFIG_ENV } from "./extension.ts";
 import { type Config, memoryPrompt } from "./index.ts";
@@ -11,6 +11,26 @@ import { type Config, memoryPrompt } from "./index.ts";
 export { memoryPrompt };
 
 const repo = new URL("../../", import.meta.url);
+
+// Write pi's models.json into agentDir so production and eval share identical provider/model defaults.
+export function writePiModelsJson(
+  agentDir: string,
+  model: { baseUrl: string; api?: string; apiKey?: string; id: string },
+): void {
+  writeFileSync(
+    `${agentDir}/models.json`,
+    JSON.stringify({
+      providers: {
+        genie: {
+          baseUrl: model.baseUrl,
+          api: model.api ?? "openai-completions",
+          apiKey: model.apiKey || "stub",
+          models: [{ id: model.id }],
+        },
+      },
+    }),
+  );
+}
 
 // Every skill under dir, in name order, as tier 1's system prompt carries it.
 export function skillsPrompt(dir = new URL("skills", repo).pathname): string {
@@ -26,6 +46,8 @@ export function tier1Launch(o: {
   config: (thread: string) => Config;
   // More pi arguments for the thread: its session (P2's sessionArgs), its model.
   args?: (thread: string) => string[];
+  // Path to tier 1's system prompt file (default: prompts/tier1.md).
+  prompt?: string;
   // If true, seeds memoryPrompt into the system prompt. Default: false.
   memory?: boolean;
   memoryPath?: string;
@@ -38,7 +60,7 @@ export function tier1Launch(o: {
     "--mode", "rpc",
     "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
     "-e", new URL("src/tier1/extension.ts", repo).pathname,
-    "--system-prompt", new URL("prompts/tier1.md", repo).pathname,
+    "--system-prompt", o.prompt ?? new URL("prompts/tier1.md", repo).pathname,
     ...appendPrompts.flatMap((p) => ["--append-system-prompt", p]),
   ];
   return (thread) => ({
@@ -47,3 +69,4 @@ export function tier1Launch(o: {
     env: { [CONFIG_ENV]: JSON.stringify(o.config(thread)) },
   });
 }
+

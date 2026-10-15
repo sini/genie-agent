@@ -5,12 +5,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
-import { BUILTIN_TOOLS, type Host, type Pi, TOOLS, type ToolCall, tier1 } from "../src/tier1/index.ts";
-import { tier1Tools } from "../src/tier1/eval.ts";
+import { type Host, type Pi, TOOLS, type ToolCall, tier1 } from "../src/tier1/index.ts";
+import { tier1Launch, writePiModelsJson } from "../src/tier1/launch.ts";
 import { errors, load } from "../src/tier1/schema.ts";
 import { type GuardClient, webScreen } from "../src/supervisor/guard-client.ts";
+import { type Record as PiRecord, Supervisor } from "../src/supervisor/index.ts";
 import type { Envelope } from "../src/guard/verdict.ts";
 import { worktreeFor } from "../src/mirror/index.ts";
+import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
 const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-tier1-test-`));
 const worktreeRoot = `${tmp}/worktrees`;
@@ -143,9 +145,44 @@ test("oracle: the tool list is exactly the twelve", async () => {
   const twelve = ["clone", "escalate", "eval", "find", "grep", "ls", "propose", "read", "recall", "reply", "web_fetch", "web_search"];
   assert.deepEqual([...t.active()].sort(), twelve);
   assert.deepEqual([...t.tools.keys()].sort(), twelve.filter((n) => !["read", "grep", "find", "ls"].includes(n)));
-  assert.deepEqual(tier1Tools().map((s) => s.function.name), [...TOOLS]);
-  assert.deepEqual(tier1Tools().map((s) => s.function.name).sort(), twelve);
   for (const n of ["bash", "edit", "write", "codemode", "lsp"]) assert.equal((await t.call(n, {})).result?.block, true, n);
+
+  // Verify what real pi actually exposes over the wire when launched via tier1Launch (Amendment 1)
+  const model = await stubModel();
+  const agentDir = mkdtempSync(`${tmp}/pi-agent-`);
+  writePiModelsJson(agentDir, { baseUrl: model.url, id: "m" });
+  const events: PiRecord[] = [];
+  const launch = tier1Launch({
+    pi: process.env.PI ?? "pi",
+    config: () => ({ root, searxngUrl: "http://127.0.0.1:1", cluster: [] }),
+    args: () => ["--model", "genie/m", "--no-session"],
+  });
+  const s = new Supervisor(
+    (th) => {
+      const l = launch(th);
+      return { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+    },
+    (_th, r) => events.push(r),
+    () => host([], allow),
+  );
+  try {
+    await s.command("t1", { type: "prompt", message: JSON.stringify({ tool: "recall", args: { query: "q" } }) });
+    while (!events.some((r) => r.type === "agent_settled")) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(model.requests.length >= 1, "loopback stub model must receive pi's request");
+    const piExposed = (model.requests[0].tools ?? []) as { type: string; function: { name: string; parameters: any } }[];
+    assert.deepEqual(piExposed.map((s) => s.function.name), [...TOOLS]);
+    assert.deepEqual(piExposed.map((s) => s.function.name).sort(), twelve);
+    for (const builtinName of ["read", "grep", "find", "ls"]) {
+      const b = piExposed.find((s) => s.function.name === builtinName);
+      assert.ok(b, `pi must expose built-in tool ${builtinName}`);
+      assert.equal(b.function.parameters?.type, "object");
+    }
+  } finally {
+    await s.shutdown();
+    await model.close();
+  }
 });
 
 test("pi's RPC bash command is refused", async () => {
@@ -161,14 +198,6 @@ test("no tool parameter is a boolean (K4)", () => {
   for (const [name, t] of load1().tools) {
     walk(t.parameters);
     assert.ok(!JSON.stringify(t.parameters).includes("$ref"), name);
-  }
-  for (const [name, t] of Object.entries(BUILTIN_TOOLS)) {
-    walk(t.parameters);
-    assert.ok(!JSON.stringify(t.parameters).includes("$ref"), name);
-  }
-  for (const t of tier1Tools()) {
-    walk(t.function.parameters);
-    assert.ok(!JSON.stringify(t.function.parameters).includes("$ref"), t.function.name);
   }
 });
 
