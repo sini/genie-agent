@@ -408,3 +408,112 @@ test("oracle: exploratory correctness predictors calculate AUROC and lift on dis
   assert(codePredictor.lift > 0, "code presence must produce positive lift");
   assert.strictEqual(codePredictor.auroc, 1.0, "perfect separation must yield AUROC 1.0");
 });
+
+test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement", async () => {
+  const { mkdtempSync, mkdirSync, realpathSync, writeFileSync } = await import("node:fs");
+  const { TOOLS } = await import("../src/tier1/index.ts");
+  const { runArm, tier1Tools } = await import("../src/tier1/eval.ts");
+
+  const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c21-builtin-`));
+  mkdirSync(`${tmp}/sub`, { recursive: true });
+  writeFileSync(`${tmp}/sub/mod.nix`, "{ services.foo.enable = true; }\n");
+
+  const tools = tier1Tools();
+  assert.deepEqual(
+    tools.map((t) => t.function.name),
+    [...TOOLS],
+    "tier1Tools() must match production's 12 TOOLS",
+  );
+
+  let offeredTools: string[] = [];
+  let toolOutputs: Record<string, any> = {};
+
+  const armRes = await runArm(
+    "real",
+    new URL("prompts/tier1.md", root).pathname,
+    {
+      model: "stub-qwen",
+      base: "http://127.0.0.1:1",
+      promptArms: { real: "", "no-steps": "", "no-citations": "" },
+      worktreeRoot: tmp,
+      questions: [
+        {
+          id: "q-builtin",
+          question: "How is services.foo.enable configured?",
+          expected_claims: ["services.foo.enable"],
+          expected_citations: ["sub/mod.nix"],
+        },
+      ],
+      fetchFn: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        offeredTools = (body.tools ?? []).map((t: any) => t.function.name);
+        const msgs = body.messages ?? [];
+        if (msgs.length === 2) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "tool_calls",
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [
+                      { id: "c_ls", type: "function", function: { name: "ls", arguments: JSON.stringify({ path: "." }) } },
+                      { id: "c_find", type: "function", function: { name: "find", arguments: JSON.stringify({ pattern: "*.nix" }) } },
+                      { id: "c_grep", type: "function", function: { name: "grep", arguments: JSON.stringify({ pattern: "services.foo" }) } },
+                      { id: "c_read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "sub/mod.nix" }) } },
+                      { id: "c_esc", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "/etc/passwd" }) } },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        for (const m of msgs.filter((m: any) => m.role === "tool")) {
+          toolOutputs[m.tool_call_id] = JSON.parse(m.content);
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c_reply",
+                      type: "function",
+                      function: {
+                        name: "reply",
+                        arguments: JSON.stringify({
+                          answer: `From sub/mod.nix: ${toolOutputs.c_read?.content ?? ""}`,
+                          confidence: 0.9,
+                          gaps: [],
+                          escalate_forced: "no",
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    },
+    tools,
+  );
+
+  assert.deepEqual(offeredTools, [...TOOLS]);
+  assert.deepEqual(toolOutputs.c_ls.entries, ["sub/"]);
+  assert.deepEqual(toolOutputs.c_find.matches, ["sub/mod.nix"]);
+  assert.match(toolOutputs.c_grep.content, /sub\/mod\.nix:1:\{ services\.foo\.enable = true; \}/);
+  assert.equal(toolOutputs.c_read.content, "{ services.foo.enable = true; }\n");
+  assert.match(toolOutputs.c_esc.error, /refused: \/etc\/passwd is outside the thread's worktrees and memory mount/);
+  assert.equal(armRes.runs[0].questions[0].correctness, 1);
+  assert.equal(armRes.runs[0].questions[0].citation, 1);
+});

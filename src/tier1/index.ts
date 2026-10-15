@@ -4,11 +4,26 @@
 // worktree; the web tools reach only public addresses, and guard-in screens what they return
 // through the Host, so tier 1 holds no guard client.
 // Nothing else runs: every other tool call is blocked, and so is pi's RPC `bash` command.
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { checkUrl } from "../mirror/index.ts";
 import { errors, forModel, fromModel, load, type Schema } from "./schema.ts";
 import { fetchText, refusedList, type Resolver, search, systemResolver } from "./web.ts";
+
+// Operating memory index at memoryPath, as tier 1's system prompt carries it.
+// Rewrites relative markdown links to `/memory/<slug>` so tier 1 can pass them directly to read/grep/find/ls.
+// Refuses if missing: no silent fallback (Amendment 2).
+export function memoryPrompt(memoryPath = "/memory/MEMORY.md"): string {
+  try {
+    const content = readFileSync(memoryPath, "utf8").replace(
+      /\]\((?!https?:\/\/|\/)([^)]+)\)/g,
+      "](/memory/$1)",
+    );
+    return `# Operating Memory Index\n\nOperating-memory files are mounted read-only under \`/memory\`. Pass \`/memory/<slug>\` (for example, \`/memory/workflow/orchestrator-operating-rules.md\`) to \`read\`, \`grep\`, \`find\`, or \`ls\`.\n\n${content}\n`;
+  } catch {
+    throw new Error(`memory index not found: ${memoryPath}`);
+  }
+}
 
 export const BUILTINS = ["read", "grep", "find", "ls"] as const;
 export const TOOLS = [
@@ -92,22 +107,94 @@ const object = (properties: Schema): Schema => ({
 });
 const nonEmpty = { type: "string", minLength: 1 };
 
+// Canonical schemas for pi's four built-in source tools (read, grep, find, ls), mapped through
+// forModel (K4: no boolean parameters) so tier1() and tier1Tools() share one 12-tool definition.
+export const BUILTIN_TOOLS: Record<
+  (typeof BUILTINS)[number],
+  { description: string; parameters: Schema }
+> = {
+  read: {
+    description:
+      "Read the contents of a file. Relative paths resolve inside a cloned worktree; operating-memory files are under /memory/...",
+    parameters: forModel({
+      type: "object",
+      additionalProperties: false,
+      required: ["path"],
+      properties: {
+        path: { type: "string", description: "Path to the file to read (worktree-relative, or /memory/...)" },
+        offset: { type: "number", description: "Line number to start reading from (1-indexed)" },
+        limit: { type: "number", description: "Maximum number of lines to read" },
+      },
+    }),
+  },
+  grep: {
+    description:
+      "Search file contents for a pattern. Returns matching lines with file paths and line numbers.",
+    parameters: forModel({
+      type: "object",
+      additionalProperties: false,
+      required: ["pattern"],
+      properties: {
+        pattern: { type: "string", description: "Search pattern (regex or literal string)" },
+        path: { type: "string", description: "Directory or file to search (default: worktree root, or /memory/...)" },
+        glob: { type: "string", description: "Filter files by glob pattern, e.g. '*.nix'" },
+        ignoreCase: { type: "boolean", description: "Case-insensitive search" },
+        literal: { type: "boolean", description: "Treat pattern as literal string instead of regex" },
+        context: { type: "number", description: "Number of lines to show before and after each match" },
+        limit: { type: "number", description: "Maximum number of matches to return" },
+      },
+    }),
+  },
+  find: {
+    description:
+      "Search for files by glob pattern. Returns matching file paths relative to the search directory.",
+    parameters: forModel({
+      type: "object",
+      additionalProperties: false,
+      required: ["pattern"],
+      properties: {
+        pattern: { type: "string", description: "Glob pattern to match files, e.g. '*.nix' or '**/*.md'" },
+        path: { type: "string", description: "Directory to search in (default: worktree root, or /memory/...)" },
+        limit: { type: "number", description: "Maximum number of results to return" },
+      },
+    }),
+  },
+  ls: {
+    description:
+      "List directory contents. Includes dotfiles; directory entries have a trailing '/'.",
+    parameters: forModel({
+      type: "object",
+      additionalProperties: false,
+      required: [],
+      properties: {
+        path: { type: "string", description: "Directory to list (default: worktree root, or /memory/...)" },
+        limit: { type: "number", description: "Maximum number of entries to return" },
+      },
+    }),
+  },
+};
+
 // Characters pi's path normalisation rewrites (dist/utils/paths.js normalizePath): a path holding
 // one would be checked as one file and opened as another.
 const UNICODE_SPACES = /[  -   　]/;
 
-// The real path `raw` names inside root or memoryRoot, or a refusal. Relative paths are taken from root, and
-// symlinks and `..` are resolved before the check.
+// The real path `raw` names inside root or memoryRoot, or a refusal.
+// Relative paths resolve against root (the worktree) only — never falling back to memoryRoot.
+// Absolute `/memory` and `/memory/...` paths map to memoryRoot without requiring a worktree.
+// Symlinks and `..` are resolved before the containment check.
 export function confine(root: string, raw: unknown, memoryRoot = "/memory"): string {
   const p = raw === undefined || raw === "" ? "." : raw;
   if (typeof p !== "string") throw new Error("the path is not a string");
   if (/^[A-Za-z][A-Za-z0-9+.-]*:|^\/\//.test(p)) throw new Error(`${p} is a URL, not a path`);
   if (/^[~@]/.test(p) || /[\x00-\x1f\x7f]/.test(p) || UNICODE_SPACES.test(p)) throw new Error(`${p} is not a plain path`);
-  let top: string;
-  try {
-    top = realpathSync(root);
-  } catch {
-    throw new Error("no worktree yet: clone a repository first");
+
+  let top: string | undefined;
+  if (root) {
+    try {
+      top = realpathSync(root);
+    } catch {
+      top = undefined;
+    }
   }
   let memTop: string | undefined;
   if (memoryRoot) {
@@ -117,13 +204,49 @@ export function confine(root: string, raw: unknown, memoryRoot = "/memory"): str
       memTop = undefined;
     }
   }
+
+  if (!isAbsolute(p)) {
+    if (top === undefined) {
+      throw new Error("no worktree yet: clone a repository first; operating-memory files are under /memory/...");
+    }
+    const candidate = resolve(top, p);
+    if (candidate !== top && !candidate.startsWith(`${top}/`)) {
+      throw new Error(`${p} is outside the thread's worktrees and memory mount`);
+    }
+    let real: string;
+    try {
+      real = realpathSync(candidate);
+    } catch {
+      throw new Error(`${p} does not exist`);
+    }
+    if (real !== top && !real.startsWith(`${top}/`)) {
+      throw new Error(`${p} is outside the thread's worktrees and memory mount`);
+    }
+    if (UNICODE_SPACES.test(real)) throw new Error(`${p} is not a plain path`);
+    return real;
+  }
+
+  let candidate: string;
+  if (p === "/memory" || p.startsWith("/memory/")) {
+    if (memTop === undefined) {
+      throw new Error(`${p} is outside the thread's worktrees and memory mount`);
+    }
+    const rel = p.slice("/memory".length).replace(/^\/+/, "");
+    candidate = rel ? resolve(memTop, rel) : memTop;
+    if (candidate !== memTop && !candidate.startsWith(`${memTop}/`)) {
+      throw new Error(`${p} is outside the thread's worktrees and memory mount`);
+    }
+  } else {
+    candidate = resolve(p);
+  }
+
   let real: string;
   try {
-    real = realpathSync(isAbsolute(p) ? p : resolve(top, p));
+    real = realpathSync(candidate);
   } catch {
     throw new Error(`${p} does not exist`);
   }
-  const inWorktree = real === top || real.startsWith(`${top}/`);
+  const inWorktree = top !== undefined && (real === top || real.startsWith(`${top}/`));
   const inMemory = memTop !== undefined && (real === memTop || real.startsWith(`${memTop}/`));
   if (!inWorktree && !inMemory) throw new Error(`${p} is outside the thread's worktrees and memory mount`);
   if (UNICODE_SPACES.test(real)) throw new Error(`${p} is not a plain path`);

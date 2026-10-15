@@ -6,7 +6,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import type { Launch } from "../supervisor/index.ts";
 import { CONFIG_ENV } from "./extension.ts";
-import type { Config } from "./index.ts";
+import { type Config, memoryPrompt } from "./index.ts";
+
+export { memoryPrompt };
 
 const repo = new URL("../../", import.meta.url);
 
@@ -16,17 +18,6 @@ export function skillsPrompt(dir = new URL("skills", repo).pathname): string {
     .sort()
     .map((d) => `<skill name="${d}">\n${readFileSync(`${dir}/${d}/SKILL.md`, "utf8")}</skill>`);
   return `# Skills\n\n${skills.join("\n\n")}\n`;
-}
-
-// Operating memory index at memoryPath, as tier 1's system prompt carries it.
-// Refuses if missing: no silent fallback (Amendment 2).
-export function memoryPrompt(memoryPath = "/memory/MEMORY.md"): string {
-  try {
-    const content = readFileSync(memoryPath, "utf8");
-    return `# Operating Memory Index\n\n${content}\n`;
-  } catch {
-    throw new Error(`memory index not found: ${memoryPath}`);
-  }
 }
 
 export function tier1Launch(o: {

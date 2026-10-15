@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { type Draft, draftOf, type Message } from "./draft.ts";
-import { type Pi, tier1 } from "./index.ts";
+import { BUILTINS, BUILTIN_TOOLS, confine, memoryPrompt, type Pi, TOOLS, tier1 } from "./index.ts";
 
 const repoRoot = new URL("../../", import.meta.url);
 
@@ -140,6 +141,8 @@ export interface EvalOptions {
   apiKey?: string;
   promptArms: Record<PromptArm, string>;
   questions: QuestionFixture[];
+  worktreeRoot?: string;
+  memoryRoot?: string;
   runs?: number;
   concurrency?: number;
   turns?: number;
@@ -148,10 +151,12 @@ export interface EvalOptions {
 }
 
 export function tier1Tools(): { type: "function"; function: { name: string; description: string; parameters: unknown } }[] {
-  const tools: { type: "function"; function: { name: string; description: string; parameters: unknown } }[] = [];
+  const byName = new Map<string, { description: string; parameters: unknown }>(
+    Object.entries(BUILTIN_TOOLS),
+  );
   const recorder = {
     registerTool: ({ name, description, parameters }) =>
-      tools.push({ type: "function", function: { name, description, parameters } }),
+      byName.set(name, { description, parameters }),
     on() {},
     setActiveTools() {},
   } as Pi;
@@ -160,7 +165,123 @@ export function tier1Tools(): { type: "function"; function: { name: string; desc
     { root: "/nonexistent", searxngUrl: "http://127.0.0.1:1", cluster: [] },
     { host: { eval: never, recall: never, escalate: never, reply: never, propose: never, clone: never, screen: never } },
   )(recorder);
-  return tools;
+  return TOOLS.map((name) => {
+    const def = byName.get(name);
+    if (!def) throw new Error(`missing tool schema for ${name}`);
+    return { type: "function", function: { name, description: def.description, parameters: def.parameters } };
+  });
+}
+
+function globMatch(pattern: string, target: string): boolean {
+  const regexSrc = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "(?:.+/)?")
+    .replace(/\*\*/g, ".*")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]");
+  return new RegExp(`^${regexSrc}$`).test(target);
+}
+
+// Execute one of pi's four built-in source tools (read, grep, find, ls) against real files on disk,
+// confined by production confine(worktreeRoot, input.path, memoryRoot).
+export function executeBuiltinTool(
+  fnName: (typeof BUILTINS)[number],
+  toolArgs: Record<string, unknown>,
+  worktreeRoot: string,
+  memoryRoot: string,
+): { result: Record<string, unknown>; confinedPath?: string } {
+  let confinedPath: string;
+  try {
+    confinedPath = confine(worktreeRoot, toolArgs.path, memoryRoot);
+  } catch (err) {
+    return { result: { error: `refused: ${(err as Error).message}` } };
+  }
+
+  try {
+    if (fnName === "read") {
+      const raw = readFileSync(confinedPath, "utf8");
+      const lines = raw.split("\n");
+      const start = typeof toolArgs.offset === "number" && toolArgs.offset > 1 ? Math.floor(toolArgs.offset) - 1 : 0;
+      const count = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : lines.length;
+      const content = lines.slice(start, start + count).join("\n");
+      return { result: { content }, confinedPath };
+    }
+    if (fnName === "ls") {
+      const entries = readdirSync(confinedPath, { withFileTypes: true })
+        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+        .sort();
+      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : entries.length;
+      const sliced = entries.slice(0, limit);
+      return { result: { entries: sliced, content: sliced.join("\n") }, confinedPath };
+    }
+    if (fnName === "find") {
+      const pattern = String(toolArgs.pattern ?? "*");
+      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : 200;
+      const matches: string[] = [];
+      const walk = (dir: string, relBase: string) => {
+        if (matches.length >= limit) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          if (entry.name === ".git") continue;
+          const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+          const full = `${dir}/${entry.name}`;
+          if (globMatch(pattern, rel) || globMatch(pattern, entry.name)) {
+            matches.push(rel);
+            if (matches.length >= limit) return;
+          }
+          if (entry.isDirectory()) walk(full, rel);
+        }
+      };
+      const st = statSync(confinedPath);
+      if (st.isDirectory()) walk(confinedPath, "");
+      else if (globMatch(pattern, confinedPath.split("/").pop() ?? "")) matches.push(confinedPath);
+      return { result: { matches, content: matches.join("\n") }, confinedPath };
+    }
+    if (fnName === "grep") {
+      const patStr = String(toolArgs.pattern ?? "");
+      if (!patStr) return { result: { error: "pattern is required" } };
+      const ignoreCase = toolArgs.ignoreCase === "yes" || toolArgs.ignoreCase === true;
+      const literal = toolArgs.literal === "yes" || toolArgs.literal === true;
+      const source = literal ? patStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : patStr;
+      const regex = new RegExp(source, ignoreCase ? "i" : "");
+      const glob = typeof toolArgs.glob === "string" ? toolArgs.glob : undefined;
+      const limit = typeof toolArgs.limit === "number" && toolArgs.limit > 0 ? Math.floor(toolArgs.limit) : 100;
+      const matches: string[] = [];
+      const searchFile = (filePath: string, label: string) => {
+        if (matches.length >= limit) return;
+        const text = readFileSync(filePath, "utf8");
+        const lines = text.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (regex.test(lines[i])) {
+            matches.push(`${label}:${i + 1}:${lines[i]}`);
+            if (matches.length >= limit) return;
+          }
+        }
+      };
+      const st = statSync(confinedPath);
+      if (st.isFile()) {
+        searchFile(confinedPath, confinedPath);
+      } else if (st.isDirectory()) {
+        const walk = (dir: string, relBase: string) => {
+          if (matches.length >= limit) return;
+          for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            if (entry.name === ".git") continue;
+            const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+            const full = `${dir}/${entry.name}`;
+            if (entry.isDirectory()) {
+              walk(full, rel);
+            } else if (entry.isFile() && (!glob || globMatch(glob, rel) || globMatch(glob, entry.name))) {
+              searchFile(full, rel);
+            }
+          }
+        };
+        walk(confinedPath, "");
+      }
+      return { result: { matches, content: matches.join("\n") }, confinedPath };
+    }
+    return { result: { error: `${fnName} is unavailable in this evaluation` } };
+  } catch (err) {
+    return { result: { error: (err as Error).message } };
+  }
 }
 
 export function scoreQuestion(q: QuestionFixture, last: Message, calls: string[]): {
@@ -587,11 +708,31 @@ export async function runArm(
       if (!toolCalls.length || toolCalls.some((c: any) => c.function.name === "reply")) break;
       messages.push({ role: "assistant", content: last.content ?? "", tool_calls: toolCalls });
       for (const c of toolCalls) {
-        messages.push({
-          role: "tool",
-          tool_call_id: c.id,
-          content: JSON.stringify({ error: `${c.function.name} is unavailable in this evaluation` }),
-        });
+        const fnName = c.function.name;
+        let toolArgs: Record<string, unknown> = {};
+        try {
+          toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : (c.function.arguments ?? {});
+        } catch {}
+
+        if ((BUILTINS as readonly string[]).includes(fnName)) {
+          const { result } = executeBuiltinTool(
+            fnName as (typeof BUILTINS)[number],
+            toolArgs,
+            options.worktreeRoot ?? "",
+            options.memoryRoot ?? "",
+          );
+          messages.push({
+            role: "tool",
+            tool_call_id: c.id,
+            content: JSON.stringify(result),
+          });
+        } else {
+          messages.push({
+            role: "tool",
+            tool_call_id: c.id,
+            content: JSON.stringify({ error: `${fnName} is unavailable in this evaluation` }),
+          });
+        }
       }
     }
 
@@ -946,6 +1087,7 @@ export interface MemoryEvalOptions {
   base: string;
   apiKey?: string;
   basePromptPath?: string;
+  worktreeRoot?: string;
   memoryRoot?: string;
   memoryMdPath?: string;
   recallFixturesPath?: string;
@@ -961,14 +1103,7 @@ export interface MemoryEvalOptions {
   fetchFn?: typeof fetch;
 }
 
-export function memoryPromptFromIndex(memoryMdPath: string): string {
-  try {
-    const content = readFileSync(memoryMdPath, "utf8");
-    return `# Operating Memory Index\n\n${content}\n`;
-  } catch {
-    throw new Error(`memory index not found: ${memoryMdPath}`);
-  }
-}
+export { memoryPrompt as memoryPromptFromIndex } from "./index.ts";
 
 export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<MemoryEvalReport> {
   let allQuestions = [...options.questions];
@@ -986,9 +1121,10 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
     }
   }
 
-  const memoryMdPath =
-    options.memoryMdPath ??
-    `${options.memoryRoot ?? new URL("../../operating-memory", import.meta.url).pathname}/MEMORY.md`;
+  const memoryDir =
+    options.memoryRoot ??
+    (options.memoryMdPath ? dirname(options.memoryMdPath) : new URL("../../operating-memory", import.meta.url).pathname);
+  const memoryMdPath = options.memoryMdPath ?? `${memoryDir}/MEMORY.md`;
 
   let recallFixtures = options.recallFixtures;
   if (!recallFixtures) {
@@ -1036,9 +1172,11 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
   const armResults: Record<string, MemoryArmResult> = {};
 
   for (const arm of armNames) {
+    const hasWikiMount = arm === "wiki" || arm === "wiki+bank";
+    const effectiveMemoryRoot = hasWikiMount ? memoryDir : "";
     let system = `${basePrompt}\n\n${skillsPrompt()}`;
-    if (arm === "wiki" || arm === "wiki+bank") {
-      system = `${system}\n\n${memoryPromptFromIndex(memoryMdPath)}`;
+    if (hasWikiMount) {
+      system = `${system}\n\n${memoryPrompt(memoryMdPath)}`;
     }
 
     async function completeTurn(messages: unknown[]): Promise<{ message: Message; finish: string }> {
@@ -1088,29 +1226,29 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
           const fnName = c.function.name;
           let toolArgs: any = {};
           try {
-            toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : c.function.arguments;
+            toolArgs = typeof c.function.arguments === "string" ? JSON.parse(c.function.arguments) : (c.function.arguments ?? {});
           } catch {}
 
-          if (fnName === "read") {
-            const p = toolArgs.path ?? "";
-            const matchesCitation = (q.expected_citations ?? []).some((cite) => p.includes(cite));
-
-            let fileContent = "";
-            if (arm === "wiki" || arm === "wiki+bank") {
-              try {
-                fileContent = readFileSync(p, "utf8");
-                if (matchesCitation) readCalled = true;
-              } catch {
-                fileContent = `[wiki content for ${p}]`;
-                if (matchesCitation) readCalled = true;
-              }
-            } else {
-              fileContent = `refused: ${p} is outside the thread's worktrees`;
+          if ((BUILTINS as readonly string[]).includes(fnName)) {
+            const { result, confinedPath } = executeBuiltinTool(
+              fnName as (typeof BUILTINS)[number],
+              toolArgs,
+              options.worktreeRoot ?? "",
+              effectiveMemoryRoot,
+            );
+            if (confinedPath && !("error" in result)) {
+              const matchesCitation = (q.expected_citations ?? []).some(
+                (cite) =>
+                  confinedPath.endsWith(`/${cite}`) ||
+                  confinedPath === cite ||
+                  (fnName === "grep" && typeof result.content === "string" && result.content.includes(cite)),
+              );
+              if (matchesCitation) readCalled = true;
             }
             messages.push({
               role: "tool",
               tool_call_id: c.id,
-              content: JSON.stringify({ content: fileContent }),
+              content: JSON.stringify(result),
             });
           } else if (fnName === "recall") {
             const matchesCitation = (q.expected_citations ?? []).some((cite) =>

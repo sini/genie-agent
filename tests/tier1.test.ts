@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
-import { type Host, type Pi, type ToolCall, tier1 } from "../src/tier1/index.ts";
+import { BUILTIN_TOOLS, type Host, type Pi, TOOLS, type ToolCall, tier1 } from "../src/tier1/index.ts";
+import { tier1Tools } from "../src/tier1/eval.ts";
 import { errors, load } from "../src/tier1/schema.ts";
 import { type GuardClient, webScreen } from "../src/supervisor/guard-client.ts";
 import type { Envelope } from "../src/guard/verdict.ts";
@@ -142,6 +143,8 @@ test("oracle: the tool list is exactly the twelve", async () => {
   const twelve = ["clone", "escalate", "eval", "find", "grep", "ls", "propose", "read", "recall", "reply", "web_fetch", "web_search"];
   assert.deepEqual([...t.active()].sort(), twelve);
   assert.deepEqual([...t.tools.keys()].sort(), twelve.filter((n) => !["read", "grep", "find", "ls"].includes(n)));
+  assert.deepEqual(tier1Tools().map((s) => s.function.name), [...TOOLS]);
+  assert.deepEqual(tier1Tools().map((s) => s.function.name).sort(), twelve);
   for (const n of ["bash", "edit", "write", "codemode", "lsp"]) assert.equal((await t.call(n, {})).result?.block, true, n);
 });
 
@@ -158,6 +161,14 @@ test("no tool parameter is a boolean (K4)", () => {
   for (const [name, t] of load1().tools) {
     walk(t.parameters);
     assert.ok(!JSON.stringify(t.parameters).includes("$ref"), name);
+  }
+  for (const [name, t] of Object.entries(BUILTIN_TOOLS)) {
+    walk(t.parameters);
+    assert.ok(!JSON.stringify(t.parameters).includes("$ref"), name);
+  }
+  for (const t of tier1Tools()) {
+    walk(t.function.parameters);
+    assert.ok(!JSON.stringify(t.function.parameters).includes("$ref"), t.function.name);
   }
 });
 

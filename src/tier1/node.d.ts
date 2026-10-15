@@ -36,7 +36,15 @@ declare module "node:net" {
     check(address: string, type: "ipv4" | "ipv6"): boolean;
   }
 }
+declare module "node:fs" {
+  interface Dirent {
+    isDirectory(): boolean;
+  }
+  export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
+  export function statSync(path: string): { isFile(): boolean; isDirectory(): boolean; mtimeMs: number };
+}
 declare module "node:path" {
+  export function dirname(path: string): string;
   export function isAbsolute(path: string): boolean;
   export function resolve(...paths: string[]): string;
 }

@@ -425,17 +425,18 @@ test("Oracle C2.2.1: a live run with a fixture miss proceeds and reports retriev
   assert.match(tables, new RegExp(`retrieval_misses: \\["${subset[0].id}"\\]`));
 });
 
-// --- System Prompt & Launch Integration (Amendment 2) ---
-test("Amendment 2: memoryPrompt refuses missing index without silent fallback, and tier1Launch seeds conditionally", () => {
-  // Existing memory index loads properly
+// --- System Prompt & Launch Integration (Amendment 2 & Unit C2.2.2 Item 2) ---
+test("Amendment 2: memoryPrompt refuses missing index without silent fallback, renders /memory/<slug> links, and tier1Launch seeds conditionally", () => {
+  // Existing memory index loads properly and rewrites relative links to /memory/<slug>
   const prompt = memoryPrompt(memoryMdPath);
   assert.ok(prompt.startsWith("# Operating Memory Index\n\n"));
-  assert.ok(prompt.includes("workflow/orchestrator-operating-rules.md"));
+  assert.ok(prompt.includes("](/memory/workflow/orchestrator-operating-rules.md)"));
+  assert.ok(!prompt.includes("](workflow/orchestrator-operating-rules.md)"));
 
   // Non-existent path throws naming the missing path
   assert.throws(
     () => memoryPrompt("/nonexistent/MEMORY.md"),
-    /memory index not found: \/nonexistent\/MEMORY.md/,
+    /memory index not found: \/nonexistent\/MEMORY\.md/,
   );
 
   // tier1Launch without memory: no memory prompt in args
@@ -458,6 +459,220 @@ test("Amendment 2: memoryPrompt refuses missing index without silent fallback, a
   assert.ok(memArgs.some((a) => a.includes("# Operating Memory Index")));
 });
 
+// --- Oracle C2.2.2 (Item 2 / Oracle 3 revised): Explicit /memory/... Confinement & No Existence Fallback ---
+test("Oracle C2.2.2 (Item 2): /memory/... resolves under memoryRoot with no worktree; relative path with no worktree errors with /memory/... hint; relative path never falls back to memoryRoot", () => {
+  const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c222-confine-`));
+  const worktree = `${tmp}/worktree`;
+  const memory = `${tmp}/memory`;
+  const outside = `${tmp}/outside`;
+
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(`${memory}/traps`, { recursive: true });
+  mkdirSync(`${memory}/workflow`, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+
+  writeFileSync(`${memory}/traps/x.md`, "trap x content");
+  writeFileSync(`${memory}/workflow/x.md`, "workflow x content");
+  writeFileSync(`${outside}/secret.txt`, "secret");
+
+  // 1. /memory/traps/x.md resolves under memoryRoot with NO worktree
+  assert.equal(
+    confine(`${tmp}/no-worktree-yet`, "/memory/traps/x.md", memory),
+    `${memory}/traps/x.md`,
+  );
+  assert.equal(
+    confine("", "/memory/traps/x.md", memory),
+    `${memory}/traps/x.md`,
+  );
+
+  // 2. A relative workflow/x.md with NO worktree errors with the /memory/... hint
+  assert.throws(
+    () => confine(`${tmp}/no-worktree-yet`, "workflow/x.md", memory),
+    /no worktree yet: clone a repository first; operating-memory files are under \/memory\/\.\.\./,
+  );
+
+  // 3. No existence-based fallback: when worktree exists and lacks workflow/x.md, relative workflow/x.md
+  //    MUST fail with "does not exist" and NEVER resolve under memoryRoot
+  assert.throws(
+    () => confine(worktree, "workflow/x.md", memory),
+    /workflow\/x\.md does not exist/,
+  );
+
+  // 4. /etc/passwd and a .. escape out of /memory are refused (with or without a worktree)
+  assert.throws(
+    () => confine(`${tmp}/no-worktree-yet`, "/etc/passwd", memory),
+    /\/etc\/passwd is outside the thread's worktrees and memory mount/,
+  );
+  assert.throws(
+    () => confine(`${tmp}/no-worktree-yet`, "/memory/../outside/secret.txt", memory),
+    /\/memory\/\.\.\/outside\/secret\.txt is outside the thread's worktrees and memory mount/,
+  );
+});
+
+// --- Oracle C2.2.2 (Item 3): Real Reads & Refusal of Nonexistent / Relative / Escaped Paths ---
+test("Oracle C2.2.2 (Item 3): eval read serves real bytes from operating-memory via /memory/<slug> and records read_called: false on failed or escaped reads", async () => {
+  const q1 = questions[0]; // workflow/orchestrator-operating-rules.md
+  const cite = q1.expected_citations![0];
+  const expectedBytes = readFileSync(`${repoRoot}/operating-memory/${cite}`, "utf8");
+
+  // 1. Valid read via /memory/<slug> returns exact file bytes from operating-memory/ and sets read_called: true
+  let observedReadContent = "";
+  const goodReport = await runTier1MemoryEval({
+    model: "stub-qwen",
+    base: "http://127.0.0.1:1",
+    memoryRoot: `${repoRoot}/operating-memory`,
+    memoryMdPath,
+    recallFixtures,
+    questions: [q1],
+    arms: ["wiki"],
+    runs: 1,
+    fetchFn: async (_url, init) => {
+      const msgs = JSON.parse(String(init?.body ?? "{}")).messages ?? [];
+      if (msgs.length === 2) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c1",
+                      type: "function",
+                      function: { name: "read", arguments: JSON.stringify({ path: `/memory/${cite}` }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      const toolMsg = msgs.find((m: any) => m.role === "tool");
+      observedReadContent = JSON.parse(toolMsg.content).content;
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "c2",
+                    type: "function",
+                    function: {
+                      name: "reply",
+                      arguments: JSON.stringify({
+                        answer: `Per ${cite}: ${(q1.expected_claims ?? []).join(" ")}`,
+                        confidence: 0.9,
+                        gaps: [],
+                        escalate_forced: "no",
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  assert.equal(observedReadContent, expectedBytes, "read must return exact bytes from operating-memory/, never a placeholder");
+  assert.ok(!observedReadContent.includes("[wiki content for"), "placeholder must not appear");
+  assert.equal(goodReport.arms["wiki"].retrieval_results[0].read_called, true);
+  assert.equal(goodReport.arms["wiki"].retrieval_rate, 1);
+
+  // 2. Failed reads (nonexistent /memory/..., relative without worktree, /etc/passwd, /memory/../escape)
+  //    return tool errors and record read_called: false
+  for (const badPath of [
+    `/memory/nonexistent-${cite}`,
+    cite, // relative path with no worktree
+    "/etc/passwd",
+    "/memory/../package.json",
+  ]) {
+    let toolResponse: any = {};
+    const badReport = await runTier1MemoryEval({
+      model: "stub-qwen",
+      base: "http://127.0.0.1:1",
+      memoryRoot: `${repoRoot}/operating-memory`,
+      memoryMdPath,
+      recallFixtures,
+      questions: [q1],
+      arms: ["wiki"],
+      runs: 1,
+      fetchFn: async (_url, init) => {
+        const msgs = JSON.parse(String(init?.body ?? "{}")).messages ?? [];
+        if (msgs.length === 2) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "tool_calls",
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "c1",
+                        type: "function",
+                        function: { name: "read", arguments: JSON.stringify({ path: badPath }) },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        const toolMsg = msgs.find((m: any) => m.role === "tool");
+        toolResponse = JSON.parse(toolMsg.content);
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c2",
+                      type: "function",
+                      function: {
+                        name: "reply",
+                        arguments: JSON.stringify({
+                          answer: "Unable to read memory file.",
+                          confidence: 0.3,
+                          gaps: ["read failed"],
+                          escalate_forced: "no",
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    assert.match(String(toolResponse.error ?? ""), /^refused: /, `badPath ${badPath} must return a refusal error`);
+    assert.equal(badReport.arms["wiki"].retrieval_results[0].read_called, false, `badPath ${badPath} must record read_called: false`);
+    assert.equal(badReport.arms["wiki"].retrieval_rate, 0);
+  }
+});
+
 // --- Hermetic Memory Eval Runner (4 Arms Discrimination & Noise Band) ---
 test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs", async () => {
   let inFlight = 0;
@@ -477,7 +692,6 @@ test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs
         const messages = parsed.messages ?? [];
         const systemMsg = messages.find((m: any) => m.role === "system")?.content ?? "";
         const userMsg = messages.find((m: any) => m.role === "user")?.content ?? "";
-        const lastMsg = messages[messages.length - 1];
 
         const hasWiki = systemMsg.includes("# Operating Memory Index");
 
@@ -496,7 +710,7 @@ test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs
         // First turn: if wiki or bank available, model calls tool
         if (messages.length === 2) {
           if (hasWiki) {
-            // Wiki arm calls read
+            // Wiki arm calls read using the /memory/<slug> path rendered in MEMORY.md
             res.writeHead(200, { "content-type": "application/json" });
             res.end(
               JSON.stringify({
@@ -512,7 +726,7 @@ test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs
                           type: "function",
                           function: {
                             name: "read",
-                            arguments: JSON.stringify({ path: `${repoRoot}/operating-memory/${cite}` }),
+                            arguments: JSON.stringify({ path: `/memory/${cite}` }),
                           },
                         },
                       ],
@@ -554,12 +768,12 @@ test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs
           }
         }
 
-        // Final turn: reply with answers based on available memory
+        // Final turn: reply with answers based on real retrieved memory (never placeholder text)
         const gotMemory =
-          toolData.includes(cite) ||
-          toolData.includes("Operating memory excerpt") ||
-          toolData.includes("Rule:") ||
-          (toolData.includes("---") && toolData.includes("description:"));
+          !toolData.includes("[wiki content for") &&
+          (toolData.includes("Operating memory excerpt") ||
+            toolData.includes("**Rule:**") ||
+            (toolData.includes("---") && toolData.includes("description:")));
 
         let answer = "";
         let confidence = 0.5;

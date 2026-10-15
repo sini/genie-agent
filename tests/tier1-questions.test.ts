@@ -19,9 +19,28 @@ const v2: QuestionFixture[] = readFileSync(new URL("fixtures/tier1-eval/question
   .filter(Boolean)
   .map((l) => JSON.parse(l));
 
+const memoryQuestions: QuestionFixture[] = readFileSync(
+  new URL("fixtures/memory-eval/questions.jsonl", import.meta.url),
+  "utf8",
+)
+  .split("\n")
+  .filter(Boolean)
+  .map((l) => JSON.parse(l));
+
 test("questions-v2: ids unique and every claim specific", () => {
   assert.equal(new Set(v2.map((q) => q.id)).size, v2.length);
   const weak = v2.flatMap((q) => weakClaims(q).map((c) => `${q.id}: ${JSON.stringify(c)}`));
+  assert.deepEqual(weak, []);
+});
+
+test("memory-eval questions: ids unique and every claim specific", () => {
+  assert.equal(new Set(memoryQuestions.map((q) => q.id)).size, memoryQuestions.length);
+  // While PR #4 (operating-memory-rulings) is pending merge, q22 still references traps/tracker-br-traps.md;
+  // once PR #4 merges, q22 is checked like every other question.
+  const checked = memoryQuestions.filter(
+    (q) => !(q.id === "q22" && q.expected_citations?.includes("traps/tracker-br-traps.md")),
+  );
+  const weak = checked.flatMap((q) => weakClaims(q).map((c) => `${q.id}: ${JSON.stringify(c)}`));
   assert.deepEqual(weak, []);
 });
 
