@@ -244,15 +244,16 @@ test("Oracle 4: empty memory arms are refused and stand-in recall fixture is ref
   );
 });
 
-// --- Retrieval Oracle: Model-Free Retrieval Check (Amendment 7) ---
+// --- Retrieval Oracle: Model-Free Retrieval Check (Amendment 7 & Unit C2.2.1) ---
 test("Retrieval Oracle: verifyModelFreeRetrieval validates all 24 questions, and catches planted unindexed slugs", () => {
   // All 24 questions pass verification against actual operating-memory/MEMORY.md and recall fixtures
   const result = verifyModelFreeRetrieval(questions, memoryMdPath, recallFixtures);
   assert.equal(result.verified, 24);
   assert.equal(result.unindexedSlugs.length, 0);
   assert.equal(result.missingFixtureSlugs.length, 0);
+  assert.deepEqual(result.retrieval_misses, []);
 
-  // Planted unindexed citation slug is detected and refused even when recall fixture exists
+  // Planted unindexed citation slug is detected and refused even when recall fixture exists (and even on a live run)
   const planted: QuestionFixture[] = [
     {
       id: "q_unindexed",
@@ -262,6 +263,7 @@ test("Retrieval Oracle: verifyModelFreeRetrieval validates all 24 questions, and
   ];
   const fixturesWithPlanted: MemoryRecallFixture = {
     ...recallFixtures,
+    metadata: { ...recallFixtures.metadata, stand_in: false },
     fixtures: {
       ...recallFixtures.fixtures,
       q_unindexed: {
@@ -275,6 +277,152 @@ test("Retrieval Oracle: verifyModelFreeRetrieval validates all 24 questions, and
     () => verifyModelFreeRetrieval(planted, memoryMdPath, fixturesWithPlanted),
     /unindexed citation slug: unindexed\/fabricated-policy\.md in question q_unindexed not linked from/,
   );
+  assert.throws(
+    () => verifyModelFreeRetrieval(planted, memoryMdPath, fixturesWithPlanted, { live: true }),
+    /unindexed citation slug: unindexed\/fabricated-policy\.md in question q_unindexed not linked from/,
+  );
+
+  // Question with no fixture entry at all still refuses on both hermetic and live runs
+  const noEntryFixtures: MemoryRecallFixture = {
+    metadata: { ...recallFixtures.metadata, stand_in: false },
+    fixtures: {},
+  };
+  assert.throws(
+    () => verifyModelFreeRetrieval(questions.slice(0, 1), memoryMdPath, noEntryFixtures, { live: true }),
+    /missing recall fixture for question q01/,
+  );
+});
+
+test("Oracle C2.2.1: a live run with a fixture miss proceeds and reports retrieval_misses: [qid], while unindexed slugs and missing fixture entries still refuse", async () => {
+  const subset = questions.slice(0, 2); // q01, q02
+  const missFixtures: MemoryRecallFixture = {
+    metadata: { bank_id: "genie-memory", stand_in: false },
+    fixtures: {
+      [subset[0].id]: {
+        query: subset[0].question,
+        // Recorded entry exists, but the expected citation was not returned by the bank
+        results: [{ document_id: "unrelated/other.md", text: "unrelated recall result" }],
+      },
+      [subset[1].id]: recallFixtures.fixtures[subset[1].id],
+    },
+  };
+
+  // Hermetic (non-live) still throws on a missing citation in the fixture
+  assert.throws(
+    () => verifyModelFreeRetrieval(subset, memoryMdPath, missFixtures, { live: false }),
+    new RegExp(`expected citation .* not found in recall fixture for ${subset[0].id}`),
+  );
+
+  // Live check proceeds and reports retrieval_misses: [qid]
+  const check = verifyModelFreeRetrieval(subset, memoryMdPath, missFixtures, { live: true });
+  assert.equal(check.verified, 1);
+  assert.deepEqual(check.retrieval_misses, [subset[0].id]);
+
+  // Full live run proceeds, scores all questions, and reports retrieval_misses at top level and per arm
+  const report = await runTier1MemoryEval({
+    model: "stub-qwen",
+    base: "http://127.0.0.1:1",
+    memoryRoot: `${repoRoot}/operating-memory`,
+    memoryMdPath,
+    recallFixtures: missFixtures,
+    questions: subset,
+    arms: ["no-memory", "wiki", "bank", "wiki+bank"],
+    runs: 1,
+    concurrency: 1,
+    live: true,
+    fetchFn: async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const msgs = body.messages ?? [];
+      const sys = msgs.find((m: any) => m.role === "system")?.content ?? "";
+      const usr = msgs.find((m: any) => m.role === "user")?.content ?? "";
+      const q = subset.find((item) => item.question === usr) ?? subset[0];
+      const cite = q.expected_citations?.[0] ?? "";
+      const claims = q.expected_claims ?? [];
+      const hasWiki = sys.includes("# Operating Memory Index");
+      const toolMsg = msgs.find((m: any) => m.role === "tool");
+
+      if (msgs.length === 2) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    hasWiki
+                      ? {
+                          id: "c1",
+                          type: "function",
+                          function: {
+                            name: "read",
+                            arguments: JSON.stringify({ path: `${repoRoot}/operating-memory/${cite}` }),
+                          },
+                        }
+                      : {
+                          id: "c1",
+                          type: "function",
+                          function: {
+                            name: "recall",
+                            arguments: JSON.stringify({ query: q.question, bank: "memory" }),
+                          },
+                        },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      const got = (toolMsg?.content ?? "").includes(cite) || (toolMsg?.content ?? "").includes("---");
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "c2",
+                    type: "function",
+                    function: {
+                      name: "reply",
+                      arguments: JSON.stringify({
+                        answer: got ? `Per ${cite}: ${claims.join(" ")}` : "Unknown",
+                        confidence: got ? 0.9 : 0.5,
+                        gaps: [],
+                        escalate_forced: "no",
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  assert.deepEqual(report.retrieval_misses, [subset[0].id]);
+  assert.deepEqual(report.model_free_retrieval?.retrieval_misses, [subset[0].id]);
+  // Both questions are still scored in every arm
+  assert.equal(report.arms["bank"].runs[0].questions.length, 2);
+  // Bank arm missed q01 and retrieved q02
+  assert.deepEqual(report.arms["bank"].retrieval_misses, [subset[0].id]);
+  assert.equal(report.arms["bank"].retrieval_miss_count, 1);
+  // Wiki arm retrieved both via read
+  assert.deepEqual(report.arms["wiki"].retrieval_misses, []);
+  assert.equal(report.arms["wiki"].retrieval_miss_count, 0);
+
+  const tables = formatMemoryReportTables(report);
+  assert.match(tables, new RegExp(`retrieval_misses: \\["${subset[0].id}"\\]`));
 });
 
 // --- System Prompt & Launch Integration (Amendment 2) ---

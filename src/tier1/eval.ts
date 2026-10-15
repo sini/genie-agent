@@ -798,12 +798,16 @@ export interface MemoryRetrievalCheckResult {
   verified: number;
   unindexedSlugs: string[];
   missingFixtureSlugs: string[];
+  retrieval_misses: string[];
 }
 
 // Amendment 7: Model-free retrieval check verifying for every question:
 // (a) expected citation slug is linked from MEMORY.md, and
 // (b) expected citation slug is present in the question's recall fixture.
 // Amendment 6: harness explicitly refuses stand-in fixture on --live runs.
+// Unit C2.2.1: on live runs, a question whose expected slug is absent from its recall fixture
+// is recorded in retrieval_misses (and missingFixtureSlugs) rather than throwing, whereas
+// a stand-in fixture, an unindexed slug, or a question with no fixture entry at all still throws.
 export function verifyModelFreeRetrieval(
   questions: QuestionFixture[],
   memoryMdPath: string,
@@ -831,11 +835,24 @@ export function verifyModelFreeRetrieval(
 
   const unindexedSlugs: string[] = [];
   const missingFixtureSlugs: string[] = [];
+  const retrievalMissSet = new Set<string>();
   let verified = 0;
 
   for (const q of questions) {
     const citations = q.expected_citations ?? [];
     const fix = recallFixtures.fixtures?.[q.id];
+
+    // If a question has no fixture entry at all, the recorder never ran for it — always fatal.
+    if (!fix) {
+      for (const slug of citations) {
+        if (!links.has(slug)) {
+          unindexedSlugs.push(`${q.id}:${slug}`);
+          throw new Error(`unindexed citation slug: ${slug} in question ${q.id} not linked from ${memoryMdPath}`);
+        }
+        missingFixtureSlugs.push(`${q.id}:${slug}`);
+      }
+      throw new Error(`missing recall fixture for question ${q.id}`);
+    }
 
     for (const slug of citations) {
       // (a) Link check: citation must be linked from MEMORY.md
@@ -845,11 +862,6 @@ export function verifyModelFreeRetrieval(
       }
 
       // (b) Fixture check: citation must be present in question's recall fixture
-      if (!fix) {
-        missingFixtureSlugs.push(`${q.id}:${slug}`);
-        throw new Error(`missing recall fixture for question ${q.id}`);
-      }
-
       const found = fix.results?.some(
         (r) =>
           r.document_id === slug ||
@@ -860,14 +872,23 @@ export function verifyModelFreeRetrieval(
 
       if (!found) {
         missingFixtureSlugs.push(`${q.id}:${slug}`);
-        throw new Error(`expected citation ${slug} not found in recall fixture for ${q.id}`);
+        retrievalMissSet.add(q.id);
+        if (!options.live) {
+          throw new Error(`expected citation ${slug} not found in recall fixture for ${q.id}`);
+        }
+        continue;
       }
 
       verified++;
     }
   }
 
-  return { verified, unindexedSlugs, missingFixtureSlugs };
+  return {
+    verified,
+    unindexedSlugs,
+    missingFixtureSlugs,
+    retrieval_misses: Array.from(retrievalMissSet),
+  };
 }
 
 // Oracle 4: An arm that silently loads no memory is reported as such, not scored as a memory arm.
@@ -899,6 +920,8 @@ export interface MemoryRetrievalResult {
 export interface MemoryArmResult extends ArmResult {
   arm: any;
   retrieval_rate: number;
+  retrieval_miss_count: number;
+  retrieval_misses: string[];
   retrieval_results: MemoryRetrievalResult[];
 }
 
@@ -912,6 +935,7 @@ export interface MemoryEvalReport {
   runs_per_arm: number;
   concurrency: number;
   generation_noise_band?: number;
+  retrieval_misses: string[];
   arms: Record<MemoryArm, MemoryArmResult>;
   comparisons: MemoryEvalComparison[];
   model_free_retrieval?: MemoryRetrievalCheckResult;
@@ -982,6 +1006,7 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
     recallFixtures,
     { live: options.live },
   );
+  const fixtureMissSet = new Set(retrievalCheck.retrieval_misses);
 
   let memoryContent: string | undefined;
   try {
@@ -1097,7 +1122,9 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
               const fix = recallFixtures?.fixtures?.[q.id];
               if (fix && fix.results?.length) {
                 recallResp = { results: fix.results };
-                if (matchesCitation || toolArgs.bank === "memory") recallCalled = true;
+                if (!fixtureMissSet.has(q.id) && (matchesCitation || toolArgs.bank === "memory")) {
+                  recallCalled = true;
+                }
               }
             }
             messages.push({
@@ -1162,6 +1189,9 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
 
     const totalRetrievals = allRetrievalResults.filter((r) => r.retrieved).length;
     const retrievalRate = allRetrievalResults.length > 0 ? totalRetrievals / allRetrievalResults.length : 0;
+    const armMissQids = Array.from(
+      new Set(allRetrievalResults.filter((r) => !r.retrieved).map((r) => r.question_id)),
+    );
 
     armResults[arm] = {
       arm,
@@ -1172,6 +1202,8 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
       mean_calibration: Number(armMeanCalib.toFixed(4)),
       generation_noise_band: runsCount >= 2 ? noiseBand : undefined,
       retrieval_rate: Number(retrievalRate.toFixed(4)),
+      retrieval_miss_count: armMissQids.length,
+      retrieval_misses: armMissQids,
       retrieval_results: allRetrievalResults,
     };
   }
@@ -1192,6 +1224,7 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
     runs_per_arm: runsCount,
     concurrency,
     generation_noise_band: genNoiseBand,
+    retrieval_misses: retrievalCheck.retrieval_misses,
     arms: armResults as Record<MemoryArm, MemoryArmResult>,
     comparisons,
     model_free_retrieval: retrievalCheck,
@@ -1212,12 +1245,13 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
 
   lines.push("--- Memory Arms Performance ---");
   lines.push(
-    "Arm             Score   Correctness  Citation  Calibration  Retrieval  Runs Spread",
+    "Arm             Score   Correctness  Citation  Calibration  Retrieval  Misses  Runs Spread",
   );
   for (const [arm, res] of Object.entries(report.arms)) {
     const spreadStr = res.generation_noise_band !== undefined ? res.generation_noise_band.toFixed(4) : "n/a (N=1)";
+    const missCount = String(res.retrieval_miss_count ?? res.retrieval_misses?.length ?? 0);
     lines.push(
-      `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${spreadStr}`,
+      `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${missCount.padEnd(7)} ${spreadStr}`,
     );
   }
   lines.push("");
@@ -1238,6 +1272,9 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
     lines.push(`Verified Question-Citation Mappings: ${report.model_free_retrieval.verified}`);
     lines.push(`Unindexed Slugs: ${report.model_free_retrieval.unindexedSlugs.length}`);
     lines.push(`Missing Fixture Slugs: ${report.model_free_retrieval.missingFixtureSlugs.length}`);
+    lines.push(
+      `retrieval_misses: ${JSON.stringify(report.model_free_retrieval.retrieval_misses ?? [])}`,
+    );
   }
 
   return lines.join("\n");
