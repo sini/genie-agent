@@ -20,14 +20,17 @@ body.
 
 ```sh
 render_body <id> > pre.txt                       # your reviewed script
+render_body <id> > pre2.txt                      # a second read; the bad read is non-deterministic
+if [ ! -s pre.txt ] || [ "$(head -1 pre.txt)" = "null" ] || ! cmp -s pre.txt pre2.txt; then echo ABORT; exit 1; fi
 pl=$(wc -l < pre.txt)
-if [ "$pl" -lt 50 ] || [ "$(head -1 pre.txt)" = "null" ]; then echo ABORT; exit 1; fi
 pre_md5=$(md5sum < pre.txt)
 cp pre.txt new.txt && cat block.md >> new.txt
 br update <id> --description-file new.txt; echo "rc=$?"
 render_body <id> | head -n "$pl" | md5sum         # MUST equal pre_md5
 ```
 
+- Do not refuse on a fixed minimum line count: bodies are legitimately short, and a floor tuned to one
+  long body refuses them all. Refuse on an empty or `null` read, or on two reads that disagree.
 - Verify by md5 of the preserved PREFIX, never by line count (a truncated body plus a long block can
   have more lines than before).
 - A refusal from br's length guard is a measurement: your read was short. Re-read; never force.
