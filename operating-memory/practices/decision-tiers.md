@@ -2,6 +2,7 @@
 name: decision-tiers
 description: When filing or picking up a change, to decide how much ceremony it gets (spec, gate, owner reading, design session)
 type: practice
+scope: local
 ---
 
 **Rule:** Classify every change when it is filed, and write the class and a one-line reason in
@@ -32,14 +33,14 @@ read artefacts, not the owner. "An idle fleet is a dispatch trigger" also beat "
   where it LIVES, or what it is CALLED. Stop and hold the build.
 - Brainstorm form: context first, one clarifying question at a time, two or three approaches
   with trade-offs, sections approved one by one.
-- A forcing function licenses ENTERING a design phase, never skipping it. "Properly
+- A forcing function licenses ENTERING a design phase, not skipping it. "Properly
   architected" means the document order: requirements, assessment, architecture, diagrams,
   then specs, then plans.
 - An M task that hits an undecided design fork mid-execution STOPS and promotes itself.
-- A design agent revising an owner-approved design never rewords an approved sentence. One
+- A design agent revising an owner-approved design does not reword an approved sentence. One
   agent turned "closures never live in X" into "no closure is applied in X", which quietly
   revived an arm the owner had rejected. The dispatch says approved text is fixed, and asks for
   a sentence-level diff against the approval revision.
-- The M tier removes the spec and the gate, never delegation (\[[delegate-authoring]\]).
+- The M tier removes the spec and the gate, not delegation (\[[delegate-authoring]\]).
 
 Related: \[[before-asking-the-owner]\] \[[gates-need-an-oracle]\] \[[advance-on-reversible-defaults]\]

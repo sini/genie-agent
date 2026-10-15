@@ -2,6 +2,7 @@
 name: suite-blind-on-its-classified-axis
 description: Applies when reviewing a spec or test plan that was flagged with a risk class (ordering, identity, novel construction).
 type: trap
+verified: unverified
 ---
 
 **Rule:** When an artefact is classified under a review class, name the property that class protects,

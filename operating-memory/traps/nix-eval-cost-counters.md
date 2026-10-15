@@ -2,6 +2,7 @@
 name: nix-eval-cost-counters
 description: When quoting Nix evaluation cost figures (allocation counters, cpuTime, scaling exponents)
 type: trap
+verified: unverified
 ---
 
 **Rule:** Nix stats counters are a lower bound. Budget on all three axes (`list.elements`, `sets.elements`, `nrLookups`), say what they cannot see, and never let one axis decide a comparative claim.

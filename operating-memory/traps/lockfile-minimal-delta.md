@@ -2,6 +2,7 @@
 name: lockfile-minimal-delta
 description: When regenerating or bumping a lockfile (Cargo.lock, flake.lock) for a targeted change
 type: trap
+verified: unverified
 ---
 
 **Rule:** Update only the dependency you mean to change. Never regenerate a whole lockfile for a targeted bump.

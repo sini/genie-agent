@@ -2,6 +2,7 @@
 name: nix-path-flake-ref-through-symlink
 description: Applies to Nix probes that take a flake ref under a symlinked directory (e.g. a scratchpad link).
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Any probe taking a flake ref must `readlink -f` its argument first.

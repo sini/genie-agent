@@ -2,6 +2,7 @@
 name: nix-tryeval-and-equality
 description: When a Nix probe or test relies on builtins.tryEval or on == between values
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** `tryEval` catches only `throw` and `assert`, and `==` cannot compare functions. Design probes and guards around both limits.

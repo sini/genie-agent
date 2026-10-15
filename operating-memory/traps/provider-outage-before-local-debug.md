@@ -2,6 +2,7 @@
 name: provider-outage-before-local-debug
 description: When several agents die with an infrastructure-shaped API error (529 overloaded, gateway hints)
 type: trap
+verified: unverified
 ---
 
 **Rule:** Check the model provider's status page and correlate timestamps before debugging any local component. If there is a named incident on the tier you are dispatching, pause dispatch.

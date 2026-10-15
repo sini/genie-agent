@@ -2,6 +2,7 @@
 name: per-machine-state
 description: When a fact depends on which host, checkout, environment or moment it was observed on
 type: trap
+verified: unverified
 ---
 
 **Rule:** Clone sets, paths, DNS resolution and environment variables are per machine. Re-measure them on the host you are on, and record an observation with its domain: host, checkout and time.

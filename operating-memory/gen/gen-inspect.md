@@ -2,6 +2,7 @@
 name: gen-inspect
 description: Working in gen-inspect, the read-only interrogator of a materialized gen graph (SQL-like queries, why-provenance, rendering).
 type: reference
+verified: unverified
 ---
 
 **Purpose:** interrogate a MATERIALIZED gen graph: which nodes exist and of what kind, which edges are

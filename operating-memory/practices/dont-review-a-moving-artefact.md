@@ -35,7 +35,7 @@ author is still running. Hold commits on any path (or commit range) a live revie
   what changed), tell it REJECT-on-process is costless, and say plainly it was your error.
 - Your own push or landing between authoring a spec and dispatching against it stales the spec's
   push-state claims. State the invalidation in the brief.
-- Dispatch a gate only after the last content edit. Never let a sign-off message carry an
+- Dispatch a gate only after the last content edit. Do not let a sign-off message carry an
   instruction: separate messages, so nothing that closes a round can move the artefact.
 - Anchor a gate on a committed revision. For an uncommitted artefact, use
   `git hash-object -w <file>` (an immutable blob id with no ref) and verify it with

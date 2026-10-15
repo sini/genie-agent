@@ -15,7 +15,7 @@ resolve what it leaves open. Also follow `common-protocol.md`.
 ## How to land
 
 Land the GATING oracle only. List guarantee items (exhaustive suites, planted violations, censuses)
-under "guarantee deferred"; never build them here.
+under "guarantee deferred"; do not build them here.
 
 1. **Baseline first**, measured yourself (a spec's figure was true of another tree), so every later
    red is attributable.
@@ -29,13 +29,13 @@ under "guarantee deferred"; never build them here.
    the removed guard, delete the arm the cell names. A red/green table you were handed was evaluated
    on the pre-edit tree; inheriting it is relaying.
 
-A red on first sight is a FINDING, reported verbatim, never a fixture edit. A cell flipping that the
+A red on first sight is a FINDING, reported verbatim, not a fixture edit. A cell flipping that the
 spec did not list: stop and report.
 
 **Done means:** suite green on the clean tree, shown red in the same run, seed removed, tree digest
 back where it started. Report both states with exact commands and unpiped exits.
 
-**A script you ship must distinguish "no results" from "could not measure."** Errors consumed as empty
+**Make a script you ship distinguish "no results" from "could not measure."** Errors consumed as empty
 values (`.get(k, [])`, `|| true`, swallowed stderr, an unchecked subprocess exit) produce clean-looking
 zeros that hide defects for weeks. Run it once with its data source unavailable and confirm it SAYS so.
 
@@ -50,7 +50,7 @@ zeros that hide defects for weeks. Run it once with its data source unavailable 
 - A push moves the whole branch, not your paths. If anything unexpected is committed locally, stop.
 - Push, then verify clean and matching origin at the final revision; read CI after the push.
 - After landing on a main, fast-forward the shared local checkout if it is clean and on main.
-- Rebase, never merge.
+- Rebase, not merge.
 
 ## Feedback and revert
 

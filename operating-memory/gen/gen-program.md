@@ -2,6 +2,7 @@
 name: gen-program
 description: Working in gen-program, which turns framework declarations into a logic program, drives gen-scope's well-founded engine per pass, and carries the third value (T/P/U) out.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the consumer that turns a framework's declarations into a **logic program**, drives

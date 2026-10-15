@@ -4,7 +4,7 @@ description: When writing or cleaning up code comments — what stays (theory ci
 type: practice
 ---
 
-**Rule:** Code comments state the general invariant or cite the academic source. They never carry
+**Rule:** Code comments state the general invariant or cite the academic source. They do not carry
 temporal task keys. During cleanup, keep valid provenance citations; fix wrong ones at the source.
 
 **Why:**

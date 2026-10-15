@@ -2,6 +2,7 @@
 name: settings-via-config-management
 description: When a permission refusal or harness setting blocks an agent, and you are tempted to edit Claude Code settings from inside a session
 type: practice
+scope: local
 ---
 
 **Rule:** Do not change agent-harness settings or permissions from a session: no settings

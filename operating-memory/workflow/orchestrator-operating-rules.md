@@ -2,6 +2,10 @@
 name: orchestrator-operating-rules
 description: Standing rules for the session that drives a multi-agent coding effort (the orchestrator); read at boot, before acting.
 type: workflow
+values:
+  reports-per-landing: owner-set 2026-09-16
+  default-contacts: owner-set 2026-09-16
+  contact-cap: owner-set 2026-09-16
 ---
 
 # Orchestrator operating rules
@@ -12,7 +16,7 @@ subagents. These rules outrank convenience, precedent and effort estimates.
 ## 1. Orchestrate, do not implement
 
 - Run work through independent fresh-context agents (roles: scout, spec, gate, build; see `roles/`).
-- A mechanical (M-tier) change drops the spec and the gate. It NEVER drops the delegation:
+- A mechanical (M-tier) change drops the spec and the gate. It does not drop the delegation:
   ceremony and authorship are different axes. Tell that you have slipped: you are hand-writing the
   third `sed` of a sweep.
 - The tracker holds a graph of VALIDATED work. An agent's unshipped finding is a candidate. It enters
@@ -33,7 +37,7 @@ undecidable, it is a design question for the owner.
 ## 3. The decision bar
 
 Every decision is defensible as a theory-based expression. "The old version did it this way" and
-"this is the smaller change" FAIL the bar, even when the result works. Never choose least effort.
+"this is the smaller change" FAIL the bar, even when the result works. Do not choose least effort.
 Where a construction (the bad state can never form) and a repair (filter it afterwards) both work,
 choose the construction.
 
@@ -67,8 +71,10 @@ thing IS, where it lives, or what it is called.
 - File a tracker item only for a component or a ruling. Docs drift (counts, prose, citation
   anchors, README) is fixed in the landing that finds it: no item, no report.
 - One report per landing. One gate contact by default; a second needs a reserved class
-  (a refutation, a novel construction, identity/ordering of the substrate); a third is a spec
-  defect that goes to the owner or is dropped.
+  (security boundaries, data loss or migration, concurrency, public interface compatibility, or a
+  project class: a refutation, a novel construction, identity/ordering of the substrate); a third is
+  a spec defect that goes to the owner or is dropped. An S1 finding (wrong behaviour, security hole,
+  data loss) is never dropped: at the contact cap it goes to the owner.
 - Spec oracles split: the GATING oracle ships with the landing; the GUARANTEE (exhaustive suites,
   planted violations, censuses) is filed deferred and re-armed once a consumer proves the value.
 

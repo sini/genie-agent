@@ -2,6 +2,7 @@
 name: flake-parts-transposition-limit
 description: When using flake-parts' system-scoped inputs'/self' (or wrappers that inject them as module args)
 type: trap
+verified: unverified
 ---
 
 **Rule:** `inputs'` and `self'` expose only attributes declared in flake-parts' `transposition` config. Custom outputs set via `flake.<name> =` are not reachable through them.

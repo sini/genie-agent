@@ -2,6 +2,7 @@
 name: gen-view
 description: Working in gen-view, the substrate's derived-view constructor (view definitions as data, materialized view relations over scope graphs).
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the substrate's **derived-view constructor**. A view *definition* is plain data; a view

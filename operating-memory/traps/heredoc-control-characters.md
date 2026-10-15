@@ -2,6 +2,7 @@
 name: heredoc-control-characters
 description: Applies when a shell tool call would contain an inline heredoc with escape/control characters.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Put any script containing control or escape characters into a file with the `Write` tool and

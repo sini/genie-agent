@@ -23,7 +23,7 @@ for the first time.
 **How to apply:**
 
 1. Read the actual error message.
-2. Evaluate both sides and compare WHICH error fired, never just red against red. Two
+2. Evaluate both sides and compare WHICH error fired, not just red against red. Two
    different errors are two facts.
 3. Name the state change that made the path reachable. If you cannot, the classification is a
    guess.

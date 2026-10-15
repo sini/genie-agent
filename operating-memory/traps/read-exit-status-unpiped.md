@@ -2,6 +2,7 @@
 name: read-exit-status-unpiped
 description: Applies to every command whose success you are about to report, and whenever a measurement pipes, filters, chains or captures a command's output.
 type: trap
+verified: 2026-10-15; zsh 5.9.2, GNU grep 3.12
 ---
 
 **Rule:** Capture output to a file and read `$?` directly: `cmd > out 2> err; echo "rc=$?"`. Then
@@ -34,8 +35,14 @@ reading as clean success:
 - Treat rc 127 as "tool missing", never as data. Confirm every helper in a pipeline exists
   (`command -v bc`) before trusting a computed number. Prefer `grep -o ... | wc -l`.
 - Write chained checks as a loop that prints a value per item, never as `&&`.
+- In a write combining several flags where one flag is rejected, assume NONE of it applied: a status
+  change sent with an unknown second flag exited rc 2 and the status never changed, while the agent
+  reported its claim released. Make one change per write and read the state back. A relation-wiring
+  write with its two arguments swapped is silent too; read the edge back from both ends.
 - Keep stderr visible on any measurement; the error text is part of the measurement.
 - The tell is the control: a broken pipeline zeroes the live control too. Read the control's value,
   not just its presence.
+
+Supersedes the general half of br-multi-flag-write-applies-nothing and the dependency-direction item of tracker-br-traps (retired with the tracker-specific traps).
 
 Related: \[[zsh-is-not-bash]\] \[[controls-for-absence-claims]\] \[[grep-wrapper-and-count-units]\]

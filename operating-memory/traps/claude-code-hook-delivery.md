@@ -2,6 +2,7 @@
 name: claude-code-hook-delivery
 description: When a Claude Code hook is supposed to inject context or messages into the model
 type: trap
+verified: unverified
 ---
 
 **Rule:** Verify that a hook's output reaches the model, on the event you wire it to, before trusting it. Firing is not delivery.

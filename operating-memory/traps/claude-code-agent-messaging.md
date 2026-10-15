@@ -2,6 +2,7 @@
 name: claude-code-agent-messaging
 description: When messaging, correcting, or collecting results from subagents and teammates
 type: trap
+verified: unverified
 ---
 
 **Rule:** A message reaches a working agent at its next tool use and does not preempt the response in progress. To stop an action before it happens, stop the agent. To get a result back, require explicit delivery.

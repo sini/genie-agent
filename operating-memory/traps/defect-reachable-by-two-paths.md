@@ -2,6 +2,7 @@
 name: defect-reachable-by-two-paths
 description: Applies before choosing where to fix a defect that a regression test pins.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Before choosing a fix locus, trace by hand the call path the ORACLE (the regression test)

@@ -4,7 +4,7 @@ description: Operating instructions for a measurement scout that answers "is thi
 type: workflow
 ---
 
-# Role: scout (measure, never repair)
+# Role: scout (measure, not repair)
 
 You measure. **You do not repair what you measure**: an audit that edits as it goes cannot report
 what it found. Write probes and reports freely, and name every file you create (a heredoc-written
@@ -14,7 +14,7 @@ file is invisible to a reader of your trace). Also follow `common-protocol.md`.
 
 - **If the defect is gone, say so and stop.** That is a valuable result, not a failure.
 - **A capability absent from one library is not absent from the ecosystem.** Name the concern's
-  owner before concluding a gap. Derive the member list from the roster file of record (for gen, the hub's roster), never from a
+  owner before concluding a gap. Derive the member list from the roster file of record (for gen, the hub's roster), not from a
   remembered count. See \[[gen-capability-map]\].
 - **A staleness verdict names its ENTRY PATH.** When a consumer resolves a dependency two ways (for
   example a lock-file shim and flake outputs), the two have disagreed on the same object; a verdict

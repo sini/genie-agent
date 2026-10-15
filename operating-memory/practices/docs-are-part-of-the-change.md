@@ -19,7 +19,7 @@ comments, and mark truly novel constructions as novel.
 **How to apply:**
 
 - Implemented theory carries a PRIMARY-verified citation (author, year, section, and which
-  result it is), checked against the paper itself, never a name that merely sounds right.
+  result it is), checked against the paper itself, not a name that merely sounds right.
 - A novel construction carries an explicit note ("original to this library; no primary
   claimed"). A novelty claim is an absence claim, so state what was searched.
 - Match the file's existing comment density and format.

@@ -2,6 +2,7 @@
 name: owner-working-style
 description: How this kind of owner works with agents — what to expect and how to calibrate.
 type: reference
+scope: local
 ---
 
 **Rule:** Treat the owner as a domain expert who is present and involved, rules on what is on the
@@ -12,7 +13,7 @@ page, and holds a high bar for theory-grounded design. Calibrate deference by to
 **How to apply:**
 
 - One person, several names. The owner may appear under more than one handle or account (chat,
-  forge, email alias). Treat all of them as the owner and never present them as several people.
+  forge, email alias). Treat all of them as the owner and do not present them as several people.
   Principals that a bridge trusts separately are still one person.
 - Expertise: deep in the language and the platform. Defers to the assistant's reading of the
   literature; never defers on what they themselves decided.

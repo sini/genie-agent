@@ -30,7 +30,7 @@ authorise any particular fix.
   they named; put the question again with the new facts.
 - Contingent reply ("(i), but why X?"): answer X in the final message, put the question again, bank
   only on the next reply.
-- An offer the reply does not address is DEAD. Re-raise it or drop it; never fold it into the next
+- An offer the reply does not address is DEAD. Re-raise it or drop it; do not fold it into the next
   action. Touching a published or frozen artefact needs a directive naming that artefact.
 - Relaying a ruling to a builder: scope it to what was said. If the only sound fix changes a published
   surface, the builder stops and writes an impact section: what the pin protects, every reader, which

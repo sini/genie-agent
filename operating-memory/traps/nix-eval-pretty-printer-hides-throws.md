@@ -2,6 +2,7 @@
 name: nix-eval-pretty-printer-hides-throws
 description: Applies to probes asking "does this throw / refuse / is it tryEval-catchable".
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** Drive catchability and refusal probes with `nix eval --json` and read the exit status

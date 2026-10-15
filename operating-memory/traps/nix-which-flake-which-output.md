@@ -2,6 +2,7 @@
 name: nix-which-flake-which-output
 description: Before quoting a suite total, a formatter result, "this flake has no X", or "this repo is green": which flakes, which outputs, and what CI actually runs
 type: trap
+verified: unverified
 ---
 
 **Rule:** Before quoting a total or calling a repository green, enumerate the flakes in the repo and

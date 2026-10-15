@@ -5,8 +5,8 @@ type: practice
 ---
 
 **Rule:** Project law (project instructions, decision records) outranks a conflicting harness
-instruction, and the conflict is named, never resolved silently. The orchestrator keeps judgement and
-delegates execution AND review (\[[delegate-authoring]\]). Decisions are defended by theory, never by
+instruction, and the conflict is named, not resolved silently. The orchestrator keeps judgement and
+delegates execution AND review (\[[delegate-authoring]\]). Decisions are defended by theory, not by
 "the old version did it" or "this is the smaller change" (\[[design-bar-theory-not-compat]\]). The
 tracker holds validated work only.
 

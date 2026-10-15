@@ -4,7 +4,7 @@ description: Before dispatching a multi-repo pin-propagation ("relock") or relea
 type: practice
 ---
 
-**Rule:** Dispatch a release run only once every landing meant for it has passed its gate. Never send
+**Rule:** Dispatch a release run only once every landing meant for it has passed its gate. Do not send
 "also include X" to a run already executing; a late landing rides the next run.
 
 **Why:** A pin-propagation run received two "include" messages after it had already merged the repos
@@ -21,7 +21,7 @@ mid-run message reliably arrives late.
 - Folding into a run is fine only before it has reached the repo in question.
 - Units land on their own main at their own landing gate; the release run only bumps pins and reads CI.
 - Exit a propagation run on a census by evaluation (does the new check appear in each consumer's
-  evaluated check set?), never on "all CI runs green".
+  evaluated check set?), not on "all CI runs green".
 - A relaxation of the run's process is a trial with an acceptance number until measured.
 
 Related: \[[review-economy]\] \[[ci-gate-discipline]\]

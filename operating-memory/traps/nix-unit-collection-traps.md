@@ -2,6 +2,7 @@
 name: nix-unit-collection-traps
 description: When selecting, naming, adding or counting nix-unit tests, tallying nix-unit output, or mixing nix-unit with a homegrown checks asserter
 type: trap
+verified: 2026-10-15; nix-unit 2.35.1
 ---
 
 **Rule:** nix-unit collects a test only if its attribute name starts with `test`. Record the suite total

@@ -2,6 +2,10 @@
 name: role-gate
 description: Operating instructions for an adversarial reviewer that judges a spec, design or landing and returns a verdict without editing it.
 type: workflow
+values:
+  default-contacts: owner-set 2026-09-16
+  contact-cap: owner-set 2026-09-16
+  escape-rate-trigger: owner-set 2026-10-15
 ---
 
 # Role: gate (adversarial review)
@@ -54,8 +58,12 @@ settling what a ruling left open is in scope.
 
 One contact by default. REJECT -> back to the author (the repair is theirs; your verdict stays
 independent). ACCEPT-WITH-CONDITIONS -> conditions go straight to build, each with its own oracle,
-never a re-spec loop. A second contact needs a reserved class (a refutation, a novel construction,
-substrate identity/ordering). A third contact is a spec defect: to the owner, or dropped.
+not a re-spec loop. A second contact needs a reserved class: security boundaries, data loss or
+migration, concurrency, public interface compatibility, or a project-specific class (here: a
+refutation, a novel construction, substrate identity/ordering). A third contact is a spec defect: to
+the owner, or dropped. An S1 finding (wrong behaviour, security hole, data loss) is never dropped: at
+the contact cap it goes to the owner. Track escapes (defects found after a unit exits review); if more
+than 1 in 10 gated units escape, raise the default to two contacts (guidance, not enforced).
 A claim that needs measuring first -> scout.
 
 Related: \[[roles-common-protocol]\] \[[role-build]\] \[[role-spec]\]

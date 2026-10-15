@@ -7,7 +7,7 @@ type: workflow
 # Managing an external coding agent
 
 **Rule:** The external agent builds on a BRANCH and never pushes. The orchestrator re-runs the suite
-and at least one key mutant ITSELF, RED then GREEN, before landing. Never take an agent's word for it.
+and at least one key mutant ITSELF, RED then GREEN, before landing. Do not take an agent's word for it.
 
 **Why (measured, anonymised):**
 
@@ -40,7 +40,7 @@ Keep a verbatim copy of every brief in the dispatches directory.
 Repo: ~/repos/<repo>, from main <base sha>. Work in a worktree:
   git worktree add -b <branch> ../<repo>-<unit> <base sha>. Do not push; report back over <bus>.
 ## Why        - the defect or risk, with file:binding pointers and the spec row
-## Build      - the change, as bullets; fail-closed choices stated; any decision the agent must
+## Build      - the change, as bullets; fail-closed choices stated; any decision the agent has to
                 make is named with a recommended answer ("decide and state the rule")
 ## Scope      - what not to touch
 ## Gating oracles (each RED under its mutant, then GREEN)
@@ -52,7 +52,7 @@ Repo: ~/repos/<repo>, from main <base sha>. Work in a worktree:
 ## Report (required shape)
 ```
 
-Mutants are SOURCE EDITS, never runtime flags or env switches: a `MUTANT_*` switch left in a
+Mutants are SOURCE EDITS, not runtime flags or env switches: a `MUTANT_*` switch left in a
 security path was removed in review.
 
 ## Required report shape
@@ -66,7 +66,7 @@ security path was removed in review.
 
 ## Orchestrator verification before landing
 
-1. Rebase the branch onto current main (rebase, never merge).
+1. Rebase the branch onto current main (rebase, not merge).
 2. Re-run the full suite yourself; compare totals with the report.
 3. Apply at least one key mutant yourself; see it RED at the named line; revert; see GREEN.
 4. Run the sandboxed package build and the formatter check.

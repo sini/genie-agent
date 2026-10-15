@@ -25,10 +25,10 @@ some are false. A correction is not done until every other carrier of the old cl
 
 - Every rename/relocate/copy dispatch carries the question: "for each claim that travelled, is it
   true of the DESTINATION, or only of the source it was written for?" Verify copied claims at the
-  primary, never on the source document's authority.
+  primary, not on the source document's authority.
 - When a landing strikes a claim, sweep for its other carriers immediately, by the claim's own
   vocabulary and by its CONSEQUENCES (a table cell, a cost column, a "therefore"), not by the
-  artefact's name. Search for a third dependent; never trust a dependent count.
+  artefact's name. Search for a third dependent; do not trust a dependent count.
 - Strike each carrier in place with the old text visible, not by appending. Assert each replacement
   matched exactly once and refuse to write otherwise; a silent no-op leaves the claim standing while
   reporting success.

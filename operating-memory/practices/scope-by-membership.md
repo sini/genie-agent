@@ -4,7 +4,7 @@ description: When defining the population for a sweep, census, propagation or cl
 type: practice
 ---
 
-**Rule:** Cut a class by MEMBERSHIP, then measure it by PROPERTY, never the reverse.
+**Rule:** Cut a class by MEMBERSHIP, then measure it by PROPERTY, not the reverse.
 Membership is read from the project's register and decision records, not inferred from a
 roster file, a directory listing or a text grep. Archived and retired repositories are out of
 scope of every ask.

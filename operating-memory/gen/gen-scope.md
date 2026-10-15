@@ -2,6 +2,7 @@
 name: gen-scope
 description: Working in gen-scope, the sole evaluator (demand-driven HOAG over scope graphs) plus the well-founded logic engine, staged minting and the demand cascade.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** gen's sole evaluator: a demand-driven higher-order attribute-grammar evaluator over algebraic

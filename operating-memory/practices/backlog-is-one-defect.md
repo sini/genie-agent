@@ -27,7 +27,7 @@ a DECLARED state makes all 96 loud at once.
 
 **How to apply:**
 
-- Never choose work by which files don't collide. That is an orchestration convenience, and
+- Do not choose work by which files don't collide. That is an orchestration convenience, and
   choosing by it is the tell that you have stopped thinking about the system.
 - Red tests and corpus failures are acceptance criteria, not work items. Root-cause them only
   if they survive after the known defects are addressed.
@@ -38,7 +38,7 @@ a DECLARED state makes all 96 loud at once.
   session's landings discharged. Verify each at HEAD with a read-only scout. Close only on a
   witness. Retitle what is live but misstated. Merge duplicates, moving priority, labels and
   edges to the carrier. The first sweep closed 13 and retitled 8.
-- Report progress as closure rate, critical-path length and suite-green growth, never as a
+- Report progress as closure rate, critical-path length and suite-green growth, not as a
   raw count.
 
 Related: \[[absence-is-a-decision]\] \[[integration-validates]\] \[[filing-caps]\]

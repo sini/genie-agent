@@ -33,7 +33,7 @@ would have looked like; if the answer is "the same", you measured nothing.
 - Scripts with hardcoded anchors assert their match and fail loudly when it is missing.
 - Exercise BOTH arms of every oracle. The tell: you have watched it fail six ways and never watched it
   pass on an unmodified tree.
-- The artefact under review is never a source for its own verification. Tell: your verification and
+- The artefact under review is not a source for its own verification. Tell: your verification and
   the artefact share a sentence.
 - Derive by EVALUATION (`nix eval ... --apply builtins.attrNames`, walk the lock), not by parsing
   text a program also prints. State the path you followed.

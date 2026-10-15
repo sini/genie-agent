@@ -2,6 +2,7 @@
 name: controls-for-absence-claims
 description: When reporting a zero, an absence or an "identical" result, and building the positive/negative controls that make it meaningful
 type: trap
+verified: 2026-10-15; zsh 5.9.2, git 2.55.0
 ---
 
 **Rule:** Every absence claim carries a positive control that runs YOUR predicate, in the same
@@ -29,6 +30,12 @@ the material has none, and mint fresh negative tokens each run.
   IDENTICAL. The comparator can be dead while both subjects are fine.
 - An id predicate also matches inside other records' text. Anchor it to the id field
   (`cut -f1 | grep -cx id`).
+- A busy database read exited rc 2 with clean empty stdout (the error on stderr). Every grep over it read
+  0, the positive control included; attempts 1 and 2 returned 0 lines, attempt 3 returned 3496. Killing
+  a reader in flight hands its caller the same empty result. A "busy" error can also mean either live
+  contention (a process holds the lock: wait) or a wedged store (no process: repair), with one text.
+- Result rows prefixed with a status glyph made an id anchored at start-of-line (`grep -c '^<id>'`) read
+  0 over a full result set. Print one real row before writing a predicate over a tool's output.
 - In an aborting run no control can fire, because the abort destroys the output. The strongest form
   available is the same file and expressions at a size that returns. Say so explicitly.
 
@@ -36,8 +43,12 @@ the material has none, and mint fresh negative tokens each run.
 
 - Write the subject and the control in the same command, with the same flags, and print both values.
 - Read exit status unpiped and look at stderr: `cmd > out 2> err; echo $?`.
+- On an empty read from a shared store, check the exit status, retry a few times with a short wait, and
+  check whether a process holds the lock before accepting the empty result or declaring a wedge.
 - Report counts per term INCLUDING zeros, and make a sweep script refuse (exit 1) when every term is
   zero.
 - Generate a new random token for each negative control and never commit it.
+
+Supersedes the general half of tracker-br-traps and br-output-row-shapes (retired with the tracker-specific traps).
 
 Related: \[[control-population-must-match-claim]\] \[[control-must-differ-on-the-failing-axis]\] \[[read-exit-status-unpiped]\] \[[grep-wrapper-and-count-units]\]

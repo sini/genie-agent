@@ -2,6 +2,7 @@
 name: gen-overview
 description: Start here before working in any gen library — the framework's purpose, the roster, the layering and the conventions every member shares.
 type: reference
+verified: unverified
 ---
 
 **Purpose:** gen is an ecosystem of small, independently versioned, pure-Nix libraries for
@@ -54,7 +55,7 @@ Framework (`gen.lib.framework`, above the stack):
 
 Off-roster: gen-harness (the CI harness, `mkCi`, pins no gen library), gen-vars (variable
 generation), gen-demo (the integration corpus that exercises every landed component).
-Retired and archived for reference (bind the destination, never these): gen-demand → gen-scope;
+Retired and archived for reference (bind the destination, never these; full map in \[[gen-retired]\]): gen-demand → gen-scope;
 gen-edge and gen-pipe → gen-view (and gen-select); gen-flake → the hub's `flakeModules.default`,
 gen-memo, gen-delivery; gen-resolve → gen-scope (cold fold, `foldEquations`) and gen-memo (warm fold).
 One export has no destination yet: gen-resolve's `_scheduleWith` is still the sole producer of the

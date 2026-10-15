@@ -2,6 +2,7 @@
 name: shell-quoting-eats-backticks
 description: When shell text carries markdown prose (commit messages, tracker bodies, close reasons)
 type: trap
+verified: 2026-10-15; zsh 5.9.2
 ---
 
 **Rule:** Single-quote any prose passed to a shell. Use `<<'EOF'` (quoted delimiter) heredocs or a `--file` flag for markdown. Never put markdown in a double-quoted argument or an unquoted heredoc.

@@ -47,7 +47,7 @@ just write.
 - Before sending an absence finding to a live agent: `git reflog show <branch> --date=iso`.
 - After killing an agent: `git status --short` and `git diff` before dispatching a replacement.
   Restore the files, or tell the new agent what state it inherits.
-- Scratch: `<scratchpad>/<agent-name>-private/` as an absolute path in the brief, plus "never create
+- Scratch: `<scratchpad>/<agent-name>-private/` as an absolute path in the brief, plus "do not create
   directories inside the repo". Name outputs per run (a task marker or `$(date +%s)`). A filename is
   not a claim about who wrote it: check mtime or provenance first.
 

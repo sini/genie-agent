@@ -85,4 +85,4 @@ consumer; gen-dispatch reads only `__action`).
 - The repo was renamed from gen-derive. When grepping for residue of a rename, exclude the file that
   records the rename (it is tracked, so `git grep` sees it).
 
-Related: \[[gen-overview]\] \[[gen-algebra]\] \[[gen-demand]\]
+Related: \[[gen-overview]\] \[[gen-algebra]\] \[[gen-retired]\]

@@ -28,7 +28,7 @@ the next revision.
 
 **How to apply:**
 
-- Relay evidence in a form that can be re-run: paste the command, never your summary of it.
+- Relay evidence in a form that can be re-run: paste the command, not your summary of it.
   One paraphrase dropped an `--override-input` flag, and the gate then concluded the author
   had concealed the override.
 - Write "the reviewer concludes X; I have not measured it" for any unmeasured severity.

@@ -2,6 +2,7 @@
 name: resume-prompt-template
 description: Template for the boot prompt pasted into a fresh orchestrator session; how to ground a new session in the current state without trusting stale figures.
 type: workflow
+scope: local
 ---
 
 # Resume prompt template (paste into a fresh session)
@@ -18,10 +19,10 @@ decision records (ADRs), specs, reports and agent instructions. Sibling repos ar
 
 State the end state in two or three sentences, and the EXIT predicate: how you will know you are done
 (for example "every component lands with an example in the demo corpus (gen-demo, for the gen libraries), and the corpus evaluates").
-A bar describes HOW YOU WILL KNOW YOU ARE DONE, never WHAT TO BUILD. Steering by the bar picks meters.
+A bar describes HOW YOU WILL KNOW YOU ARE DONE, not WHAT TO BUILD. Steering by the bar picks meters.
 The ready list gives the UNBLOCKED set, not the WARRANTED one: prefer work that moves the exit.
 
-**Derive every figure from the tracker and the tree, never from this file.**
+**Derive every figure from the tracker and the tree, not from this file.**
 
 ## 2. Read in this order
 
@@ -59,7 +60,7 @@ build) and the form in `dispatch-form.md`. Tag every premise `[MEASURED <sha>]` 
 
 ## 5. Budget
 
-Follow `do-not-wind-down-early.md`. Never estimate context. After a compaction, re-boot from this
+Follow `do-not-wind-down-early.md`. Do not estimate context. After a compaction, re-boot from this
 file, then the handoff, then the boot bodies.
 
 ## 6. Close

@@ -2,6 +2,7 @@
 name: git-worktree-and-remote-traps
 description: When counting worktrees, moving refs between hosts, or landing a push
 type: trap
+verified: 2026-10-15; git 2.55.0
 ---
 
 **Rule:** Treat worktree lists, clean fetches and "Everything up-to-date" as claims to verify, not as success signals.

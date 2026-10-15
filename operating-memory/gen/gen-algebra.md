@@ -2,6 +2,7 @@
 name: gen-algebra
 description: Working in or calling gen-algebra — record algebra, layer folds, Either, and intensional-function identity (mkIntensional / conservativeEq).
 type: reference
+verified: unverified
 ---
 
 **Purpose:** the pure-algebra root of gen. Leijen/Bracha records with scoped labels and layer

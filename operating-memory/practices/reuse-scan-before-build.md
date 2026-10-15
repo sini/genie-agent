@@ -2,6 +2,8 @@
 name: reuse-scan-before-build
 description: Before designing or building any new engine, library, mechanism or helper in an ecosystem of existing libraries; and when adopting a library primitive to replace hand-rolled code.
 type: practice
+values:
+  extend-if-coverage: provisional
 ---
 
 **Rule:** Step 0 of any build is a reuse scan: which existing library already provides this? Scan to
@@ -30,7 +32,7 @@ library check that its surface has YOUR semantics.
 
 **How to apply:**
 
-- Frame grounders as "what already exists for this?", never hand them your build premise. Give the
+- Frame grounders as "what already exists for this?"; do not hand them your build premise. Give the
   reviewer a duplication lens: "what does this duplicate or fail to leverage?"
 - If an existing library covers about 70% or more, extend it; do not build.
 - When a finding names an instrument, treat it as a pointer: enumerate the library's full export
@@ -40,11 +42,11 @@ library check that its surface has YOUR semantics.
 - Before binding a primitive, read its source at the rev your lock pins: reflexivity, totality,
   faithfulness against an oracle, error containment, behaviour on inputs the examples do not show,
   and what the old shape enforced for free. Run an equivalence probe over several shapes, including
-  ones with something in the middle, with a deliberately wrong variant that must disagree.
-- Layering: a thin adapter or compatibility layer must contain no recursion, fixpoint, fold over a
+  ones with something in the middle, with a deliberately wrong variant that should disagree.
+- Layering: a thin adapter or compatibility layer contains no recursion, fixpoint, fold over a
   graph, edge walk or transpose. If it does, it is in the wrong layer; route it through the library.
   A hand-rolled function matching a library API is duplication even if it works today; it drifts.
-- A "needs a new primitive" verdict must name which built extension was intended, prove why it fails,
-  and cross-check the full built set. Re-verify audit refutations with more than one agent.
+- A "needs a new primitive" verdict names which built extension was intended, proves why it fails,
+  and cross-checks the full built set. Re-verify audit refutations with more than one agent.
 
 Related: \[[write-the-target-expression-first]\] \[[finish-the-design-no-deferral]\]

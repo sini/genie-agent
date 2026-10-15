@@ -2,6 +2,9 @@
 name: cap-every-heavy-evaluation
 description: Before running any nix eval, build, flake check or test suite, and in every brief that tells an agent to
 type: practice
+scope: local
+values:
+  memory-max: provisional
 ---
 
 **Rule:** Run every evaluation, build, check and test suite under a memory cap, and put the

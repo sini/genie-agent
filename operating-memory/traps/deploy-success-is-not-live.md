@@ -2,6 +2,7 @@
 name: deploy-success-is-not-live
 description: When confirming that a NixOS/microVM/home deploy actually changed the running system
 type: trap
+verified: unverified
 ---
 
 **Rule:** A green deploy proves the new configuration was built and activated somewhere, not that the running process uses it. Check the thing that is running.

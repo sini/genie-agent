@@ -2,6 +2,7 @@
 name: claude-code-permission-classifier
 description: When an auto-mode agent is refused a push or other shared-resource action despite an owner grant
 type: trap
+verified: unverified
 ---
 
 **Rule:** A grant relayed in a brief is not consent the classifier can see. An allow rule matches only the literal command form. After a refusal, never reword or reshape the command to pass the matcher, and never re-route the action through yourself or another agent; hand the owner the exact command instead.

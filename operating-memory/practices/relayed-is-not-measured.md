@@ -4,7 +4,7 @@ description: When passing on a linter diagnostic, a tracker status, a figure fro
 type: practice
 ---
 
-**Rule:** Tag every claim you did not just derive `[RELAYED <source>]`, never `[MEASURED]`. A
+**Rule:** Tag every claim you did not just derive `[RELAYED <source>]`, not `[MEASURED]`. A
 diagnostic, a status field and a figure in a dated block are snapshots of a moment that may be gone;
 the evaluator, not the linter, is the authority on what code does. A correction is a new claim and
 owes the same independent check as the claim it strikes, before striking it. A conditional finding's
@@ -50,7 +50,7 @@ consequent decays independently of its antecedent: when X happens, re-read the t
   the agent to weight your remaining premises accordingly.
 - Run a prior-art sweep on the TOPIC before any new filing.
 - When a result lacks something that could not possibly be absent, the instrument is broken.
-- A search hit with an ellipsis is a pointer, never the field: open it and read the token whole before
+- A search hit with an ellipsis is a pointer, not the field: open it and read the token whole before
   quoting a path, id, date or label.
 
 Related: \[[brief-premises-are-hypotheses]\] \[[success-signal-is-not-measurement]\] \[[counts-need-anchor-and-population]\] \[[cite-by-binding-not-line-number]\] \[[armed-controls]\]

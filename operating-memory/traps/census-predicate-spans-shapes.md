@@ -2,6 +2,7 @@
 name: census-predicate-spans-shapes
 description: Applies when listing the sites a migration or refactor step must touch.
 type: trap
+verified: unverified
 ---
 
 **Rule:** Define a migration unit by its acceptance oracle's arithmetic, not by one grep. Say which

@@ -30,7 +30,7 @@ Grep proves a construct EXISTS. It cannot prove that execution REACHES it.
 - The tell: a rationale that has never been reasoned forward from. Ask what would be built ON
   this reason.
 - When you find one, write "the conclusion survives; its stated basis does not", then replace
-  the basis. Never silently keep the conclusion.
+  the basis. Do not silently keep the conclusion.
 - For "A forces B forces C", drive the path: `nix eval --show-trace` and read the frames, run
   a two-arm probe, or seed a throw at the site.
 - Distrust a chain assembled from separately verified parts. `||`, `&&` and guards are where

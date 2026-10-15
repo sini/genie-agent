@@ -2,6 +2,7 @@
 name: zsh-is-not-bash
 description: Applies when an agent harness runs shell commands under zsh (check `echo $ZSH_VERSION`) while the agent writes bash, including loop variable names and patterns.
 type: trap
+verified: 2026-10-15; zsh 5.9.2
 ---
 
 **Rule:** Check which shell actually runs your commands, then write for it. Under zsh: quote every

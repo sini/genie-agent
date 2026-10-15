@@ -2,11 +2,16 @@
 name: review-economy
 description: When deciding how much review, control or ceremony a change needs, whether another gate round is owed, how gate reports travel, and what to do when rounds stop converging
 type: practice
+values:
+  default-contacts: owner-set 2026-09-16
+  contact-cap: owner-set 2026-09-16
+  escape-rate-trigger: owner-set 2026-10-15
 ---
 
 **Rule:** Put controls only where failure is silent. One gate contact by default; a second needs a
 reserved-class ground; a third means the spec or design is defective: it goes back to a fresh design
-agent, or to the owner, or is dropped. Findings with a gate-specified remedy fold into the landing
+agent, or to the owner, or is dropped. An S1 finding (wrong behaviour, security hole, data loss) is
+never dropped: at the contact cap it goes to the owner. Findings with a gate-specified remedy fold into the landing
 commit only when the remedy is mechanical (a rename, text, or a value the gate computed and the
 oracle re-checks); a remedy that changes logic re-runs the gating oracle and gets one fresh
 reviewer. Only CONSTRUCTION findings re-enter the full gate. Every process rule states its cost and the
@@ -18,7 +23,7 @@ condition under which it retires, and a relaxation is measured before it becomes
   round-trips, three zero-yield second clean rounds and a four-pass amendment chain bought nothing the
   cheaper forms did not. A month ran a docs-to-code ratio near 29:1; a blocker burndown closed 118
   items to net +6 open; one eight-day window doubled report files while the backlog stayed flat.
-- Banked traps recurred after banking; every recurrence was caught by a run-time control, never by a
+- Banked traps recurred after banking; every recurrence was caught by a run-time control, not by a
   reader of the trap log.
 - Patching review findings one at a time introduced new defects each round. A fresh design agent
   reworking the whole document from every report produced a design that passed.
@@ -35,19 +40,22 @@ condition under which it retires, and a relaxation is measured before it becomes
 - Silent failures (absence claims, greps, counters, a cost blowup returning the right answer) need
   controls. Loud failures (suite red, build break, named refusal, even an uncatchable abort) need none.
   Classify by whether anything REPORTS the failure, not by how bad it is.
-- **Reserved classes** that may run past one contact: substrate identity or ordering semantics,
-  refutations of standing results, novel constructions entering the substrate. Otherwise exit after one
-  construction-clean contact; a second round only as a bounded delta check.
+- **Reserved classes** get a second contact by default: security boundaries; data loss or migration;
+  concurrency; public interface compatibility; and the project's own classes (here: substrate identity
+  or ordering semantics, refutations of standing results, novel constructions entering the substrate).
+  Otherwise exit after one construction-clean contact; a second round only as a bounded delta check.
+- Track escapes: defects found after a unit has exited review. If more than 1 in 10 gated units
+  escape, raise the default to two contacts. This is guidance, not an enforced gate.
 - **Exit by byte-identity transfer:** prove the mechanism surface unchanged (a digest or tree diff,
   measured in the verdict), transfer the earlier instruments, verify only the delta.
 - **Third contact:** a fresh design agent gets the document, every report and owner rulings as
   premises, reworks the whole, and a fresh reviewer takes contact 1. Do not override the cap for "one
   final review".
 - The finding gate drafts owner-facing amendment text in its verdict; one fresh reviewer checks it. The
-  drafter never reviews its own draft.
+  drafter does not review its own draft.
 - **Reports are FILES** at a versioned path (`reports/<item>-<role>-v0.md`, bumped per round). The
   message carries verdict, findings table, anchors and path; the verdict line also lands in the tracker
-  body. Artefacts travel as files, never relay prose; spans are machine-extracted, never retyped;
+  body. Artefacts travel as files, not relay prose; spans are machine-extracted, not retyped;
   appliers match content, not coordinates.
 - A new instrument proves its armed control once, at introduction, in-tree. Recurring tool faults
   become tooling fixes, not more warnings.

@@ -16,7 +16,7 @@ fresh agent per task and a two-stage review.
   lock bump and three thrown-away fixture edits. Measurement answers "does it work"; the objections
   were "should it exist in this shape". The smallness made it feel exempt.
 - The plan review was skipped twice. Cause: a seam between two skills. The plan-writing skill ends in
-  SELF-review and a hard handoff; the execution skill reviews per task, never the whole plan.
+  SELF-review and a hard handoff; the execution skill reviews per task, not the whole plan.
 - A correction that replicated: the content was fixed by measurement, but its EXTENT was not. A first
   grep found 3 sites, a second spelling found 3 more, a third spelling and an inherited direct call
   surfaced only at review. A change's blast radius is not derivable from its content.

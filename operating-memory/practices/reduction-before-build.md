@@ -19,12 +19,12 @@ pointed at a line that had drifted onto unrelated code; the fix had shipped 19 d
   item, mark each DISCHARGED (with pointer) / LIVE (on whom) / STALE-PREMISE (with the falsifying
   measurement and a firing control), and recommend close / close-with-successor / keep-narrowed, each
   with a counter-case.
-- Anything ambiguous is LISTED for a reading, never silently disposed. A close that would lose a live
+- Anything ambiguous is LISTED for a reading, not silently disposed. A close that would lose a live
   remainder files a short successor.
 - Tells an item is reduction-shaped: filed against a retired component; its dependents closed; a
   premise naming constructs a later ruling superseded; described in pre-ruling vocabulary.
 - Re-derivation at HEAD is the first step of any dispatch built on a triage label. "Do not
-  re-measure" governs expensive measurement, never the cheap does-this-site-still-exist check.
+  re-measure" governs expensive measurement, not the cheap does-this-site-still-exist check.
 - Scope the class before auditing it: if most such items are already closed, the class is spent.
 - Second pass for a close means a different context RE-RUNNING the refutation's own predicate, able to
   come out the other way. An implementer who reproduces the refutation while acting on it counts; an

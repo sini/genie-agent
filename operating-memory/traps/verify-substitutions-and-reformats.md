@@ -2,6 +2,7 @@
 name: verify-substitutions-and-reformats
 description: When checking that a sed/replace sweep, a correction or a formatter run did exactly what was intended
 type: trap
+verified: 2026-10-15; Python 3.14.7
 ---
 
 **Rule:** Verify a substitution with three predicates: the old form is absent, the new form is present (anchored), and the over-applied form is absent, checked by name. Re-read bulk mechanical diffs with whitespace ignored.

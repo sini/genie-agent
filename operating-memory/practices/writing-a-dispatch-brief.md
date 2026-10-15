@@ -1,12 +1,12 @@
 ---
 name: writing-a-dispatch-brief
-description: Before sending any prompt to a build, spec or review subagent — what every brief carries, what it must not, and the checks that catch the defects that ship in briefs
+description: Before sending any prompt to a build, spec or review subagent — what every brief carries, what it leaves out, and the checks that catch the defects that ship in briefs
 type: practice
 ---
 
 **Rule:** Specify the PROPERTY, the forbidden shapes and the oracle; leave the MECHANISM to the agent
 unless it is ruled ("this is ruled, not chosen"). Resolve every uncertainty before writing: the brief
-carries conclusions and pointers, never reasoning. Read the finished brief as ONE document and ask of
+carries conclusions and pointers, not reasoning. Read the finished brief as ONE document and ask of
 each instruction whether another section forbids it. Premises: \[[brief-premises-are-hypotheses]\].
 
 **Why:**
@@ -35,16 +35,16 @@ each instruction whether another section forbids it. Premises: \[[brief-premises
 
 - the property, the oracle, and what a FAILING run looks like;
 - "a better mechanism is welcome, but NAME every departure, improvements included" (a gate handed one
-  deviation that finds two must assume a third);
+  deviation that finds two should assume a third);
 - "report no figure you did not obtain by running a command; state coverage as a limit (read in full /
   grepped only / not evaluated)"; an unmeasured figure is written as its command or "not measured",
-  never as a placeholder in the figure's format;
+  not as a placeholder in the figure's format;
 - a disk path for EVERY deliverable (\[[agent-report-delivery]\]); "never use pkill/killall or kill
   pgrep -f output" (\[[kill-only-captured-pids]\]); a memory cap for heavy evaluation
   (\[[cap-every-heavy-evaluation]\]); the population by membership (\[[scope-by-membership]\]); anchors
   as binding names (\[[cite-by-binding-not-line-number]\]);
 - a write / commit / commit+push verb per repo. Fence a repo only where a competing writer exists, and
-  never over files the spec lists as outputs. Tie-break: "where this brief and the spec disagree, the
+  not over files the spec lists as outputs. Tie-break: "where this brief and the spec disagree, the
   spec governs";
 - a class named by a predicate the agent re-runs; an exemplar only as a mandatory known positive;
 - for revisions: "for each claim, what CLASS does it quantify over, and did you check all of it";
@@ -56,6 +56,6 @@ each instruction whether another section forbids it. Premises: \[[brief-premises
   survive.
 - Everything the landing needs goes in the OPENING dispatch (\[[relay-through-the-hub]\]). Ask what you
   changed in this repo this session (pushes, HEAD, lock revs) and whether the spec speaks to it. List
-  only items to act on, never items to skip. Re-read this file before every dispatch.
+  only items to act on, not items to skip. Re-read this file before every dispatch.
 
 Related: \[[brief-premises-are-hypotheses]\] \[[dont-review-a-moving-artefact]\] \[[delegate-authoring]\] \[[spec-and-plan-before-code]\]

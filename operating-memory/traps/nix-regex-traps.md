@@ -2,6 +2,7 @@
 name: nix-regex-traps
 description: When Nix code uses builtins.match, lib.hasInfix, or translates foreign regexes
 type: trap
+verified: 2026-10-15; Nix 2.34.8, Determinate Nix 3.23.1, Lix 2.95.3
 ---
 
 **Rule:** `builtins.match` is POSIX ERE, full-string anchored and backtracking. Never run `.*x.*` over large strings, never pass it untranslated foreign regexes, and never expect `tryEval` to catch its errors.

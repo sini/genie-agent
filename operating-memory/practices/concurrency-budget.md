@@ -2,6 +2,11 @@
 name: concurrency-budget
 description: Before dispatching a subagent — how many may run at once, which model tier, and what to do when over the cap.
 type: practice
+scope: local
+values:
+  budget-strong-equivalents: owner-set 2026-10-14
+  strong-to-mid-ratio: provisional
+  agents-while-owner-present: provisional
 ---
 
 **Rule:** Concurrency is a quota budget counted in strong-model equivalents (one strong-tier agent =

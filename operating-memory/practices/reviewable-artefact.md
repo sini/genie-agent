@@ -4,7 +4,7 @@ description: When a spec or design is going to adversarial review — making its
 type: practice
 ---
 
-**Rule:** The reviewable artefact is the executable core, hashed. Prose is commentary that must be
+**Rule:** The reviewable artefact is the executable core, hashed. Prose is commentary,
 re-derivable from it. Freeze and hash the core before review, put the recipe and hash IN the
 artefact, and make the core run and fail under mutation.
 
@@ -28,7 +28,7 @@ artefact, and make the core run and fail under mutation.
 **How to apply:**
 
 1. Keep the core contiguous between explicit BEGIN/END markers; derive boundaries from those markers,
-   never from line numbers.
+   not from line numbers.
 2. Prefer a separate runnable file: `nix eval -f core.nix check` or `bash core.sh --self-test`. Check
    (a) it evaluates, (b) inverting one assertion makes it fail, (c) it covers the load-bearing
    mechanisms, not the easy half.

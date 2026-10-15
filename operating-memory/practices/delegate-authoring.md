@@ -2,6 +2,8 @@
 name: delegate-authoring
 description: When you are the orchestrator of a multi-agent session and are tempted to write specs, plans or sweeps yourself
 type: practice
+values:
+  writer-revivals: provisional
 ---
 
 **Rule:** The orchestrator keeps JUDGEMENT and delegates execution AND review. Spec, plan and
@@ -20,9 +22,9 @@ cutting independent plan review "for just aliases", which was a quality slip.
 - Name agents by role. Use the stronger model for non-mechanical work.
 - Small tasks may be planned inline. For anything complex, dispatch the author, review its
   output, and keep only the decision, not the prose.
-- A mechanical tier removes ceremony, never delegation. The tell: you are hand-writing the
+- A mechanical tier removes ceremony, not delegation. The tell: you are hand-writing the
   third `sed` of a sweep.
-- An auditor never fixes what it audits. A reviewer gets the artefact and the rubric, never the
+- An auditor does not fix what it audits. A reviewer gets the artefact and the rubric, not the
   author's framing. Repairs go to a separate build dispatch.
 - One agent per writable tree. Read-only agents may run concurrently.
 - Namespace scratch files by work-item id. Sibling agents share the session scratchpad, and

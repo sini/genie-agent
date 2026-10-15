@@ -2,6 +2,7 @@
 name: formatter-check-is-not-a-format-run
 description: Applies to Nix flakes using treefmt-nix, especially in linked git worktrees.
 type: trap
+verified: unverified
 ---
 
 **Rule:** The only formatting signal is the formatter itself, run by path. A flake check whose name

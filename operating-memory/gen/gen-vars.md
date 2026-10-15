@@ -2,6 +2,7 @@
 name: gen-vars
 description: Working in gen-vars, the frozen, experimental target-agnostic vars/secrets generator algebra.
 type: reference
+verified: unverified
 ---
 
 **Status:** frozen and experimental, subject to replacement. Do not build new long-lived dependencies on

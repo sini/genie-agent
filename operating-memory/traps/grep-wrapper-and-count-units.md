@@ -2,6 +2,7 @@
 name: grep-wrapper-and-count-units
 description: When grep/find/diff counts are reported as evidence, especially on a host with shell wrappers
 type: trap
+verified: 2026-10-15; GNU grep 3.12
 ---
 
 **Rule:** Run the real binary by absolute path for any reported count. Say which unit the figure is in, and compare only counts taken with the same binary, flags and path argument.

@@ -2,6 +2,8 @@
 name: memory-architecture
 description: Before saving a rule or trap to a memory store, when a memory is refuted or grows large, and at the end of a work phase — what memory holds, recall before retain, and how to fix or delete an entry
 type: practice
+values:
+  audit-at-lines: provisional
 ---
 
 **Rule:** Memory holds HOW TO WORK. Project state goes to the issue tracker, code structure to a code
@@ -46,8 +48,8 @@ Update memories when a phase completes, so none describes a "next step" that alr
 - Deleting is an inbound-link question: grep corpus-wide for wiki-links to the name with a positive
   control and repoint dependents. Verify both directions: every file reachable from the index, every
   index target present. Exclude sync-tool history directories (11 of 11 dangling hits were history).
-- A compaction must not launder a false claim into a shorter false claim: re-check claims, not bytes.
-- Promoting docs into a recall bank: retain LAW files, never ledgers (recall returns superseded wording
+- Do not let a compaction launder a false claim into a shorter false claim: re-check claims, not bytes.
+- Promoting docs into a recall bank: retain LAW files, not ledgers (recall returns superseded wording
   at equal authority). Promote what is cited by an opaque number, not what is already auto-loaded.
 
 Related: \[[durable-records-not-handoffs]\] \[[relayed-is-not-measured]\] \[[orchestrate-against-theory]\]
