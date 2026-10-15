@@ -7,7 +7,9 @@ type: practice
 **Rule:** Put controls only where failure is silent. One gate contact by default; a second needs a
 reserved-class ground; a third means the spec or design is defective: it goes back to a fresh design
 agent, or to the owner, or is dropped. Findings with a gate-specified remedy fold into the landing
-commit; only CONSTRUCTION findings re-enter the gate. Every process rule states its cost and the
+commit only when the remedy is mechanical (a rename, text, or a value the gate computed and the
+oracle re-checks); a remedy that changes logic re-runs the gating oracle and gets one fresh
+reviewer. Only CONSTRUCTION findings re-enter the full gate. Every process rule states its cost and the
 condition under which it retires, and a relaxation is measured before it becomes law.
 
 **Why:**

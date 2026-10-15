@@ -47,5 +47,8 @@ commit. Revert shared history forward-only, never force-push.
   expires silently. One hook went inert, then fired the full suite, then was installed
   without its config. Run the commit and read the error.
 - Read CI after every push and prove publication (\[[ci-gate-discipline]\]).
+- Red main after landing: the author of the red commit owns it, not the next agent. If one fix
+  attempt does not find the cause, revert forward at once and report. A red main blocks all other
+  landings until it is green or reverted. ("One fix attempt" is a provisional threshold.)
 
 Related: \[[one-writer-per-checkout]\] \[[format-before-commit]\] \[[ci-gate-discipline]\]

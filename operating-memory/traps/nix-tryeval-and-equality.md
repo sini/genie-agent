@@ -10,7 +10,7 @@ type: trap
 
 - `tryEval` does NOT catch: missing attribute, `attrNames` over a list, type errors (`1 + "s"`), `head []`, coercion errors, `toJSON` on a function, an invalid regex in `builtins.match`, `lib.fix` black-hole recursion, stack overflow, or parse-time failures. Each one kills the whole evaluation, including sibling fields, so the probe looks like a crashed instrument rather than a finding.
 - `tryEval` forces only to WHNF. Thunk throws deeper inside a value escape it unless you `deepSeq` first.
-- `==` on functions is false, and not even reflexive: `{ v = f; } == { v = f; }` reads false for one and the same attribute. A single-arm run gives a confident, exactly wrong "they differ". The positive control fails too, so arming it only tells you to discard the run.
+- `==` on functions: bare `f == f` is false. Values that CONTAIN the same function (`{ v = f; } == { v = f; }`, `[ f ] == [ f ]`) compared true on Nix 2.34.8 (measured 2026-10), so the result depends on sharing and version. Do not use `==` on values that may hold functions: a single-arm run can give a confident, exactly wrong "they differ" or "they match".
 - `length` / `attrNames` force only the spine. A number quoted from them may never have touched the values.
 
 **How to apply:**
