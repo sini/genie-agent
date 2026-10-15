@@ -407,7 +407,11 @@ test("Hermetic Memory Eval: each memory arm beats no-memory across repeated runs
         }
 
         // Final turn: reply with answers based on available memory
-        const gotMemory = toolData.includes(cite) || toolData.includes("Operating memory excerpt") || toolData.includes("Rule:");
+        const gotMemory =
+          toolData.includes(cite) ||
+          toolData.includes("Operating memory excerpt") ||
+          toolData.includes("Rule:") ||
+          (toolData.includes("---") && toolData.includes("description:"));
 
         let answer = "";
         let confidence = 0.5;

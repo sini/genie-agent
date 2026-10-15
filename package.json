@@ -14,6 +14,7 @@
     "guard-eval": "node tests/guard-eval.ts",
     "guard-out-eval": "node tests/guard-out-eval.ts",
     "tier1-eval": "node tests/tier1-eval.ts",
-    "bank-live-oracle": "node tests/bank-live-oracle.ts"
+    "bank-live-oracle": "node tests/bank-live-oracle.ts",
+    "reanalyze-c2.1": "node scripts/reanalyze-c2.1.ts"
   }
 }

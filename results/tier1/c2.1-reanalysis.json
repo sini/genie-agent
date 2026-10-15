@@ -1,0 +1,190 @@
+{
+  "model": "qwen3.8-27b",
+  "source_artifact": "results/tier1/c2.1-run.json",
+  "rule": "paired_bootstrap_ci",
+  "conclusion": "Under the new paired bootstrap rule, C2.1 did not discriminate either degraded arm.",
+  "comparisons": [
+    {
+      "baseline_arm": "real",
+      "degraded_arm": "no-steps",
+      "baseline_mean": 0.6738,
+      "degraded_mean": 0.58,
+      "delta": 0.0938,
+      "ci_low": -0.0322,
+      "ci_high": 0.2284,
+      "confidence_level": 0.95,
+      "n_paired": 19,
+      "n_missing": 5,
+      "is_discriminating": false,
+      "status": "inside_noise_band"
+    },
+    {
+      "baseline_arm": "real",
+      "degraded_arm": "no-citations",
+      "baseline_mean": 0.6738,
+      "degraded_mean": 0.6273,
+      "delta": 0.0465,
+      "ci_low": -0.0901,
+      "ci_high": 0.1917,
+      "confidence_level": 0.95,
+      "n_paired": 19,
+      "n_missing": 5,
+      "is_discriminating": false,
+      "status": "inside_noise_band"
+    }
+  ],
+  "exploratory_predictors": {
+    "label": "exploratory, N=22, no threshold",
+    "distinct_answered_count": 22,
+    "predictors": [
+      {
+        "predictor": "Code Block Presence",
+        "condition": "answer includes ```",
+        "met_count": 10,
+        "met_accuracy": 0.8167,
+        "unmet_count": 12,
+        "unmet_accuracy": 0.6181,
+        "lift": 0.1986,
+        "auroc": 0.6818
+      },
+      {
+        "predictor": "Tool Verification Effort",
+        "condition": "tool calls >= 5",
+        "met_count": 10,
+        "met_accuracy": 0.7667,
+        "unmet_count": 12,
+        "unmet_accuracy": 0.6597,
+        "lift": 0.1069,
+        "auroc": 0.6488
+      },
+      {
+        "predictor": "Citation Completeness",
+        "condition": "citation score === 1.0",
+        "met_count": 14,
+        "met_accuracy": 0.756,
+        "unmet_count": 8,
+        "unmet_accuracy": 0.625,
+        "lift": 0.131,
+        "auroc": 0.6198
+      },
+      {
+        "predictor": "Self-Reported Confidence (Baseline)",
+        "condition": "confidence >= 0.8",
+        "met_count": 5,
+        "met_accuracy": 0.65,
+        "unmet_count": 17,
+        "unmet_accuracy": 0.7255,
+        "lift": -0.0755,
+        "auroc": 0.4256
+      }
+    ]
+  },
+  "calibration_curve": [
+    {
+      "bin": "[0.0, 0.2)",
+      "range": [
+        0,
+        0.2
+      ],
+      "count": 0,
+      "mean_confidence": 0.1,
+      "accuracy": 0,
+      "error": 0.1
+    },
+    {
+      "bin": "[0.2, 0.4)",
+      "range": [
+        0.2,
+        0.4
+      ],
+      "count": 12,
+      "mean_confidence": 0.275,
+      "accuracy": 0.7708,
+      "error": 0.4958
+    },
+    {
+      "bin": "[0.4, 0.6)",
+      "range": [
+        0.4,
+        0.6
+      ],
+      "count": 6,
+      "mean_confidence": 0.4,
+      "accuracy": 0.625,
+      "error": 0.225
+    },
+    {
+      "bin": "[0.6, 0.8)",
+      "range": [
+        0.6,
+        0.8
+      ],
+      "count": 33,
+      "mean_confidence": 0.7064,
+      "accuracy": 0.7273,
+      "error": 0.0209
+    },
+    {
+      "bin": "[0.8, 1.0]",
+      "range": [
+        0.8,
+        1
+      ],
+      "count": 15,
+      "mean_confidence": 0.87,
+      "accuracy": 0.65,
+      "error": 0.22
+    }
+  ],
+  "threshold_analysis": [
+    {
+      "threshold": 0.5,
+      "accepted_count": 48,
+      "escalated_count": 18,
+      "escalate_rate": 0.2727,
+      "accepted_accuracy": 0.7031
+    },
+    {
+      "threshold": 0.6,
+      "accepted_count": 48,
+      "escalated_count": 18,
+      "escalate_rate": 0.2727,
+      "accepted_accuracy": 0.7031
+    },
+    {
+      "threshold": 0.7,
+      "accepted_count": 45,
+      "escalated_count": 21,
+      "escalate_rate": 0.3182,
+      "accepted_accuracy": 0.7
+    },
+    {
+      "threshold": 0.75,
+      "accepted_count": 21,
+      "escalated_count": 45,
+      "escalate_rate": 0.6818,
+      "accepted_accuracy": 0.6667
+    },
+    {
+      "threshold": 0.8,
+      "accepted_count": 15,
+      "escalated_count": 51,
+      "escalate_rate": 0.7727,
+      "accepted_accuracy": 0.65
+    },
+    {
+      "threshold": 0.85,
+      "accepted_count": 9,
+      "escalated_count": 57,
+      "escalate_rate": 0.8636,
+      "accepted_accuracy": 0.6667
+    },
+    {
+      "threshold": 0.9,
+      "accepted_count": 6,
+      "escalated_count": 60,
+      "escalate_rate": 0.9091,
+      "accepted_accuracy": 0.5
+    }
+  ]
+}

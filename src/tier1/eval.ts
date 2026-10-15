@@ -56,7 +56,7 @@ export interface ArmResult {
   mean_correctness: number;
   mean_citation: number;
   mean_calibration: number;
-  noise_band?: number;
+  generation_noise_band?: number;
 }
 
 export interface CalibrationBin {
@@ -76,26 +76,62 @@ export interface ThresholdAnalysis {
   accepted_accuracy: number;
 }
 
+export interface PairedBootstrapOptions {
+  iterations?: number;
+  alpha?: number;
+  seed?: number;
+}
+
+export interface PairedBootstrapResult {
+  sample_mean: number;
+  ci_low: number;
+  ci_high: number;
+  confidence_level: number;
+  crosses_zero: boolean;
+}
+
 export interface EvalComparison {
   baseline_arm: PromptArm;
   degraded_arm: PromptArm;
   baseline_mean: number;
   degraded_mean: number;
   delta: number;
-  noise_band: number;
+  ci_low: number;
+  ci_high: number;
+  confidence_level: number;
+  n_paired: number;
+  n_missing: number;
   is_discriminating: boolean;
   status: "discriminating" | "inside_noise_band";
+}
+
+export interface ExploratoryPredictorResult {
+  predictor: string;
+  condition: string;
+  met_count: number;
+  met_accuracy: number;
+  unmet_count: number;
+  unmet_accuracy: number;
+  lift: number;
+  auroc: number;
+}
+
+export interface ExploratoryAnalysisReport {
+  label: string;
+  distinct_answered_count: number;
+  predictors: ExploratoryPredictorResult[];
 }
 
 export interface EvalReport {
   model: string;
   runs_per_arm: number;
   concurrency: number;
-  noise_band: number;
+  generation_noise_band?: number;
   arms: Record<string, ArmResult>;
   comparisons: EvalComparison[];
   calibration_curve: CalibrationBin[];
   threshold_analysis: ThresholdAnalysis[];
+  exploratory_predictors?: ExploratoryAnalysisReport;
 }
 
 export interface EvalOptions {
@@ -190,27 +226,242 @@ export function scoreQuestion(q: QuestionFixture, last: Message, calls: string[]
   };
 }
 
-export function computeNoiseBand(scores: number[]): number {
+export function computeGenerationNoiseBand(scores: number[]): number {
   if (scores.length < 2) return 0;
   const min = Math.min(...scores);
   const max = Math.max(...scores);
   return Number((max - min).toFixed(4));
 }
 
-export function compareArms(baseline: ArmResult, degraded: ArmResult, noiseBand: number): EvalComparison {
+// Retained as alias for backward compatibility
+export const computeNoiseBand = computeGenerationNoiseBand;
+
+export function createLcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+export function computePairedBootstrapCI(
+  deltas: number[],
+  options?: PairedBootstrapOptions,
+): PairedBootstrapResult {
+  const n = deltas.length;
+  const iterations = options?.iterations ?? 10_000;
+  const alpha = options?.alpha ?? 0.05;
+  const confidence_level = Number((1 - alpha).toFixed(4));
+
+  if (n === 0) {
+    return {
+      sample_mean: 0,
+      ci_low: 0,
+      ci_high: 0,
+      confidence_level,
+      crosses_zero: true,
+    };
+  }
+
+  const seed = options?.seed ?? 42;
+  const rand = createLcg(seed);
+
+  const sampleMean = deltas.reduce((sum, d) => sum + d, 0) / n;
+  const bootMeans = new Float64Array(iterations);
+
+  for (let b = 0; b < iterations; b++) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const idx = (rand() * n) | 0;
+      sum += deltas[idx];
+    }
+    bootMeans[b] = sum / n;
+  }
+
+  bootMeans.sort();
+  const lowIdx = Math.max(0, Math.floor(iterations * (alpha / 2)));
+  const highIdx = Math.min(iterations - 1, Math.floor(iterations * (1 - alpha / 2)));
+  const ci_low = Number(bootMeans[lowIdx].toFixed(4));
+  const ci_high = Number(bootMeans[highIdx].toFixed(4));
+  const sample_mean = Number(sampleMean.toFixed(4));
+  const crosses_zero = ci_low <= 0 && ci_high >= 0;
+
+  return {
+    sample_mean,
+    ci_low,
+    ci_high,
+    confidence_level,
+    crosses_zero,
+  };
+}
+
+export function compareArms(
+  baseline: ArmResult,
+  degraded: ArmResult,
+  options?: PairedBootstrapOptions,
+): EvalComparison {
+  const bRuns = Math.max(1, baseline.runs.length);
+  const dRuns = Math.max(1, degraded.runs.length);
+
+  // Score maps: accumulate score per question id across runs.
+  // Missing or unanswered (draft === undefined) counts as score 0.
+  const baselineMap = new Map<string, number>();
+  const baselineAnswered = new Set<string>();
+  for (const run of baseline.runs) {
+    for (const q of run.questions) {
+      if (q.draft) {
+        baselineAnswered.add(q.id);
+        baselineMap.set(q.id, (baselineMap.get(q.id) ?? 0) + q.overall);
+      }
+    }
+  }
+
+  const degradedMap = new Map<string, number>();
+  const degradedAnswered = new Set<string>();
+  for (const run of degraded.runs) {
+    for (const q of run.questions) {
+      if (q.draft) {
+        degradedAnswered.add(q.id);
+        degradedMap.set(q.id, (degradedMap.get(q.id) ?? 0) + q.overall);
+      }
+    }
+  }
+
+  // Pair strictly by question ID, sorted for determinism and invariant to input order (Amendment 2)
+  const allIds = Array.from(
+    new Set([
+      ...baseline.runs.flatMap((r) => r.questions.map((q) => q.id)),
+      ...degraded.runs.flatMap((r) => r.questions.map((q) => q.id)),
+    ]),
+  ).sort();
+
+  let n_paired = 0;
+  let n_missing = 0;
+  const deltas: number[] = [];
+
+  for (const id of allIds) {
+    const isBAnswered = baselineAnswered.has(id);
+    const isDAnswered = degradedAnswered.has(id);
+
+    const bScore = isBAnswered ? (baselineMap.get(id) ?? 0) / bRuns : 0;
+    const dScore = isDAnswered ? (degradedMap.get(id) ?? 0) / dRuns : 0;
+
+    if (isBAnswered && isDAnswered) {
+      n_paired++;
+    } else {
+      n_missing++;
+    }
+
+    deltas.push(bScore - dScore);
+  }
+
+  const bootstrap = computePairedBootstrapCI(deltas, options);
   const delta = Number((baseline.mean_score - degraded.mean_score).toFixed(4));
-  // A single run per arm does not establish a noise band: reported as inside noise band, not as a result.
-  const singleRun = baseline.runs.length < 2 || degraded.runs.length < 2;
-  const is_discriminating = !singleRun && delta > noiseBand;
+  const is_discriminating = !bootstrap.crosses_zero && delta > 0;
+
   return {
     baseline_arm: baseline.arm,
     degraded_arm: degraded.arm,
     baseline_mean: baseline.mean_score,
     degraded_mean: degraded.mean_score,
     delta,
-    noise_band: noiseBand,
+    ci_low: bootstrap.ci_low,
+    ci_high: bootstrap.ci_high,
+    confidence_level: bootstrap.confidence_level,
+    n_paired,
+    n_missing,
     is_discriminating,
     status: is_discriminating ? "discriminating" : "inside_noise_band",
+  };
+}
+
+export function calcAuroc(scores: number[], labels: boolean[]): number {
+  const n1 = labels.filter(Boolean).length;
+  const n0 = labels.length - n1;
+  if (n1 === 0 || n0 === 0) return 0.5;
+
+  let wins = 0;
+  for (let i = 0; i < scores.length; i++) {
+    if (!labels[i]) continue;
+    for (let j = 0; j < scores.length; j++) {
+      if (labels[j]) continue;
+      if (scores[i] > scores[j]) wins += 1.0;
+      else if (scores[i] === scores[j]) wins += 0.5;
+    }
+  }
+  return Number((wins / (n1 * n0)).toFixed(4));
+}
+
+export function computeExploratoryPredictors(questions: ScoredQuestion[]): ExploratoryAnalysisReport {
+  // Deduplicate by question id to count distinct answered questions only (Amendment 4)
+  const qMap = new Map<string, ScoredQuestion>();
+  for (const q of questions) {
+    if (q.draft && !qMap.has(q.id)) {
+      qMap.set(q.id, q);
+    }
+  }
+  const distinct = Array.from(qMap.values());
+  const distinctCount = distinct.length;
+  const label = `exploratory, N=${distinctCount}, no threshold`;
+
+  // Binarize target: correctness >= 0.7
+  const target = distinct.map((q) => q.correctness >= 0.7);
+
+  function evalPredictor(
+    name: string,
+    conditionDesc: string,
+    conditionFn: (q: ScoredQuestion) => boolean,
+    scoreFn: (q: ScoredQuestion) => number,
+  ): ExploratoryPredictorResult {
+    const met = distinct.filter(conditionFn);
+    const unmet = distinct.filter((q) => !conditionFn(q));
+    const metAcc = met.length > 0 ? met.reduce((s, q) => s + q.correctness, 0) / met.length : 0;
+    const unmetAcc = unmet.length > 0 ? unmet.reduce((s, q) => s + q.correctness, 0) / unmet.length : 0;
+    const lift = metAcc - unmetAcc;
+    const auroc = calcAuroc(distinct.map(scoreFn), target);
+    return {
+      predictor: name,
+      condition: conditionDesc,
+      met_count: met.length,
+      met_accuracy: Number(metAcc.toFixed(4)),
+      unmet_count: unmet.length,
+      unmet_accuracy: Number(unmetAcc.toFixed(4)),
+      lift: Number(lift.toFixed(4)),
+      auroc,
+    };
+  }
+
+  const predictors: ExploratoryPredictorResult[] = [
+    evalPredictor(
+      "Code Block Presence",
+      "answer includes ```",
+      (q) => (q.draft?.answer ?? "").includes("```"),
+      (q) => ((q.draft?.answer ?? "").includes("```") ? 1 : 0),
+    ),
+    evalPredictor(
+      "Tool Verification Effort",
+      "tool calls >= 5",
+      (q) => q.calls.length >= 5,
+      (q) => q.calls.length,
+    ),
+    evalPredictor(
+      "Citation Completeness",
+      "citation score === 1.0",
+      (q) => q.citation === 1.0,
+      (q) => q.citation,
+    ),
+    evalPredictor(
+      "Self-Reported Confidence (Baseline)",
+      "confidence >= 0.8",
+      (q) => (q.draft?.confidence ?? 0) >= 0.8,
+      (q) => q.draft?.confidence ?? 0,
+    ),
+  ];
+
+  return {
+    label,
+    distinct_answered_count: distinctCount,
+    predictors,
   };
 }
 
@@ -377,7 +628,7 @@ export async function runArm(
   const armMeanCorr = runResults.reduce((s, r) => s + r.mean_correctness, 0) / runResults.length;
   const armMeanCite = runResults.reduce((s, r) => s + r.mean_citation, 0) / runResults.length;
   const armMeanCalib = runResults.reduce((s, r) => s + r.mean_calibration, 0) / runResults.length;
-  const noiseBand = computeNoiseBand(runResults.map((r) => r.mean_score));
+  const generationNoiseBand = computeGenerationNoiseBand(runResults.map((r) => r.mean_score));
 
   return {
     arm,
@@ -387,7 +638,7 @@ export async function runArm(
     mean_correctness: Number(armMeanCorr.toFixed(4)),
     mean_citation: Number(armMeanCite.toFixed(4)),
     mean_calibration: Number(armMeanCalib.toFixed(4)),
-    noise_band: runsCount >= 2 ? noiseBand : undefined,
+    generation_noise_band: runsCount >= 2 ? generationNoiseBand : undefined,
   };
 }
 
@@ -403,17 +654,18 @@ export async function runTier1PromptEval(options: EvalOptions): Promise<EvalRepo
   }
 
   const baseline = armResults["real"];
-  const noiseBand = baseline?.noise_band ?? 0;
+  const generationNoiseBand = baseline?.generation_noise_band;
   const comparisons: EvalComparison[] = [];
 
   for (const arm of armNames) {
     if (arm !== "real" && armResults[arm] && baseline) {
-      comparisons.push(compareArms(baseline, armResults[arm], noiseBand));
+      comparisons.push(compareArms(baseline, armResults[arm]));
     }
   }
 
   // Calibration curve computed over all evaluations of the baseline arm
   const allBaselineEvaluations: { confidence: number; correctness: number }[] = [];
+  const allBaselineQuestions: ScoredQuestion[] = [];
   if (baseline) {
     for (const run of baseline.runs) {
       for (const q of run.questions) {
@@ -422,6 +674,7 @@ export async function runTier1PromptEval(options: EvalOptions): Promise<EvalRepo
             confidence: q.draft.confidence,
             correctness: q.correctness,
           });
+          allBaselineQuestions.push(q);
         }
       }
     }
@@ -429,16 +682,18 @@ export async function runTier1PromptEval(options: EvalOptions): Promise<EvalRepo
 
   const calibration_curve = computeCalibrationCurve(allBaselineEvaluations);
   const threshold_analysis = computeThresholdAnalysis(allBaselineEvaluations);
+  const exploratory_predictors = computeExploratoryPredictors(allBaselineQuestions);
 
   return {
     model: options.model,
     runs_per_arm: options.runs ?? 1,
     concurrency: options.concurrency ?? 1,
-    noise_band: noiseBand,
+    generation_noise_band: generationNoiseBand,
     arms: armResults,
     comparisons,
     calibration_curve,
     threshold_analysis,
+    exploratory_predictors,
   };
 }
 
@@ -449,7 +704,9 @@ export function formatReportTables(report: EvalReport): string {
   lines.push(`Model: ${report.model}`);
   lines.push(`Runs per arm: ${report.runs_per_arm}`);
   lines.push(`Concurrency: ${report.concurrency}`);
-  lines.push(`Measured Noise Band (spread of real arm): ${report.noise_band.toFixed(4)}`);
+  if (report.generation_noise_band !== undefined) {
+    lines.push(`Generation Noise Band (T>0 diagnostic, spread across runs): ${report.generation_noise_band.toFixed(4)}`);
+  }
   lines.push("");
 
   lines.push("--- Arms Performance ---");
@@ -457,7 +714,7 @@ export function formatReportTables(report: EvalReport): string {
     "Arm             Score   Correctness  Citation  Calibration  Runs Spread",
   );
   for (const [arm, res] of Object.entries(report.arms)) {
-    const spreadStr = res.noise_band !== undefined ? res.noise_band.toFixed(4) : "n/a (N=1)";
+    const spreadStr = res.generation_noise_band !== undefined ? res.generation_noise_band.toFixed(4) : "n/a (N=1)";
     lines.push(
       `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${spreadStr}`,
     );
@@ -465,10 +722,12 @@ export function formatReportTables(report: EvalReport): string {
   lines.push("");
 
   lines.push("--- Comparisons Against Baseline (real) ---");
-  lines.push("Degraded Arm    Baseline  Degraded  Delta    NoiseBand  Status");
+  lines.push("Degraded Arm    Baseline  Degraded  Delta     Bootstrap 95% CI       n_paired  n_missing  Status");
   for (const comp of report.comparisons) {
+    const ciStr = `[${comp.ci_low >= 0 ? "+" : ""}${comp.ci_low.toFixed(4)}, ${comp.ci_high >= 0 ? "+" : ""}${comp.ci_high.toFixed(4)}]`;
+    const deltaStr = `${comp.delta >= 0 ? "+" : ""}${comp.delta.toFixed(4)}`;
     lines.push(
-      `${comp.degraded_arm.padEnd(15)} ${comp.baseline_mean.toFixed(4).padEnd(9)} ${comp.degraded_mean.toFixed(4).padEnd(9)} ${comp.delta.toFixed(4).padEnd(8)} ${comp.noise_band.toFixed(4).padEnd(10)} ${comp.status}`,
+      `${comp.degraded_arm.padEnd(15)} ${comp.baseline_mean.toFixed(4).padEnd(9)} ${comp.degraded_mean.toFixed(4).padEnd(9)} ${deltaStr.padEnd(9)} ${ciStr.padEnd(22)} ${String(comp.n_paired).padEnd(9)} ${String(comp.n_missing).padEnd(10)} ${comp.status}`,
     );
   }
   lines.push("");
@@ -489,6 +748,20 @@ export function formatReportTables(report: EvalReport): string {
     lines.push(
       `${t.threshold.toFixed(2).padEnd(10)} ${pct.padEnd(14)} ${t.accepted_accuracy.toFixed(4).padEnd(13)} ${t.accepted_count} / ${t.escalated_count}`,
     );
+  }
+
+  if (report.exploratory_predictors) {
+    lines.push("");
+    lines.push(`--- Exploratory Correctness Predictors (${report.exploratory_predictors.label}) ---`);
+    lines.push("Predictor                              Condition                Met Acc (n)    Unmet Acc (n)  Lift     AUROC");
+    for (const p of report.exploratory_predictors.predictors) {
+      const metStr = `${p.met_accuracy.toFixed(4)} (${p.met_count})`;
+      const unmetStr = `${p.unmet_accuracy.toFixed(4)} (${p.unmet_count})`;
+      const liftStr = `${p.lift >= 0 ? "+" : ""}${p.lift.toFixed(4)}`;
+      lines.push(
+        `${p.predictor.padEnd(38)} ${p.condition.padEnd(24)} ${metStr.padEnd(14)} ${unmetStr.padEnd(14)} ${liftStr.padEnd(8)} ${p.auroc.toFixed(4)}`,
+      );
+    }
   }
 
   return lines.join("\n");
@@ -638,7 +911,7 @@ export interface MemoryEvalReport {
   model: string;
   runs_per_arm: number;
   concurrency: number;
-  noise_band: number;
+  generation_noise_band?: number;
   arms: Record<MemoryArm, MemoryArmResult>;
   comparisons: MemoryEvalComparison[];
   model_free_retrieval?: MemoryRetrievalCheckResult;
@@ -897,7 +1170,7 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
       mean_correctness: Number(armMeanCorr.toFixed(4)),
       mean_citation: Number(armMeanCite.toFixed(4)),
       mean_calibration: Number(armMeanCalib.toFixed(4)),
-      noise_band: runsCount >= 2 ? noiseBand : undefined,
+      generation_noise_band: runsCount >= 2 ? noiseBand : undefined,
       retrieval_rate: Number(retrievalRate.toFixed(4)),
       retrieval_results: allRetrievalResults,
     };
@@ -905,12 +1178,12 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
 
   // Comparisons: each memory arm beats no-memory baseline
   const noMemoryArm = armResults["no-memory"];
-  const noiseBand = noMemoryArm?.noise_band ?? armResults["wiki+bank"]?.noise_band ?? 0;
+  const genNoiseBand = noMemoryArm?.generation_noise_band ?? armResults["wiki+bank"]?.generation_noise_band;
   const comparisons: MemoryEvalComparison[] = [];
 
   for (const arm of ["wiki", "bank", "wiki+bank"] as MemoryArm[]) {
     if (armResults[arm] && noMemoryArm) {
-      comparisons.push(compareArms(armResults[arm] as any, noMemoryArm as any, noiseBand) as any);
+      comparisons.push(compareArms(armResults[arm] as any, noMemoryArm as any) as any);
     }
   }
 
@@ -918,7 +1191,7 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
     model: options.model,
     runs_per_arm: runsCount,
     concurrency,
-    noise_band: noiseBand,
+    generation_noise_band: genNoiseBand,
     arms: armResults as Record<MemoryArm, MemoryArmResult>,
     comparisons,
     model_free_retrieval: retrievalCheck,
@@ -932,7 +1205,9 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
   lines.push(`Model: ${report.model}`);
   lines.push(`Runs per arm: ${report.runs_per_arm}`);
   lines.push(`Concurrency: ${report.concurrency}`);
-  lines.push(`Measured Noise Band: ${report.noise_band.toFixed(4)}`);
+  if (report.generation_noise_band !== undefined) {
+    lines.push(`Measured Noise Band: ${report.generation_noise_band.toFixed(4)}`);
+  }
   lines.push("");
 
   lines.push("--- Memory Arms Performance ---");
@@ -940,7 +1215,7 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
     "Arm             Score   Correctness  Citation  Calibration  Retrieval  Runs Spread",
   );
   for (const [arm, res] of Object.entries(report.arms)) {
-    const spreadStr = res.noise_band !== undefined ? res.noise_band.toFixed(4) : "n/a (N=1)";
+    const spreadStr = res.generation_noise_band !== undefined ? res.generation_noise_band.toFixed(4) : "n/a (N=1)";
     lines.push(
       `${arm.padEnd(15)} ${res.mean_score.toFixed(4).padEnd(7)} ${res.mean_correctness.toFixed(4).padEnd(12)} ${res.mean_citation.toFixed(4).padEnd(9)} ${res.mean_calibration.toFixed(4).padEnd(12)} ${res.retrieval_rate.toFixed(4).padEnd(10)} ${spreadStr}`,
     );
@@ -948,10 +1223,12 @@ export function formatMemoryReportTables(report: MemoryEvalReport): string {
   lines.push("");
 
   lines.push("--- Comparisons Against Baseline (no-memory) ---");
-  lines.push("Memory Arm      Memory    No-Memory Delta    NoiseBand  Status");
+  lines.push("Memory Arm      Memory    No-Memory Delta     Bootstrap 95% CI       n_paired  n_missing  Status");
   for (const comp of report.comparisons) {
+    const ciStr = `[${comp.ci_low >= 0 ? "+" : ""}${comp.ci_low.toFixed(4)}, ${comp.ci_high >= 0 ? "+" : ""}${comp.ci_high.toFixed(4)}]`;
+    const deltaStr = `${comp.delta >= 0 ? "+" : ""}${comp.delta.toFixed(4)}`;
     lines.push(
-      `${String(comp.baseline_arm).padEnd(15)} ${comp.baseline_mean.toFixed(4).padEnd(9)} ${comp.degraded_mean.toFixed(4).padEnd(9)} ${comp.delta.toFixed(4).padEnd(8)} ${comp.noise_band.toFixed(4).padEnd(10)} ${comp.status}`,
+      `${String(comp.baseline_arm).padEnd(15)} ${comp.baseline_mean.toFixed(4).padEnd(9)} ${comp.degraded_mean.toFixed(4).padEnd(9)} ${deltaStr.padEnd(9)} ${ciStr.padEnd(22)} ${String(comp.n_paired).padEnd(9)} ${String(comp.n_missing).padEnd(10)} ${comp.status}`,
     );
   }
 
