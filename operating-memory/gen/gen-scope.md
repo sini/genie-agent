@@ -108,8 +108,8 @@ Benches live in `ci/bench/` (parent-chain linearity, `dataFilter` call counts, v
   uncatchably on an unregistered subject; `(wiring.<id> or { entries = []; })` erases the difference.
 - A resolver returning a list, number or `null` used to contribute nothing silently; the answer is now
   shape-checked. Keep a `{ }` live control for the legitimate empty answer.
-- `folds.same` refuses functions and paths before comparing (`==` is not reflexive on bare functions, and
-  `toJSON` on a path aborts or copies it into the store).
+- `folds.same` refuses functions and paths before comparing (`==` on functions depends on sharing and
+  on the evaluator, \[[nix-tryeval-and-equality]\], and `toJSON` on a path aborts or copies it into the store).
 - Mint: a same-run relatum at the same pass refuses with a message that reads like a typo. Reading one
   result field runs the whole mint. `strata` counts distinct passes.
 - `stratify` throws nowhere; a list field is forced to its spine only, so `settled = [ (throw …) ]` may

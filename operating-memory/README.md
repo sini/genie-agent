@@ -37,7 +37,4 @@ A new file gets a line in `MEMORY.md`. Every `[[slug]]` must resolve to a `name:
 
 ## Resolving conflicts
 
-1. The narrower scope wins: a rule for a named tier or situation beats a rule for "any change".
-2. At equal scope, the rule that protects against data loss, a security boundary, or owner authority wins.
-3. If a row in `practices/rule-conflicts.md` covers the situation, follow it.
-4. If none applies, stop. Put the pair to the owner as a D-tier question, and add the ruling as a row there.
+Known colliding rule pairs and their readings are in `practices/rule-conflicts.md`.
