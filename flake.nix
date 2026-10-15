@@ -369,6 +369,7 @@
                     ./tests/fixtures/tier1-eval
                     ./tests/fixtures/memory-eval
                     ./tests/fixtures/supervisor
+                    ./results/tier1/c2.1-reanalysis.json
                   ];
                 };
               }
@@ -383,6 +384,7 @@
                   && grep -q '^ok [0-9]* - oracle: the draft parser accepts every valid reply and rejects every invalid one$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: a degraded arm scores below real by more than paired bootstrap noise band$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: compareArms reports inside_noise_band when paired bootstrap CI crosses zero$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle: exploratory correctness predictors calculate AUROC and lift on distinct answered questions$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 1): eval tool set and system prompt equal production tier1Launch byte-for-byte$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 2): checkpointed run with --resume skips finished questions without calling pi$' $TMPDIR/tap \

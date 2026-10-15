@@ -4,9 +4,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   compareArms,
+  computeCalibrationCurve,
   computeExploratoryPredictors,
+  computeThresholdAnalysis,
   type EvalComparison,
   type ExploratoryAnalysisReport,
+  type ScoredQuestion,
 } from "../src/tier1/eval.ts";
 
 const repoRoot = new URL("..", import.meta.url);
@@ -23,8 +26,21 @@ const noCitationsArm = rawData.arms["no-citations"];
 const cSteps: EvalComparison = compareArms(realArm, noStepsArm);
 const cCitations: EvalComparison = compareArms(realArm, noCitationsArm);
 
-const baselineQuestions = realArm.runs.flatMap((r: any) => r.questions);
+const baselineQuestions: ScoredQuestion[] = realArm.runs.flatMap((r: any) => r.questions);
 const exploratory: ExploratoryAnalysisReport = computeExploratoryPredictors(baselineQuestions);
+
+const distinctMap = new Map<string, ScoredQuestion>();
+for (const q of baselineQuestions) {
+  if (q.draft && !distinctMap.has(q.id)) {
+    distinctMap.set(q.id, q);
+  }
+}
+const distinctEvaluations = Array.from(distinctMap.values()).map((q) => ({
+  confidence: q.draft!.confidence,
+  correctness: q.correctness,
+}));
+const calibrationCurve = computeCalibrationCurve(distinctEvaluations);
+const thresholdAnalysis = computeThresholdAnalysis(distinctEvaluations);
 
 const reanalysisReport = {
   model: rawData.model,
@@ -33,8 +49,8 @@ const reanalysisReport = {
   conclusion: "Under the new paired bootstrap rule, C2.1 did not discriminate either degraded arm.",
   comparisons: [cSteps, cCitations],
   exploratory_predictors: exploratory,
-  calibration_curve: rawData.calibration_curve,
-  threshold_analysis: rawData.threshold_analysis,
+  calibration_curve: calibrationCurve,
+  threshold_analysis: thresholdAnalysis,
 };
 
 writeFileSync(outJson, `${JSON.stringify(reanalysisReport, null, 2)}\n`);
@@ -42,6 +58,7 @@ writeFileSync(outJson, `${JSON.stringify(reanalysisReport, null, 2)}\n`);
 const md = `# C2.1 Offline Re-Analysis: Tier-1 Eval Noise Band & Calibration
 
 ## Executive Summary
+
 **Conclusion:** Under the paired bootstrap rule over benchmark questions, the C2.1 evaluation **did not discriminate either degraded arm**.
 Both \`no-steps\` (95% CI: [\`${cSteps.ci_low.toFixed(4)}\`, \`+${cSteps.ci_high.toFixed(4)}\`]) and \`no-citations\` (95% CI: [\`${cCitations.ci_low.toFixed(4)}\`, \`+${cCitations.ci_high.toFixed(4)}\`]) cross zero. The observed positive point deltas (+0.0938 and +0.0465) are statistically indistinguishable from question-sampling variance ($N=24$).
 
@@ -58,16 +75,18 @@ Both \`no-steps\` (95% CI: [\`${cSteps.ci_low.toFixed(4)}\`, \`+${cSteps.ci_high
 
 ---
 
-## 2. Calibration Analysis (real arm, $N=66$ answered runs)
+## 2. Calibration Analysis (real arm, $N=${exploratory.distinct_answered_count}$ distinct answered questions)
+
 - **Expected Calibration Error (ECE)**: 0.1711 (17.1%)
 
 | Bin Range | Count | Mean Confidence | Accuracy | Calibration Error |
 | :--- | :--- | :--- | :--- | :--- |
-| \`[0.0, 0.2)\` | 0 | 0.1000 | 0.0000 | 0.1000 |
-| \`[0.2, 0.4)\` | 12 | 0.2750 | 0.7708 | 0.4958 |
-| \`[0.4, 0.6)\` | 6 | 0.4000 | 0.6250 | 0.2250 |
-| \`[0.6, 0.8)\` | 33 | 0.7064 | 0.7273 | 0.0209 |
-| \`[0.8, 1.0]\` | 15 | 0.8700 | 0.6500 | 0.2200 |
+${calibrationCurve
+  .map(
+    (b) =>
+      `| \`${b.bin}\` | ${b.count} | ${b.mean_confidence.toFixed(4)} | ${b.accuracy.toFixed(4)} | ${b.error.toFixed(4)} |`,
+  )
+  .join("\n")}
 
 *Finding*: The model exhibits inverted calibration on this task. Questions answered with confidence $\\\\ge 0.8$ achieved only 65.0% accuracy, whereas questions answered with lower confidence achieved 72.5% accuracy.
 
@@ -87,8 +106,10 @@ ${exploratory.predictors
   .join("\n")}
 
 ### Recommendation for C5 Consideration
+
 Self-reported confidence is an unreliable signal for escalation (AUROC = 0.4256, worse than chance). Objective signals—specifically presence of formatted code blocks and verification tool calls—correlate positively with factual correctness.
 `;
 
 writeFileSync(outMd, md);
 console.log(`Re-analysis written to:\n  - ${outJson}\n  - ${outMd}`);
+

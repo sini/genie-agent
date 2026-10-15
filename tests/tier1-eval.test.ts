@@ -292,20 +292,34 @@ test("oracle: a degraded arm scores below real by more than paired bootstrap noi
     assert.strictEqual(comp.n_missing, 0);
   }
 
-  // Calibration curve must cover bins and compute error
+  // Calibration curve must cover bins and count distinct answered questions (not triplicate runs)
   assert.strictEqual(report.calibration_curve.length, 5);
   const totalCount = report.calibration_curve.reduce((s, b) => s + b.count, 0);
-  assert.strictEqual(totalCount, questions.length * 3);
+  assert.strictEqual(totalCount, questions.length, "calibration_curve counts must sum to distinct answered questions");
 
-  // Threshold analysis must include C5 threshold 0.8
+  // Threshold analysis must include C5 threshold 0.8 and sum to distinct answered questions (not triplicate runs)
   const c5Entry = report.threshold_analysis.find((t) => t.threshold === 0.8);
   assert(c5Entry !== undefined, "threshold_analysis must include 0.8 for C5");
   assert(c5Entry.accepted_accuracy > 0.8, "accepted accuracy at 0.8 must be high");
+  for (const t of report.threshold_analysis) {
+    assert.strictEqual(
+      t.accepted_count + t.escalated_count,
+      questions.length,
+      `threshold ${t.threshold} counts must sum to distinct answered questions (${questions.length})`,
+    );
+  }
 
   // Exploratory predictors computed on distinct answered questions
   assert(report.exploratory_predictors !== undefined);
   assert.strictEqual(report.exploratory_predictors.distinct_answered_count, questions.length);
   assert.strictEqual(report.exploratory_predictors.label, `exploratory, N=${questions.length}, no threshold`);
+  for (const p of report.exploratory_predictors.predictors) {
+    assert.strictEqual(
+      p.met_count + p.unmet_count,
+      report.exploratory_predictors.distinct_answered_count,
+      `predictor ${p.predictor} met_count + unmet_count must equal distinct_answered_count`,
+    );
+  }
 
   // Output formatting table helper
   const formatted = formatReportTables(report);
@@ -461,6 +475,13 @@ test("oracle: exploratory correctness predictors calculate AUROC and lift on dis
   const report = computeExploratoryPredictors(questions);
   assert.strictEqual(report.distinct_answered_count, 2, "must deduplicate distinct questions to N=2");
   assert.strictEqual(report.label, "exploratory, N=2, no threshold");
+  for (const p of report.predictors) {
+    assert.strictEqual(
+      p.met_count + p.unmet_count,
+      report.distinct_answered_count,
+      `predictor ${p.predictor} met_count + unmet_count must equal distinct_answered_count`,
+    );
+  }
 
   const codePredictor = report.predictors.find((p) => p.predictor === "Code Block Presence");
   assert(codePredictor !== undefined);
@@ -468,6 +489,31 @@ test("oracle: exploratory correctness predictors calculate AUROC and lift on dis
   assert.strictEqual(codePredictor.unmet_count, 1);
   assert(codePredictor.lift > 0, "code presence must produce positive lift");
   assert.strictEqual(codePredictor.auroc, 1.0, "perfect separation must yield AUROC 1.0");
+
+  // Also verify the regenerated C2.1 reanalysis artifact counts 22 distinct answered questions (not 66 triplicate answers)
+  const reanalysis = JSON.parse(
+    readFileSync(new URL("../results/tier1/c2.1-reanalysis.json", import.meta.url).pathname, "utf8"),
+  );
+  assert.strictEqual(reanalysis.exploratory_predictors.distinct_answered_count, 22);
+  for (const p of reanalysis.exploratory_predictors.predictors) {
+    assert.strictEqual(
+      p.met_count + p.unmet_count,
+      22,
+      `reanalysis predictor ${p.predictor} must sum to 22 distinct answered questions`,
+    );
+  }
+  assert.strictEqual(
+    reanalysis.calibration_curve.reduce((s: number, b: any) => s + b.count, 0),
+    22,
+    "reanalysis calibration_curve counts must sum to 22 distinct answered questions",
+  );
+  for (const t of reanalysis.threshold_analysis) {
+    assert.strictEqual(
+      t.accepted_count + t.escalated_count,
+      22,
+      `reanalysis threshold ${t.threshold} counts must sum to 22 distinct answered questions`,
+    );
+  }
 });
 
 test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement", async () => {

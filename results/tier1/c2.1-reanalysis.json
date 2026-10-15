@@ -97,7 +97,7 @@
         0.2,
         0.4
       ],
-      "count": 12,
+      "count": 4,
       "mean_confidence": 0.275,
       "accuracy": 0.7708,
       "error": 0.4958
@@ -108,7 +108,7 @@
         0.4,
         0.6
       ],
-      "count": 6,
+      "count": 2,
       "mean_confidence": 0.4,
       "accuracy": 0.625,
       "error": 0.225
@@ -119,7 +119,7 @@
         0.6,
         0.8
       ],
-      "count": 33,
+      "count": 11,
       "mean_confidence": 0.7064,
       "accuracy": 0.7273,
       "error": 0.0209
@@ -130,7 +130,7 @@
         0.8,
         1
       ],
-      "count": 15,
+      "count": 5,
       "mean_confidence": 0.87,
       "accuracy": 0.65,
       "error": 0.22
@@ -139,50 +139,50 @@
   "threshold_analysis": [
     {
       "threshold": 0.5,
-      "accepted_count": 48,
-      "escalated_count": 18,
+      "accepted_count": 16,
+      "escalated_count": 6,
       "escalate_rate": 0.2727,
       "accepted_accuracy": 0.7031
     },
     {
       "threshold": 0.6,
-      "accepted_count": 48,
-      "escalated_count": 18,
+      "accepted_count": 16,
+      "escalated_count": 6,
       "escalate_rate": 0.2727,
       "accepted_accuracy": 0.7031
     },
     {
       "threshold": 0.7,
-      "accepted_count": 45,
-      "escalated_count": 21,
+      "accepted_count": 15,
+      "escalated_count": 7,
       "escalate_rate": 0.3182,
       "accepted_accuracy": 0.7
     },
     {
       "threshold": 0.75,
-      "accepted_count": 21,
-      "escalated_count": 45,
+      "accepted_count": 7,
+      "escalated_count": 15,
       "escalate_rate": 0.6818,
       "accepted_accuracy": 0.6667
     },
     {
       "threshold": 0.8,
-      "accepted_count": 15,
-      "escalated_count": 51,
+      "accepted_count": 5,
+      "escalated_count": 17,
       "escalate_rate": 0.7727,
       "accepted_accuracy": 0.65
     },
     {
       "threshold": 0.85,
-      "accepted_count": 9,
-      "escalated_count": 57,
+      "accepted_count": 3,
+      "escalated_count": 19,
       "escalate_rate": 0.8636,
       "accepted_accuracy": 0.6667
     },
     {
       "threshold": 0.9,
-      "accepted_count": 6,
-      "escalated_count": 60,
+      "accepted_count": 2,
+      "escalated_count": 20,
       "escalate_rate": 0.9091,
       "accepted_accuracy": 0.5
     }

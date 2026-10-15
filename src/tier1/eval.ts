@@ -1022,17 +1022,21 @@ function assemblePromptReport(
     }
   }
 
+  const seenIds = new Set<string>();
   const allBaselineEvaluations: { confidence: number; correctness: number }[] = [];
   const allBaselineQuestions: ScoredQuestion[] = [];
   if (baseline) {
     for (const run of baseline.runs) {
       for (const q of run.questions) {
         if (q.draft) {
-          allBaselineEvaluations.push({
-            confidence: q.draft.confidence,
-            correctness: q.correctness,
-          });
           allBaselineQuestions.push(q);
+          if (!seenIds.has(q.id)) {
+            seenIds.add(q.id);
+            allBaselineEvaluations.push({
+              confidence: q.draft.confidence,
+              correctness: q.correctness,
+            });
+          }
         }
       }
     }
