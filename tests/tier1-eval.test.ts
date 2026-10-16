@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
+import { defaultCheckinPrompt } from "../src/lifecycle/index.ts";
 import { type Record as PiRecord, Supervisor } from "../src/supervisor/index.ts";
 import {
    compareArms,
@@ -16,7 +17,7 @@ import {
   runArm,
   runTier1PromptEval,
 } from "../src/tier1/eval.ts";
-import { TOOLS } from "../src/tier1/index.ts";
+import { CHECKIN_MS, QUESTION_TIMEOUT_MS, TOOLS } from "../src/tier1/index.ts";
 import { tier1Launch, writePiModelsJson } from "../src/tier1/launch.ts";
 
 const root = new URL("..", import.meta.url);
@@ -815,4 +816,173 @@ test("oracle C2.3 (Cell 3): unanswered question (pi settles without reply or tim
     unansweredServer.close();
   }
 });
+
+test("oracle C13 (Oracle 4): eval uses shared TurnController, defaults timeoutMs to QUESTION_TIMEOUT_MS (600_000), and records checkin_fired and replied_after_checkin", async () => {
+  assert.equal(QUESTION_TIMEOUT_MS, 600_000, "production questionTimeoutMs default must be 600_000 (10m)");
+  assert.equal(CHECKIN_MS, 300_000, "production checkinMs default must be 300_000 (5m)");
+
+  class EvalFakeClock {
+    t = 0;
+    private timers = new Map<number, { at: number; f: () => unknown }>();
+    private n = 0;
+    now = () => this.t;
+    setTimeout = (f: () => unknown, ms: number) => (this.timers.set(++this.n, { at: this.t + ms, f }), this.n);
+    clearTimeout = (id: unknown) => void this.timers.delete(id as number);
+    async advance(ms: number) {
+      const end = this.t + ms;
+      for (let fired = 0; ; fired++) {
+        if (fired > 1000) throw new Error("fake clock loop");
+        const [id, next] = [...this.timers].filter(([, x]) => x.at <= end).sort(([, a], [, b]) => a.at - b.at)[0] ?? [];
+        if (!next) break;
+        this.timers.delete(id!);
+        this.t = next.at;
+        await next.f();
+      }
+      this.t = end;
+    }
+  }
+
+  const clock = new EvalFakeClock();
+  const seenUserMessages: string[][] = [];
+  const c13Server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      const msgs: any[] = parsed.messages ?? [];
+      const userTexts = msgs.filter((m) => m.role === "user").map((m) => textOf(m.content));
+      seenUserMessages.push(userTexts);
+      const firstUser = userTexts[0] ?? "";
+      const hasToolResult = msgs.some((m) => m.role === "tool");
+
+      if (firstUser.includes("q-fast")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(
+          sseToolCalls([
+            {
+              id: "c_fast_reply",
+              name: "reply",
+              args: { answer: "fast-ans", confidence: 0.9, gaps: [], escalate_forced: "no" },
+            },
+          ]),
+        );
+        return;
+      }
+
+      if (firstUser.includes("q-after-checkin")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (!hasToolResult) {
+          res.end(
+            sseToolCalls([
+              {
+                id: "c_slow_eval",
+                name: "eval",
+                args: { repo: "o/r", rev: "main", attr: "checkin-only", trusted: "no" },
+              },
+            ]),
+          );
+        } else {
+          res.end(
+            sseToolCalls([
+              {
+                id: "c_checkin_reply",
+                name: "reply",
+                args: { answer: "ans-after-checkin", confidence: 0.85, gaps: ["unverified-x"], escalate_forced: "no" },
+              },
+            ]),
+          );
+        }
+        return;
+      }
+
+      if (firstUser.includes("q-timeout")) {
+        if (!hasToolResult) {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.end(
+            sseToolCalls([
+              {
+                id: "c_slow_eval_2",
+                name: "eval",
+                args: { repo: "o/r", rev: "main", attr: "hang-to-deadline", trusted: "no" },
+              },
+            ]),
+          );
+        } else {
+          // Second LLM call: advance clock to the 10m deadline while the LLM request is open
+          void clock.advance(QUESTION_TIMEOUT_MS - CHECKIN_MS);
+        }
+      }
+    });
+  });
+
+  const c13Port = await new Promise<number>((resolve) =>
+    c13Server.listen(0, "127.0.0.1", () => resolve((c13Server.address() as { port: number }).port)),
+  );
+
+  try {
+    // Note: timeoutMs and checkinMs are intentionally omitted so runArm uses production defaults (600_000 / 300_000)
+    const armRes = await runArm("real", new URL("prompts/tier1.md", root).pathname, {
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${c13Port}`,
+      promptArms: { real: "", "no-steps": "", "no-citations": "" },
+      clock,
+      host: {
+        eval: async () => {
+          // Advance fake clock by 5 minutes (300_000 ms) while eval tool is executing
+          await clock.advance(CHECKIN_MS);
+          return { exit: 0, stdout_tail: "ok", stderr_tail: "", limit_hit: "none" };
+        },
+      },
+      questions: [
+        { id: "q-fast", question: "q-fast", expected_claims: ["fast-ans"] },
+        { id: "q-after-checkin", question: "q-after-checkin", expected_claims: ["ans-after-checkin"] },
+        { id: "q-timeout", question: "q-timeout", expected_claims: ["never"] },
+      ],
+    });
+
+    const [qFast, qAfterCheckin, qTimeout] = armRes.runs[0].questions;
+
+    // 1. Fast question: never sees check-in
+    assert.equal(qFast.finish, "stop");
+    assert.equal(qFast.checkin_fired, false);
+    assert.equal(qFast.replied_after_checkin, false);
+
+    // 2. Question that replies after 5m check-in (would have timed out if eval.ts hardcoded 300_000!)
+    assert.equal(qAfterCheckin.finish, "stop");
+    assert.equal(qAfterCheckin.checkin_fired, true);
+    assert.equal(qAfterCheckin.replied_after_checkin, true);
+    assert.ok(
+      seenUserMessages.some((msgs) => msgs.some((m) => m.includes(defaultCheckinPrompt()))),
+      "steered check-in prompt must reach model messages mid-turn",
+    );
+
+    // 3. Question that times out at 10m (600_000 ms) after 5m check-in
+    assert.equal(qTimeout.finish, "timeout");
+    assert.equal(qTimeout.checkin_fired, true);
+    assert.equal(qTimeout.replied_after_checkin, false);
+    assert.match(qTimeout.error ?? "", /timed out after 600000ms/);
+  } finally {
+    c13Server.closeAllConnections?.();
+    c13Server.close();
+  }
+});
+
+test("mutant C13 (Oracle 4): hardcoding 300_000 in eval.ts ignoring QUESTION_TIMEOUT_MS makes Oracle 4 go RED", () => {
+  const cliSource = readFileSync(new URL("tests/tier1-eval.ts", root), "utf8");
+  const evalSource = readFileSync(new URL("src/tier1/eval.ts", root), "utf8");
+  const assertSharedTimeout = (evalSrc: string, cliSrc: string, defaultTimeout: number) => {
+    assert.equal(defaultTimeout, QUESTION_TIMEOUT_MS, "default timeout must equal shared QUESTION_TIMEOUT_MS (600_000)");
+    assert.ok(!evalSrc.includes("options.timeoutMs ?? 300_000"), "eval.ts must not hardcode 300_000");
+    assert.ok(!cliSrc.includes('"timeout-ms": { type: "string", default: "300000" }'), "tier1-eval.ts must not hardcode 300000");
+  };
+  // Production passes
+  assertSharedTimeout(evalSource, cliSource, QUESTION_TIMEOUT_MS);
+  // Mutant: hardcoding 300_000 fails RED
+  assert.throws(
+    () => assertSharedTimeout("const timeoutMs = options.timeoutMs ?? 300_000;", cliSource, 300_000),
+    /AssertionError/,
+    "mutant hardcoding 300_000 in eval.ts must fail Oracle 4 RED",
+  );
+});
+
 

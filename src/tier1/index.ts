@@ -53,6 +53,9 @@ export interface Host {
   screen(text: string): Promise<string>;
 }
 
+export const QUESTION_TIMEOUT_MS = 600_000;
+export const CHECKIN_MS = 300_000;
+
 export interface Config {
   // The thread's worktree root, `<worktreeRoot>/<thread>`: every clone lands under it.
   root: string;
@@ -64,6 +67,9 @@ export interface Config {
   fetchMaxBytes?: number;
   searchResults?: number;
   timeoutMs?: number;
+  // Per-question turn deadline (default: 600_000 ms) and check-in (default: 300_000 ms).
+  questionTimeoutMs?: number;
+  checkinMs?: number;
   // Addresses web_fetch may reach although refused. Tests only.
   exempt?: string[];
 }

@@ -351,6 +351,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/tier1
+                    ./src/lifecycle
+                    ./src/state
                     ./src/supervisor
                     ./src/bank
                     ./src/guard
@@ -389,6 +391,7 @@
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 1): eval tool set and system prompt equal production tier1Launch byte-for-byte$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 2): checkpointed run with --resume skips finished questions without calling pi$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 3): unanswered question (pi settles without reply or times out) has draft undefined, score 0, and counts in n_missing$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C13 (Oracle 4): eval uses shared TurnController, defaults timeoutMs to QUESTION_TIMEOUT_MS (600_000), and records checkin_fired and replied_after_checkin$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Oracle C2.3 (Amendment 2): recall without bank or with bank: support returns empty support results and recall_called: false; bank: memory returns fixture results and recall_called: true$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
@@ -629,6 +632,7 @@
                     ./src/mirror
                     ./src/state
                     ./src/supervisor
+                    ./prompts
                     ./tests/lifecycle.test.ts
                     ./tests/fixtures/supervisor
                   ];
@@ -639,7 +643,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/lifecycle.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: active ⇒ parked at 1 h ⇒ resumed on a message with its context intact$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a park before the first reply keeps the pending message, and the resume replays it$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: accept and 24 h idle each close the thread and remove its worktrees$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: 🔍 does not close the thread: it stays open and its worktrees stay$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a supervisor restart mid-idle still closes on the original schedule$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: active ⇒ parked at 1 h ⇒ resumed on a message with its context intact$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a park before the first reply keeps the pending message, and the resume replays it$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: accept and 24 h idle each close the thread and remove its worktrees$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: 🔍 does not close the thread: it stays open and its worktrees stay$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a supervisor restart mid-idle still closes on the original schedule$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: check-in fires once at 5m and turn continues until 10m deadline (C13 Oracle 1)$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: fast question that replies before check-in time receives 0 check-in messages (C13 Oracle 2)$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
@@ -947,7 +951,8 @@
                   "an expired thread whose removal throws after tombstoning still resumes from the archive" \
                   "a new thread with S3 down still starts" \
                   "a tombstoned thread with S3 down is refused, not resumed fresh" \
-                  "main launches real pi against a stub model"; do
+                  "main launches real pi against a stub model" \
+                  "at the 10m deadline, 1 notice is posted and 1 escalation is created with transcript, then teardown (C13 Oracle 3)"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out

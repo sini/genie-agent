@@ -1,0 +1,1 @@
+Check-in: 5 of your 10 minutes are used. If what you have answers the question, reply now with it, listing anything unverified in `gaps`. Otherwise say in one line what you still need, and reply before 10 minutes.

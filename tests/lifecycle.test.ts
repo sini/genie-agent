@@ -4,9 +4,16 @@
 // `node --test tests/lifecycle.test.ts`; needs git on PATH.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { type Clock, Lifecycle } from "../src/lifecycle/index.ts";
+import {
+  CHECKIN_MS,
+  type Clock,
+  defaultCheckinPrompt,
+  Lifecycle,
+  QUESTION_TIMEOUT_MS,
+  TurnController,
+} from "../src/lifecycle/index.ts";
 import { liveWorktree, mirrorKey } from "../src/mirror/index.ts";
 import { ThreadStateStore } from "../src/state/index.ts";
 import { Supervisor } from "../src/supervisor/index.ts";
@@ -187,3 +194,120 @@ test("oracle: a supervisor restart mid-idle still closes on the original schedul
     await down();
   }
 });
+
+const recordedPrompts = (pid: number) =>
+  readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.type === "prompt");
+
+test("oracle: check-in fires once at 5m and turn continues until 10m deadline (C13 Oracle 1)", async () => {
+  const { clock, supervisor, lc, down } = boot(T0);
+  const th = "t-c13-oracle1";
+  try {
+    hold.add(th);
+    await lc.message(th, FACT);
+    const pid = supervisor.pid(th)!;
+    assert.ok(pid !== undefined);
+
+    // Just before 5m: no check-in yet
+    await clock.advance(CHECKIN_MS - 1);
+    assert.equal(lc.turnStatus(th).checkinFired, false);
+    assert.equal(recordedPrompts(pid).length, 1);
+
+    // At 5m (300_000 ms): check-in fires once via steer prompt
+    await clock.advance(1);
+    assert.equal(lc.turnStatus(th).checkinFired, true);
+    assert.equal(lc.turnStatus(th).repliedAfterCheckin, false);
+    const promptsAt5m = recordedPrompts(pid);
+    assert.equal(promptsAt5m.length, 2);
+    assert.equal(promptsAt5m[1].message, defaultCheckinPrompt());
+    assert.equal(promptsAt5m[1].streamingBehavior, "steer");
+    assert.equal(supervisor.pid(th), pid, "turn continues running after 5m check-in");
+
+    // Just before 10m (600_000 ms): still only one check-in sent and process still alive
+    await clock.advance(QUESTION_TIMEOUT_MS - CHECKIN_MS - 1);
+    assert.equal(recordedPrompts(pid).length, 2, "check-in fires at most once per question");
+    assert.equal(supervisor.pid(th), pid, "still running just before 10m deadline");
+
+    // If tier 1 replies after the check-in (before 10m), disarm records repliedAfterCheckin
+    lc.disarm(th);
+    assert.deepEqual(lc.turnStatus(th), { checkinFired: true, repliedAfterCheckin: true });
+    await clock.advance(1);
+    assert.equal(supervisor.pid(th), pid, "disarmed turn is not torn down at 10m");
+  } finally {
+    hold.delete(th);
+    await down();
+  }
+});
+
+test("mutant (C13 Oracle 1): disabling the check-in timer makes Oracle 1 go RED", async () => {
+  const clock = new FakeClock(T0);
+  const checkins: string[] = [];
+  // Mutant: checkinMs disabled (0)
+  const mutantTurns = new TurnController({
+    clock,
+    checkinMs: 0,
+    onCheckin: (_th, msg) => void checkins.push(msg),
+    onDeadline: () => {},
+  });
+  mutantTurns.begin("t-mutant-1");
+  await clock.advance(CHECKIN_MS);
+  assert.throws(
+    () => {
+      assert.equal(mutantTurns.status("t-mutant-1").checkinFired, true);
+      assert.equal(checkins.length, 1);
+    },
+    /AssertionError/,
+    "mutant with disabled check-in timer must fail Oracle 1",
+  );
+  mutantTurns.stop();
+});
+
+test("oracle: fast question that replies before check-in time receives 0 check-in messages (C13 Oracle 2)", async () => {
+  const { clock, supervisor, lc, down } = boot(T0);
+  const th = "t-c13-oracle2";
+  try {
+    hold.add(th);
+    await lc.message(th, FACT);
+    const pid = supervisor.pid(th)!;
+
+    // Reply arrives at 1m (before 5m check-in)
+    await clock.advance(60_000);
+    lc.disarm(th);
+
+    // Advance past 5m check-in and 10m deadline
+    await clock.advance(QUESTION_TIMEOUT_MS);
+    assert.deepEqual(lc.turnStatus(th), { checkinFired: false, repliedAfterCheckin: false });
+    assert.equal(recordedPrompts(pid).length, 1, "fast question must receive 0 check-in messages");
+    assert.equal(recordedPrompts(pid)[0].message, FACT);
+    assert.equal(supervisor.pid(th), pid, "completed turn is not torn down by 10m deadline");
+  } finally {
+    hold.delete(th);
+    await down();
+  }
+});
+
+test("mutant (C13 Oracle 2): failing to disarm on reply or firing check-in unconditionally makes Oracle 2 go RED", async () => {
+  const clock = new FakeClock(T0);
+  const checkins: string[] = [];
+  const mutantTurns = new TurnController({
+    clock,
+    onCheckin: (_th, msg) => void checkins.push(msg),
+    onDeadline: () => {},
+  });
+  mutantTurns.begin("t-mutant-2");
+  await clock.advance(60_000);
+  // Mutant: reply does not call disarm("t-mutant-2")
+  await clock.advance(CHECKIN_MS);
+  assert.throws(
+    () => {
+      assert.equal(checkins.length, 0, "expected 0 check-in messages for fast question");
+    },
+    /AssertionError/,
+    "mutant that fails to disarm on reply must fail Oracle 2",
+  );
+  mutantTurns.stop();
+});
+

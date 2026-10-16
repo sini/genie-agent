@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { CHECKIN_MS, type Clock, QUESTION_TIMEOUT_MS, TurnController } from "../lifecycle/index.ts";
 import { type Record as PiRecord, Supervisor } from "../supervisor/index.ts";
 import { type Draft, draftOf, type Message } from "./draft.ts";
 import { BUILTINS, confine, type Host, memoryPrompt } from "./index.ts";
@@ -39,6 +40,8 @@ export interface ScoredQuestion {
   calibration: number;
   overall: number;
   last: Message;
+  checkin_fired?: boolean;
+  replied_after_checkin?: boolean;
 }
 
 export interface RunResult {
@@ -148,6 +151,8 @@ export interface EvalOptions {
   runs?: number;
   concurrency?: number;
   timeoutMs?: number;
+  checkinMs?: number;
+  clock?: Clock;
   outPath?: string;
   resume?: boolean;
   host?: Partial<Host>;
@@ -539,6 +544,7 @@ interface SlotContext {
   finish: string;
   last: Message;
   error?: string;
+  timedOut?: boolean;
   settle: () => void;
 }
 
@@ -555,6 +561,8 @@ interface PiArmOptions {
   runsCount: number;
   concurrency: number;
   timeoutMs: number;
+  checkinMs: number;
+  clock?: Clock;
   model: string;
   base: string;
   apiKey?: string;
@@ -643,12 +651,31 @@ async function executePiArm(opts: PiArmOptions): Promise<{
       memoryRoot: opts.effectiveMemoryRoot,
       searxngUrl: "http://127.0.0.1:1",
       cluster: [],
+      questionTimeoutMs: opts.timeoutMs,
+      checkinMs: opts.checkinMs,
     }),
     args: () => ["--model", `genie/${opts.model}`, "--no-session"],
   });
 
   const slotContexts = new Map<string, SlotContext>();
   const slotUsed = new Set<string>();
+
+  const turns: TurnController = new TurnController({
+    clock: opts.clock,
+    questionTimeoutMs: opts.timeoutMs,
+    checkinMs: opts.checkinMs,
+    onCheckin: async (t, message) => {
+      await supervisor.command(t, { type: "prompt", message, streamingBehavior: "steer" }).catch(() => {});
+    },
+    onDeadline: (t) => {
+      const ctx = slotContexts.get(t);
+      if (!ctx) return;
+      ctx.timedOut = true;
+      ctx.finish = "timeout";
+      ctx.error = `timed out after ${opts.timeoutMs}ms`;
+      ctx.settle();
+    },
+  });
 
   const supervisor = new Supervisor(
     (t) => {
@@ -701,6 +728,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
           } catch {}
         }
       } else if (record.type === "agent_settled") {
+        turns.settle(t);
         ctx.settle();
       }
     },
@@ -746,10 +774,12 @@ async function executePiArm(opts: PiArmOptions): Promise<{
         return { results: [] };
       },
       escalate: async (pkg) => {
+        turns.disarm(t);
         if (opts.hostOverrides?.escalate) return opts.hostOverrides.escalate(pkg);
         return { escalated: true };
       },
       reply: async (raw) => {
+        turns.disarm(t);
         const ctx = slotContexts.get(t);
         if (ctx) {
           const d = raw as Draft;
@@ -855,14 +885,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
             settle: settleFn,
           };
           slotContexts.set(slotId, ctx);
-
-          let timedOut = false;
-          const timer = setTimeout(() => {
-            timedOut = true;
-            ctx.finish = "timeout";
-            ctx.error = `timed out after ${opts.timeoutMs}ms`;
-            ctx.settle();
-          }, opts.timeoutMs);
+          turns.begin(slotId);
 
           const exitWatch = setInterval(() => {
             if (slotUsed.has(slotId) && supervisor.pid(slotId) === undefined) {
@@ -871,6 +894,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
             }
           }, 50);
 
+          let turnStatus = { checkinFired: false, repliedAfterCheckin: false };
           try {
             slotUsed.add(slotId);
             const cmdRes = await supervisor
@@ -883,12 +907,13 @@ async function executePiArm(opts: PiArmOptions): Promise<{
             }
             await settledPromise;
           } finally {
-            clearTimeout(timer);
+            turnStatus = turns.status(slotId);
+            turns.settle(slotId);
             clearInterval(exitWatch);
             slotContexts.delete(slotId);
           }
 
-          if (timedOut || ctx.finish === "error" || ctx.finish === "exited") {
+          if (ctx.timedOut || ctx.finish === "error" || ctx.finish === "exited") {
             await supervisor.teardown(slotId);
             slotUsed.delete(slotId);
           }
@@ -900,6 +925,8 @@ async function executePiArm(opts: PiArmOptions): Promise<{
             calls: ctx.calls,
             finish: ctx.finish,
             last: ctx.last,
+            checkin_fired: turnStatus.checkinFired,
+            replied_after_checkin: turnStatus.repliedAfterCheckin,
             ...scored,
             ...(ctx.error ? { error: ctx.error } : {}),
           };
@@ -927,6 +954,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
       runResults.push(buildRunResult(runIndex, questionsScored));
     }
   } finally {
+    turns.stop();
     await supervisor.shutdown();
     rmSync(agentDir, { recursive: true, force: true });
   }
@@ -946,7 +974,8 @@ export async function runArm(
 ): Promise<ArmResult> {
   const runsCount = options.runs ?? 1;
   const concurrency = options.concurrency ?? 1;
-  const timeoutMs = options.timeoutMs ?? 300_000;
+  const timeoutMs = options.timeoutMs ?? QUESTION_TIMEOUT_MS;
+  const checkinMs = options.checkinMs ?? CHECKIN_MS;
 
   const completedRuns: RunResult[] = [];
   const { runResults } = await executePiArm({
@@ -961,6 +990,8 @@ export async function runArm(
     runsCount,
     concurrency,
     timeoutMs,
+    checkinMs,
+    clock: options.clock,
     model: options.model,
     base: options.base,
     apiKey: options.apiKey,
@@ -1364,6 +1395,8 @@ export interface MemoryEvalOptions {
   runs?: number;
   concurrency?: number;
   timeoutMs?: number;
+  checkinMs?: number;
+  clock?: Clock;
   outPath?: string;
   resume?: boolean;
   live?: boolean;
@@ -1492,7 +1525,8 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
     options.basePromptPath ?? new URL("prompts/tier1.md", repoRoot).pathname;
   const runsCount = options.runs ?? 1;
   const concurrency = options.concurrency ?? 1;
-  const timeoutMs = options.timeoutMs ?? 300_000;
+  const timeoutMs = options.timeoutMs ?? QUESTION_TIMEOUT_MS;
+  const checkinMs = options.checkinMs ?? CHECKIN_MS;
 
   const checkpointed = new Map<
     string,
@@ -1540,6 +1574,8 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
       runsCount,
       concurrency,
       timeoutMs,
+      checkinMs,
+      clock: options.clock,
       model: options.model,
       base: options.base,
       apiKey: options.apiKey,

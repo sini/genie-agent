@@ -21,7 +21,7 @@ import { perThread, type Runner } from "../eval/lock.ts";
 import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
-import { Lifecycle } from "../lifecycle/index.ts";
+import { type Clock, Lifecycle } from "../lifecycle/index.ts";
 import { type MirrorConfig, worktreeFor } from "../mirror/index.ts";
 import { ThreadStateStore, type PendingAction, type Tier } from "../state/index.ts";
 import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
@@ -95,17 +95,18 @@ export interface Config {
   experts?: Record<Tier, string>;
 }
 
+const repo = new URL("../../", import.meta.url);
+const secret = (file: string) => readFileSync(file, "utf8").trim();
+
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
 export const WITHHELD = "I drafted an answer, but my output check withheld it. Please rephrase your question.";
+export const DEADLINE_NOTICE = readFileSync(new URL("prompts/tier1-deadline.md", repo).pathname, "utf8").trim();
 export const approvalNotice = (action: string, params: unknown): PostEnvelope & { approval: true } => ({
   approval: true,
   text: `Approval requested: ${action} ${JSON.stringify(params)}`,
 });
 export const approvalRequest = approvalNotice;
-
-const repo = new URL("../../", import.meta.url);
-const secret = (file: string) => readFileSync(file, "utf8").trim();
 
 // guard-in on an inbound envelope (design §4 step 1): the trigger's line is the content and every
 // context line its history, in envelope order, each with its authenticated tier. The text tier 1 may
@@ -130,7 +131,7 @@ async function guardIn(guard: GuardClient, raw: string): Promise<string> {
   throw new Error(`guard-in: rejected: ${v.reason}`);
 }
 
-export function main(configFile: string, io: Io, run?: Runner) {
+export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
   const archive = archiver(store, c.s3);
@@ -223,10 +224,14 @@ export function main(configFile: string, io: Io, run?: Runner) {
       recall: async () => {
         throw new Error("recall is not available yet");
       },
-      escalate: (pkg) => escalation.escalate(t, pkg as Package),
+      escalate: (pkg) => {
+        lifecycle.disarm(t);
+        return escalation.escalate(t, pkg as Package);
+      },
       // The draft leaves only as redacted and passed by guard-out. A withheld draft is neither posted
       // nor escalated: guard-out judged it unfit to leave the pod, and xmsg is a way out too.
       reply: async (raw) => {
+        lifecycle.disarm(t);
         const d = raw as Draft;
         const out = await outbound(context(t).cleaned_question, (scrub): Draft => ({ ...d, answer: scrub(d.answer), gaps: d.gaps.map(scrub) }), guardOut);
         if (!("value" in out)) {
@@ -256,6 +261,19 @@ export function main(configFile: string, io: Io, run?: Runner) {
     supervisor,
     store,
     mirror: c.mirror,
+    clock,
+    questionTimeoutMs: c.tier1.questionTimeoutMs,
+    checkinMs: c.tier1.checkinMs,
+    onDeadline: async (t) => {
+      const out = await outbound(context(t).cleaned_question, (scrub) => scrub(DEADLINE_NOTICE), guardOut);
+      if (!("value" in out)) {
+        console.error(`thread ${t}: deadline notice withheld: ${out.reason}`);
+        await postEnvelope(t, WITHHELD);
+      } else {
+        await postEnvelope(t, out.value);
+      }
+      await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+    },
     deeper: (t) => escalation.deeper(t),
     replayResume: (t) => replayResume({ supervisor, thread: t, s3: c.s3, guard, store, tier: store.tombstone(t)?.tier }),
   });

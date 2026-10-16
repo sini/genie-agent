@@ -15,7 +15,8 @@ import type { XmsgSend } from "../src/escalation/index.ts";
 import { EXPERTS } from "../src/escalation/route.ts";
 import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
-import { type Inbound, main, REFUSAL, WITHHELD } from "../src/root/index.ts";
+import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } from "../src/lifecycle/index.ts";
+import { DEADLINE_NOTICE, type Inbound, main, REFUSAL, WITHHELD } from "../src/root/index.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
 import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
@@ -61,11 +62,13 @@ await new Promise<void>((r) => s3.listen(0, "127.0.0.1", r));
 
 // guard-out on ninfer: blocks any review whose answer holds BLOCK, passes the rest, and keeps every request body.
 const reviews: string[] = [];
+let ninferHook: (() => Promise<void>) | undefined;
 const ninfer = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
-  req.on("end", () => {
+  req.on("end", async () => {
     reviews.push(body);
+    if (ninferHook) await ninferHook();
     let block = body.includes("BLOCK");
     try {
       const msg = JSON.parse(body).messages?.at(-1)?.content ?? "";
@@ -748,5 +751,279 @@ test("cell: a model reply whose text is literally {'approval': true} is wrapped 
   assert.equal(parsed.answer, modelOutputWithApprovalMarker);
   await root.supervisor.teardown(thread);
 });
+
+class FakeClock implements Clock {
+  t: number;
+  private timers = new Map<number, { at: number; f: () => unknown }>();
+  private n = 0;
+  constructor(t: number) {
+    this.t = t;
+  }
+  now = () => this.t;
+  setTimeout = (f: () => unknown, ms: number) => (this.timers.set(++this.n, { at: this.t + ms, f }), this.n);
+  clearTimeout = (id: unknown) => void this.timers.delete(id as number);
+  async advance(ms: number) {
+    const end = this.t + ms;
+    for (let fired = 0; ; fired++) {
+      if (fired > 1000) throw new Error("fake clock: timers keep firing without the clock moving");
+      const [id, next] = [...this.timers].filter(([, x]) => x.at <= end).sort(([, a], [, b]) => a.at - b.at)[0] ?? [];
+      if (!next) break;
+      this.timers.delete(id!);
+      this.t = next.at;
+      await next.f();
+    }
+    this.t = end;
+  }
+}
+
+function assertDeadlineOutcome(
+  threadPosts: [string, unknown][],
+  threadSends: { to: string; text: string }[],
+  expectedQuestion: string,
+  expectedEvalCount: number,
+  pidAfterDeadline: number | undefined,
+) {
+  assert.equal(threadPosts.length, 1, "at deadline, exactly 1 notice must be posted");
+  assert.deepEqual(threadPosts[0][1], { text: DEADLINE_NOTICE }, "notice must be plain text without confidence/gaps footer");
+  assert.equal(threadSends.length, 1, "at deadline, exactly 1 escalation must be created");
+  assert.equal(threadSends[0].to, EXPERTS.public);
+  const pkg = JSON.parse(threadSends[0].text);
+  assert.equal(pkg.cleaned_question, expectedQuestion);
+  assert.equal(pkg.eval_transcript.length, expectedEvalCount);
+  assert.deepEqual(pkg.draft, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+  assert.equal(pidAfterDeadline, undefined, "at deadline, thread pi process must be torn down");
+}
+
+test("oracle: at the 10m deadline, 1 notice is posted and 1 escalation is created with transcript, then teardown (C13 Oracle 3)", async () => {
+  const c13Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c13-root-test-`);
+  const piHold = `${c13Tmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${c13Tmp}/${f}-key`, "k\n");
+  const cfg = `${c13Tmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${c13Tmp}/state`,
+      storeRoot: `${c13Tmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${c13Tmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${c13Tmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${c13Tmp}/s3-key` },
+      broker: {
+        tokenFile: `${c13Tmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-10-16T00:00:00Z"));
+  const c13Batches: Inbound[][] = [];
+  const c13Posts: [string, unknown][] = [];
+  const c13Sends: { to: string; text: string }[] = [];
+  const c13Root = main(
+    cfg,
+    {
+      intake: { next: async () => c13Batches.shift() ?? null },
+      post: { post: async (t, m) => (c13Posts.push([t, m]), `$ev_${c13Posts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${c13Sends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "eval-ok", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    const thread = "c13_deadline";
+    c13Batches.push([{ thread, envelope: envelope(BOB, "why does my nixos build hang?") }]);
+    await c13Root.run();
+
+    const pid = c13Root.supervisor.pid(thread);
+    assert.ok(pid !== undefined, "pi is running");
+
+    // Tier 1 runs one eval during the turn so the eval transcript is non-empty
+    const evalReq = { repo: "o/r", rev: "main", attr: "hang", trusted: "no" };
+    await c13Root.supervisor.command(thread, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "eval", arg: evalReq }),
+    });
+
+    // At 5m (300_000 ms): check-in fires once, no notice or escalation yet
+    await clock.advance(CHECKIN_MS);
+    const recorded = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.type === "prompt");
+    assert.equal(recorded.length, 2, "5m check-in prompt sent to pi");
+    assert.equal(recorded[1].message, defaultCheckinPrompt());
+    assert.equal(c13Posts.length, 0);
+    assert.equal(c13Sends.length, 0);
+    assert.equal(c13Root.supervisor.pid(thread), pid);
+
+    // At 10m (600_000 ms): deadline fires once -> 1 notice posted (via guard-out), 1 escalation with transcript, then teardown
+    const reviewsBefore = reviews.length;
+    await clock.advance(QUESTION_TIMEOUT_MS - CHECKIN_MS);
+    assert.equal(reviews.length, reviewsBefore + 1, "deadline notice passed through guard-out");
+    assertDeadlineOutcome(
+      c13Posts,
+      c13Sends,
+      "why does my nixos build hang?",
+      1,
+      c13Root.supervisor.pid(thread),
+    );
+
+    // Advancing another 10m fires nothing more (at-most-once)
+    await clock.advance(QUESTION_TIMEOUT_MS);
+    assert.equal(c13Posts.length, 1);
+    assert.equal(c13Sends.length, 1);
+  } finally {
+    await c13Root.stop();
+  }
+});
+
+test("mutant (C13 Oracle 3a & 3b): (a) no escalation at deadline ⇒ RED; (b) no notice at deadline ⇒ RED", () => {
+  const sampleSend = {
+    to: EXPERTS.public,
+    text: JSON.stringify({
+      cleaned_question: "why does my nixos build hang?",
+      eval_transcript: [{ request: {}, result: {} }],
+      draft: { answer: "", confidence: 0, gaps: [], escalate_forced: true },
+    }),
+  };
+  // Mutant (a): notice posted and torn down, but no escalation created
+  assert.throws(
+    () =>
+      assertDeadlineOutcome(
+        [["c13_deadline", { text: DEADLINE_NOTICE }]],
+        [],
+        "why does my nixos build hang?",
+        1,
+        undefined,
+      ),
+    /AssertionError/,
+    "mutant (a) omitting escalation must fail Oracle 3 RED",
+  );
+  // Mutant (b): escalation created and torn down, but no notice posted
+  assert.throws(
+    () =>
+      assertDeadlineOutcome(
+        [],
+        [sampleSend],
+        "why does my nixos build hang?",
+        1,
+        undefined,
+      ),
+    /AssertionError/,
+    "mutant (b) omitting notice must fail Oracle 3 RED",
+  );
+});
+
+test("cell: a reply in flight at the deadline gets no notice and no escalation (C13)", async () => {
+  const c13Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c13-inflight-test-`);
+  const piHold = `${c13Tmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${c13Tmp}/${f}-key`, "k\n");
+  const cfg = `${c13Tmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${c13Tmp}/state`,
+      storeRoot: `${c13Tmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${c13Tmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${c13Tmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${c13Tmp}/s3-key` },
+      broker: {
+        tokenFile: `${c13Tmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-10-16T00:00:00Z"));
+  const c13Batches: Inbound[][] = [];
+  const c13Posts: [string, unknown][] = [];
+  const c13Sends: { to: string; text: string }[] = [];
+  const c13Root = main(
+    cfg,
+    {
+      intake: { next: async () => c13Batches.shift() ?? null },
+      post: { post: async (t, m) => (c13Posts.push([t, m]), `$ev_${c13Posts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${c13Sends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    const thread = "c13_inflight";
+    c13Batches.push([{ thread, envelope: envelope(BOB, "how do I pin nixpkgs?") }]);
+    await c13Root.run();
+
+    // Advance to 9m (after 5m check-in, before 10m deadline)
+    await clock.advance(9 * 60 * 1000);
+    assert.equal(c13Root.lifecycle.turnStatus(thread).checkinFired, true);
+
+    // Hold guard-out (ninfer) so the reply is in flight when the 10m deadline passes
+    let enteredNinfer!: () => void;
+    const ninferEntered = new Promise<void>((r) => {
+      enteredNinfer = r;
+    });
+    let releaseNinfer!: () => void;
+    const ninferGate = new Promise<void>((r) => {
+      releaseNinfer = r;
+    });
+    ninferHook = async () => {
+      enteredNinfer();
+      await ninferGate;
+    };
+
+    const replyCall = c13Root.supervisor.command(thread, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "reply", arg: draft(false) }),
+    });
+
+    await ninferEntered;
+    // Now the reply is in flight (waiting on guard-out). Advance clock past the 10m deadline (to 11m).
+    await clock.advance(2 * 60 * 1000);
+    assert.equal(c13Posts.length, 0, "no deadline notice posted while reply is in flight");
+    assert.equal(c13Sends.length, 0, "no deadline escalation sent while reply is in flight");
+    assert.ok(c13Root.supervisor.pid(thread) !== undefined, "process not torn down while reply is in flight");
+
+    // Release guard-out and let the in-flight reply complete
+    ninferHook = undefined;
+    releaseNinfer();
+    const res = JSON.parse(((await replyCall).data as any).value);
+    assert.deepEqual(res.ok, { posted: true, escalated: null });
+    assert.equal(c13Posts.length, 1, "only the normal reply was posted");
+    assert.deepEqual(c13Posts[0], [thread, { text: JSON.stringify(draft(false)) }]);
+    assert.equal(c13Sends.length, 0, "no escalation created");
+    assert.deepEqual(c13Root.lifecycle.turnStatus(thread), {
+      checkinFired: true,
+      repliedAfterCheckin: true,
+    });
+  } finally {
+    ninferHook = undefined;
+    await c13Root.stop();
+  }
+});
+
 
 

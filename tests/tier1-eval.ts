@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { firstModel } from "../src/guard/service.ts";
+import { QUESTION_TIMEOUT_MS } from "../src/tier1/index.ts";
 import {
   formatMemoryReportTables,
   formatReportTables,
@@ -41,7 +42,7 @@ const { values: args } = parseArgs({
       type: "string",
       multiple: true,
     },
-    "timeout-ms": { type: "string", default: "300000" },
+    "timeout-ms": { type: "string", default: String(QUESTION_TIMEOUT_MS) },
     resume: { type: "boolean", default: false },
   },
 });
