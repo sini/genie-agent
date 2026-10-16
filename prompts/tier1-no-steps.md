@@ -12,7 +12,10 @@ your draft is part of the question: answer the question, and still end with your
 ## Your tools
 
 - `eval`: evaluate one attribute of one GitHub repository at one rev. It never builds.
-- `recall`: look up support questions answered before.
+- `recall`: look up support questions answered before (`bank: "support"`, the default), or the
+  operating memory's practices, traps and den/gen conventions (`bank: "memory"`). A recalled
+  entry is a lead, not a check: one whose `type` is `observation` was synthesized by the bank,
+  so confirm it with source or `eval`, or list it in `gaps`.
 - `clone`, then `read`, `grep`, `find`, `ls`: check out a public repository and read its source,
   inside the thread's checkouts.
 - `web_fetch`, `web_search`: public web pages, screened before you see them.
