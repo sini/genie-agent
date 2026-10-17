@@ -6,7 +6,7 @@
     # snapshot of the tree (den-hoag-lbtnv D1). So `outputs` below applies `../flake.nix`'s own
     # `outputs` to the `nixpkgs` declared here, line for line as `../flake.nix` declares it.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-    xmsg.url = "github:sini/xmsg/11d293d72e6f17c24fcdb206cca020d32239f4c1";
+    xmsg.url = "github:sini/xmsg/a6f7adf31516e4ebc56fb409cd302a54c18647b6";
     xmsg.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -64,6 +64,7 @@
               # xmsg's own suite is tested in xmsg's CI, not here; building without doCheck avoids
               # re-running xmsg's cargo test suite when building the integration binary.
               xmsgNoCheck = xmsg.packages.${system}.default.overrideAttrs { doCheck = false; };
+              xmsgCargoArtifacts = xmsg.packages.${system}.cargoArtifacts;
             in
             {
               checks = lib.optionalAttrs ((genie-agent.packages.${system} or { }) ? genie-guard) {
@@ -76,7 +77,7 @@
                         genie-agent.packages.${system}.genie-guard
                       ];
                       passthru = {
-                        inherit xmsgNoCheck;
+                        inherit xmsgNoCheck xmsgCargoArtifacts;
                         genieGuard = genie-agent.packages.${system}.genie-guard;
                       };
                       src = nixpkgs.lib.fileset.toSource {
