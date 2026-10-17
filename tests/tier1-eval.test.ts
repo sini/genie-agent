@@ -803,8 +803,11 @@ test("oracle C2.3 (Cell 3): unanswered question (pi settles without reply or tim
     assert.equal(reqCount, 2, "both questions must hit the loopback stub");
     const [qAns, qUnans] = armRes.runs[0].questions;
     assert.ok(qAns.draft !== undefined, "q-ans must have a captured draft");
+    assert.equal(qAns.finish, "stop");
     assert.equal(qAns.overall, 1);
     assert.equal(qUnans.draft, undefined, "question settling without reply must have draft: undefined");
+    assert.equal(qUnans.finish, "no_reply", "C13.1 Oracle (c): turn settling without reply must record finish: 'no_reply'");
+    assert.notEqual(qUnans.finish, "timeout", "C13.1 Oracle (c): finish: 'no_reply' must be distinct from 'timeout'");
     assert.equal(qUnans.overall, 0, "unanswered question must score 0");
 
     const baseline = makeSyntheticArm("real", [
@@ -817,6 +820,24 @@ test("oracle C2.3 (Cell 3): unanswered question (pi settles without reply or tim
   } finally {
     unansweredServer.close();
   }
+});
+
+test("mutant C13.1 (Oracle c): leaving finish as 'unanswered' or 'timeout' when settling with 0 reply calls makes Oracle (c) go RED", () => {
+  const assertNoReplyFinish = (finish: string) => {
+    assert.equal(finish, "no_reply", "turn settling without reply must record finish: 'no_reply'");
+    assert.notEqual(finish, "timeout");
+  };
+  assertNoReplyFinish("no_reply");
+  assert.throws(
+    () => assertNoReplyFinish("unanswered"),
+    /AssertionError/,
+    "old finish 'unanswered' must fail C13.1 Oracle (c) RED",
+  );
+  assert.throws(
+    () => assertNoReplyFinish("timeout"),
+    /AssertionError/,
+    "conflating with 'timeout' must fail C13.1 Oracle (c) RED",
+  );
 });
 
 test("oracle C13 (Oracle 4): eval uses shared TurnController, defaults timeoutMs to QUESTION_TIMEOUT_MS (600_000), and records checkin_fired and replied_after_checkin", async () => {

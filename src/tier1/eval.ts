@@ -733,7 +733,9 @@ async function executePiArm(opts: PiArmOptions): Promise<{
           } catch {}
         }
       } else if (record.type === "agent_settled") {
-        turns.settle(t);
+        if (turns.settle(t) && ctx.finish === "unanswered") {
+          ctx.finish = "no_reply";
+        }
         ctx.settle();
       }
     },

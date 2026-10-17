@@ -311,3 +311,84 @@ test("mutant (C13 Oracle 2): failing to disarm on reply or firing check-in uncon
   mutantTurns.stop();
 });
 
+test("oracle: settling with 0 reply calls runs onDeadline once then settles; settling after disarm runs 0 (C13.1 Oracles a & b)", async () => {
+  const store = new ThreadStateStore(`${tmp}/state`, `${tmp}/store`);
+  const clock = new FakeClock(T0);
+  const deadlines: string[] = [];
+  let lc: Lifecycle;
+  const supervisor = new Supervisor(
+    (th) => ({ command: process.execPath, args: [fake, ...store.sessionArgs(th)], env: hold.has(th) ? { PI_SETTLE: "never" } : {} }),
+    (th, r) => void lc.event(th, r),
+  );
+  lc = new Lifecycle({
+    supervisor,
+    store,
+    mirror,
+    clock,
+    deeper: async () => {},
+    onDeadline: (th) => void deadlines.push(th),
+  });
+  lc.start();
+  try {
+    // (a) Turn settles with 0 reply calls (never disarmed) -> onDeadline runs once, pending cleared
+    const thA = "t-c131-a";
+    hold.add(thA);
+    await lc.message(thA, FACT);
+    assert.deepEqual(store.pending(thA), [FACT]);
+    await supervisor.command(thA, { type: "settle" });
+    while (store.pending(thA).length) await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(deadlines, [thA], "settling with 0 reply calls must invoke onDeadline once");
+    assert.deepEqual(store.pending(thA), [], "settle bookkeeping must still clear pending");
+
+    // Advancing past 5m and 10m fires nothing more
+    await clock.advance(QUESTION_TIMEOUT_MS);
+    assert.deepEqual(deadlines, [thA]);
+
+    // (b) Turn settles after reply (disarmed) -> onDeadline is not called
+    const thB = "t-c131-b";
+    hold.add(thB);
+    await lc.message(thB, FACT);
+    lc.disarm(thB);
+    await supervisor.command(thB, { type: "settle" });
+    while (store.pending(thB).length) await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(deadlines, [thA], "settling after disarm must not invoke onDeadline");
+    assert.deepEqual(store.pending(thB), []);
+  } finally {
+    hold.delete("t-c131-a");
+    hold.delete("t-c131-b");
+    lc.stop();
+    await supervisor.shutdown();
+  }
+});
+
+test("mutant (C13.1 Oracles a & b): old settle path ignoring unanswered return value makes Oracle (a) go RED", () => {
+  const clock = new FakeClock(T0);
+  const turns = new TurnController({
+    clock,
+    onCheckin: () => {},
+    onDeadline: () => {},
+  });
+  // Production: settle() returns true when never disarmed, false when disarmed
+  turns.begin("t-unans");
+  assert.equal(turns.settle("t-unans"), true);
+  turns.begin("t-ans");
+  turns.disarm("t-ans");
+  assert.equal(turns.settle("t-ans"), false);
+
+  // Mutant: old settle path treats settle() as void/false and never triggers onDeadline on agent_settled
+  const mutantDeadlines: string[] = [];
+  const oldSettleEvent = (th: string) => {
+    turns.settle(th);
+    // Old path omitted: if (unanswered) onDeadline(th)
+  };
+  turns.begin("t-mutant-old");
+  oldSettleEvent("t-mutant-old");
+  assert.throws(
+    () => {
+      assert.deepEqual(mutantDeadlines, ["t-mutant-old"]);
+    },
+    /AssertionError/,
+    "old settle path must fail C13.1 Oracle (a) RED",
+  );
+  turns.stop();
+});

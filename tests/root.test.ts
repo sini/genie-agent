@@ -24,7 +24,7 @@ const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-root-test-`);
 process.env.PI_RECORD = tmp;
 // tier1Launch runs `pi` as one executable; this one is the fake.
 const pi = `${tmp}/pi`;
-writeFileSync(pi, `#!/bin/sh\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`);
+writeFileSync(pi, `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`);
 chmodSync(pi, 0o755);
 for (const f of ["model", "s3", "token"]) writeFileSync(`${tmp}/${f}-key`, "k\n");
 
@@ -469,7 +469,7 @@ test("oracle: main launches real pi against a stub model", async () => {
       intake: { next: async () => realBatches.shift() ?? null },
       post: { post: async () => {} },
       guard,
-      xmsg,
+      xmsg: { send: async () => "m_real" },
     },
     async (l) => (realLaunches.push(l), { exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
   );
@@ -1023,6 +1023,145 @@ test("cell: a reply in flight at the deadline gets no notice and no escalation (
     ninferHook = undefined;
     await c13Root.stop();
   }
+});
+
+test("oracle (C13.1 a & b): (a) a turn settling with 0 reply calls posts 1 notice and creates 1 escalation; (b) a turn settling after reply posts nothing extra", async () => {
+  const c131Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c131-root-test-`);
+  const piHold = `${c131Tmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${c131Tmp}/${f}-key`, "k\n");
+  const cfg = `${c131Tmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${c131Tmp}/state`,
+      storeRoot: `${c131Tmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${c131Tmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${c131Tmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${c131Tmp}/s3-key` },
+      broker: {
+        tokenFile: `${c131Tmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-10-16T00:00:00Z"));
+  const c131Batches: Inbound[][] = [];
+  const c131Posts: [string, unknown][] = [];
+  const c131Sends: { to: string; text: string }[] = [];
+  const c131Root = main(
+    cfg,
+    {
+      intake: { next: async () => c131Batches.shift() ?? null },
+      post: { post: async (t, m) => (c131Posts.push([t, m]), `$ev_${c131Posts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${c131Sends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "eval-ok", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    // --- Oracle (a): turn settles with 0 reply calls ---
+    const thA = "c131_no_reply";
+    c131Batches.push([{ thread: thA, envelope: envelope(BOB, "can an expert look at my flake?") }]);
+    await c131Root.run();
+
+    // Run 1 eval so eval_transcript is populated, then settle WITHOUT calling reply or escalate
+    const evalReq = { repo: "o/r", rev: "main", attr: "exp", trusted: "no" };
+    await c131Root.supervisor.command(thA, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "eval", arg: evalReq }),
+    });
+
+    const reviewsBeforeA = reviews.length;
+    await c131Root.supervisor.command(thA, { type: "settle" });
+    while (c131Root.store.pending(thA).length > 0) await new Promise((r) => setTimeout(r, 5));
+
+    assert.equal(reviews.length, reviewsBeforeA + 1, "notice passed through guard-out");
+    assert.equal(c131Posts.length, 1, "Oracle (a): settling with 0 reply calls must post exactly 1 notice");
+    assert.deepEqual(c131Posts[0], [thA, { text: DEADLINE_NOTICE }]);
+    assert.equal(c131Sends.length, 1, "Oracle (a): settling with 0 reply calls must create 1 escalation");
+    assert.equal(c131Sends[0].to, EXPERTS.public);
+    const pkgA = JSON.parse(c131Sends[0].text);
+    assert.equal(pkgA.cleaned_question, "can an expert look at my flake?");
+    assert.equal(pkgA.eval_transcript.length, 1);
+    assert.deepEqual(pkgA.draft, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+    assert.deepEqual(c131Root.store.pending(thA), [], "settle bookkeeping cleared pending");
+    assert.equal(c131Root.store.read(thA)?.status, "escalated");
+
+    // Advancing clock past 10m fires nothing more
+    await clock.advance(QUESTION_TIMEOUT_MS);
+    assert.equal(c131Posts.length, 1);
+    assert.equal(c131Sends.length, 1);
+
+    // --- Oracle (b): turn settles after a reply posts nothing extra ---
+    const thB = "c131_after_reply";
+    c131Batches.push([{ thread: thB, envelope: envelope(BOB, "how do I enable flakes?") }]);
+    await c131Root.run();
+
+    const replyRes = JSON.parse(
+      (
+        (await c131Root.supervisor.command(thB, {
+          type: "host",
+          title: BRIDGE,
+          placeholder: JSON.stringify({ method: "reply", arg: draft(false) }),
+        })).data as any
+      ).value,
+    );
+    assert.deepEqual(replyRes.ok, { posted: true, escalated: null });
+    assert.equal(c131Posts.length, 2, "reply posted once");
+    assert.equal(c131Sends.length, 1, "no new escalation from high-confidence reply");
+
+    // Now the turn settles after the reply
+    const reviewsBeforeB = reviews.length;
+    await c131Root.supervisor.command(thB, { type: "settle" });
+    while (c131Root.store.pending(thB).length > 0) await new Promise((r) => setTimeout(r, 5));
+
+    assert.equal(reviews.length, reviewsBeforeB, "Oracle (b): no extra guard-out review on settle after reply");
+    assert.equal(c131Posts.length, 2, "Oracle (b): settling after reply must post nothing extra");
+    assert.equal(c131Sends.length, 1, "Oracle (b): settling after reply must create no extra escalation");
+    assert.deepEqual(c131Root.store.pending(thB), []);
+  } finally {
+    await c131Root.stop();
+  }
+});
+
+test("mutant (C13.1 a & b): (a) old settle path with 0 notices/escalations ⇒ RED; (b) extra notice/escalation after reply ⇒ RED", () => {
+  // Mutant (a): old settle path disarms without running onDeadline -> 0 notices and 0 escalations when 0 replies called
+  const oldSettlePosts: [string, unknown][] = [];
+  const oldSettleSends: { to: string; text: string }[] = [];
+  assert.throws(
+    () => {
+      assert.equal(oldSettlePosts.length, 1, "Oracle (a): settling with 0 reply calls must post 1 notice");
+      assert.equal(oldSettleSends.length, 1, "Oracle (a): settling with 0 reply calls must create 1 escalation");
+    },
+    /AssertionError/,
+    "mutant (a) with old settle path must fail Oracle (a) RED",
+  );
+
+  // Mutant (b): running onDeadline on settle even after reply disarmed -> posts 2 messages instead of 1
+  const mutantAfterReplyPosts: [string, unknown][] = [
+    ["c131_after_reply", { text: JSON.stringify(draft(false)) }],
+    ["c131_after_reply", { text: DEADLINE_NOTICE }],
+  ];
+  assert.throws(
+    () => {
+      assert.equal(mutantAfterReplyPosts.length, 1, "Oracle (b): settling after reply must post nothing extra");
+    },
+    /AssertionError/,
+    "mutant (b) posting extra notice on settle after reply must fail Oracle (b) RED",
+  );
 });
 
 

@@ -35,10 +35,19 @@ process.stdin.on("data", (chunk: string) => {
       messages.push({ role: "user", content: cmd.message });
       reply({ ...r, data: { disposition: "started" } });
       // pi writes its session only once a turn settles (P2); PI_SETTLE=never holds every turn open.
+      // PI_SETTLE=manual writes the session so archive/GC tests see it, and waits for {type: "settle"} before emitting agent_settled.
       if (process.env.PI_SETTLE !== "never") {
         if (session) appendFileSync(session, `${JSON.stringify(messages.at(-1))}\n`);
-        process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
+        if (process.env.PI_SETTLE !== "manual") {
+          process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
+        }
       }
+    } else if (cmd.type === "settle") {
+      if (session && process.env.PI_SETTLE === "never" && messages.length) {
+        appendFileSync(session, `${JSON.stringify(messages.at(-1))}\n`);
+      }
+      reply(r);
+      process.stdout.write(`${JSON.stringify({ type: "agent_settled" })}\n`);
     } else if (cmd.type === "get_messages") reply({ ...r, data: { messages } });
     else if (cmd.type === "get_state") reply({ ...r, data: { pid: process.pid, messageCount: messages.length } });
     else reply({ ...r, success: false, error: `unknown command ${cmd.type}` });

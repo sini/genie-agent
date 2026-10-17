@@ -105,11 +105,13 @@ export class TurnController {
     this.clearTimers(thread);
   }
 
-  settle(thread: string): void {
+  settle(thread: string): boolean {
     const s = this.states.get(thread);
-    if (!s) return;
+    if (!s) return false;
+    const unanswered = !s.disarmed && !s.settled;
     s.settled = true;
     this.clearTimers(thread);
+    return unanswered;
   }
 
   status(thread: string): TurnStatus {
@@ -256,9 +258,20 @@ export class Lifecycle {
   }
 
   // The supervisor's onEvent: a settled turn is the thread's reply, and pi has written its session.
-  event(thread: string, r: Record): void {
+  // When a turn settles whose controller was never disarmed by entry to reply/escalate, run the same
+  // onDeadline action (notice + escalation) and then the existing settle bookkeeping (C13.1).
+  async event(thread: string, r: Record): Promise<void> {
     if (r.type !== "agent_settled") return;
-    this.turns.settle(thread);
+    const unanswered = this.turns.settle(thread);
+    const st0 = this.o.store.read(thread);
+    if (!st0 || st0.status === "closed") return;
+    if (unanswered) {
+      try {
+        await this.o.onDeadline?.(thread);
+      } catch (e) {
+        console.error(`thread ${thread}: deadline failed: ${e}`);
+      }
+    }
     const st = this.o.store.read(thread);
     if (!st || st.status === "closed") return;
     this.o.store.write({ ...st, last_active: new Date(this.clock.now()).toISOString() });
