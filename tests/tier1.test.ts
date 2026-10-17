@@ -341,3 +341,41 @@ test("schemas: the validator agrees with every fixture the tools' schemas own", 
   }
   assert.ok(n >= 10, `${n} fixtures`);
 });
+
+function assertRecallBankMap(desc: string, label: string): void {
+  assert.match(desc, /\bsupport\b/, `${label}: must name support bank`);
+  assert.match(desc, /support memory/i, `${label}: must name support memory`);
+  assert.match(desc, /curated answers/i, `${label}: must describe support bank contents`);
+  assert.match(desc, /\bmemory\b/, `${label}: must name memory bank`);
+  assert.match(desc, /operating memory/i, `${label}: must name operating memory`);
+  assert.match(desc, /tool usage/i, `${label}: must describe operating memory tool usage`);
+  assert.match(desc, /debugging techniques/i, `${label}: must describe operating memory debugging techniques`);
+  assert.match(desc, /gen\/den reference/i, `${label}: must describe operating memory gen/den reference`);
+  assert.match(
+    desc,
+    /how to do something with a tool or the gen libraries[\s\S]*recall[\s\S]*memory/i,
+    `${label}: must route tool and gen library how-to questions to memory bank`,
+  );
+}
+
+test("oracle (R1): recall tool description, parameter schema, and tier1 prompt name both banks and their contents", () => {
+  const recallTool = load1().tools.get("recall")!;
+  assert.ok(recallTool, "recall tool must be registered");
+  assertRecallBankMap(recallTool.description, "recall.description");
+  assertRecallBankMap(
+    (recallTool.parameters as any).properties.bank.description,
+    "recall.parameters.properties.bank.description",
+  );
+  const promptText = readFileSync(new URL("../prompts/tier1.md", import.meta.url), "utf8");
+  assertRecallBankMap(promptText, "prompts/tier1.md");
+});
+
+test("mutant (R1): a recall description without the memory entry fails the R1 oracle RED", () => {
+  const withoutMemoryEntry =
+    'Search a memory bank: "support" (default) holds the support memory (curated answers).';
+  assert.throws(
+    () => assertRecallBankMap(withoutMemoryEntry, "mutant-no-memory"),
+    /must name memory bank|must name operating memory/,
+  );
+});
+

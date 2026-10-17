@@ -221,7 +221,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     c1("eval", "Evaluate one attribute of one repository at one rev (nix eval). Set secrets: \"stub\" when agenix/sops secrets block pure-eval; the result is stubbed with placeholder paths/values. Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
     c1(
       "recall",
-      'Look up previously answered support questions (bank: "support", default) or operating memory practices, traps, lessons, and gen library conventions (bank: "memory").',
+      'Search a memory bank: "support" (default) holds the support memory (curated answers); "memory" holds the operating memory (tool usage, debugging techniques, gen/den reference). A question about how to do something with a tool or the gen libraries should recall "memory".',
       {
         type: "object",
         additionalProperties: false,
@@ -231,7 +231,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
           bank: {
             type: "string",
             enum: ["support", "memory"],
-            description: 'Target bank: "support" for answered support questions (default), or "memory" for operating memory wiki and rules.',
+            description: 'Target bank: "support" (default) for the support memory (curated answers), or "memory" for the operating memory (tool usage, debugging techniques, gen/den reference). A question about how to do something with a tool or the gen libraries should recall "memory".',
           },
         },
       },

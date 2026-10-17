@@ -395,6 +395,7 @@
                   && grep -q '^ok [0-9]* - oracle C13 (Oracle 4): eval uses shared TurnController, defaults timeoutMs to QUESTION_TIMEOUT_MS (600_000), and records checkin_fired and replied_after_checkin$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3.1: --searxng-url routes web_search to stub SearXNG server and records searxng_url in result file (mutant: restored dead URL => RED)$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Oracle C2.3 (Amendment 2): recall without bank or with bank: support returns empty support results and recall_called: false; bank: memory returns fixture results and recall_called: true$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (R1): recall tool description, parameter schema, and tier1 prompt name both banks and their contents$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
