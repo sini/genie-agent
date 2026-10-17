@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { firstModel } from "../src/guard/service.ts";
 import { QUESTION_TIMEOUT_MS } from "../src/tier1/index.ts";
 import {
+  DEFAULT_EVAL_SEARXNG_URL,
   formatMemoryReportTables,
   formatReportTables,
   type MemoryRecallFixture,
@@ -43,6 +44,7 @@ const { values: args } = parseArgs({
       multiple: true,
     },
     "timeout-ms": { type: "string", default: String(QUESTION_TIMEOUT_MS) },
+    "searxng-url": { type: "string", default: DEFAULT_EVAL_SEARXNG_URL },
     resume: { type: "boolean", default: false },
   },
 });
@@ -104,6 +106,7 @@ if (args["memory-arms"]) {
     model,
     base: args.base,
     apiKey,
+    searxngUrl: args["searxng-url"],
     memoryRoot: memoryDir,
     memoryMdPath,
     recallFixtures,
@@ -155,6 +158,7 @@ const report = await runTier1PromptEval({
   model,
   base: args.base,
   apiKey,
+  searxngUrl: args["searxng-url"],
   promptArms: selectedArms,
   questions,
   runs,

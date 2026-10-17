@@ -127,8 +127,11 @@ export interface ExploratoryAnalysisReport {
   predictors: ExploratoryPredictorResult[];
 }
 
+export const DEFAULT_EVAL_SEARXNG_URL = "http://127.0.0.1:1";
+
 export interface EvalReport {
   model: string;
+  searxng_url: string;
   runs_per_arm: number;
   concurrency: number;
   generation_noise_band?: number;
@@ -144,6 +147,7 @@ export interface EvalOptions {
   base: string;
   apiKey?: string;
   pi?: string;
+  searxngUrl?: string;
   promptArms: Record<PromptArm, string>;
   questions: QuestionFixture[];
   worktreeRoot?: string;
@@ -567,6 +571,7 @@ interface PiArmOptions {
   base: string;
   apiKey?: string;
   pi?: string;
+  searxngUrl?: string;
   worktreeRoot?: string;
   hostOverrides?: Partial<Host>;
   checkpointed?: Map<string, { scored: ScoredQuestion; retrieval?: MemoryRetrievalResult }>;
@@ -649,7 +654,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
     config: () => ({
       root: opts.worktreeRoot ?? "",
       memoryRoot: opts.effectiveMemoryRoot,
-      searxngUrl: "http://127.0.0.1:1",
+      searxngUrl: opts.searxngUrl ?? DEFAULT_EVAL_SEARXNG_URL,
       cluster: [],
       questionTimeoutMs: opts.timeoutMs,
       checkinMs: opts.checkinMs,
@@ -996,6 +1001,7 @@ export async function runArm(
     base: options.base,
     apiKey: options.apiKey,
     pi: options.pi,
+    searxngUrl: options.searxngUrl,
     worktreeRoot: options.worktreeRoot,
     hostOverrides: options.host,
     checkpointed: checkpointState?.checkpointed,
@@ -1079,6 +1085,7 @@ function assemblePromptReport(
 
   return {
     model: options.model,
+    searxng_url: options.searxngUrl ?? DEFAULT_EVAL_SEARXNG_URL,
     runs_per_arm: options.runs ?? 1,
     concurrency: options.concurrency ?? 1,
     generation_noise_band: generationNoiseBand,
@@ -1369,6 +1376,7 @@ export interface MemoryEvalComparison extends EvalComparison {
 
 export interface MemoryEvalReport {
   model: string;
+  searxng_url: string;
   runs_per_arm: number;
   concurrency: number;
   generation_noise_band?: number;
@@ -1383,6 +1391,7 @@ export interface MemoryEvalOptions {
   base: string;
   apiKey?: string;
   pi?: string;
+  searxngUrl?: string;
   basePromptPath?: string;
   worktreeRoot?: string;
   memoryRoot?: string;
@@ -1458,6 +1467,7 @@ function assembleMemoryReport(
 
   return {
     model: options.model,
+    searxng_url: options.searxngUrl ?? DEFAULT_EVAL_SEARXNG_URL,
     runs_per_arm: runsCount,
     concurrency,
     generation_noise_band: genNoiseBand,
@@ -1580,6 +1590,7 @@ export async function runTier1MemoryEval(options: MemoryEvalOptions): Promise<Me
       base: options.base,
       apiKey: options.apiKey,
       pi: options.pi,
+      searxngUrl: options.searxngUrl,
       worktreeRoot: options.worktreeRoot,
       hostOverrides: options.host,
       checkpointed,

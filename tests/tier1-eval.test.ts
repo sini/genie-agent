@@ -1,15 +1,17 @@
 // Hermetic test for tier-1 discriminating prompt evaluation (Unit C2.1, C2.1.1 & C2.3, Oracles).
 // Runs hermetically through real pi (tier1Launch + Supervisor) against a loopback SSE stub server.
 import assert from "node:assert/strict";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import { defaultCheckinPrompt } from "../src/lifecycle/index.ts";
 import { type Record as PiRecord, Supervisor } from "../src/supervisor/index.ts";
 import {
-   compareArms,
+  compareArms,
   computeExploratoryPredictors,
   computePairedBootstrapCI,
+  DEFAULT_EVAL_SEARXNG_URL,
   formatReportTables,
   type ArmResult,
   type QuestionFixture,
@@ -984,5 +986,168 @@ test("mutant C13 (Oracle 4): hardcoding 300_000 in eval.ts ignoring QUESTION_TIM
     "mutant hardcoding 300_000 in eval.ts must fail Oracle 4 RED",
   );
 });
+
+test("oracle C2.3.1: --searxng-url routes web_search to stub SearXNG server and records searxng_url in result file (mutant: restored dead URL => RED)", async () => {
+  assert.equal(DEFAULT_EVAL_SEARXNG_URL, "http://127.0.0.1:1", "default SearXNG URL must stay the hermetic dead address");
+
+  let searchQueries: string[] = [];
+  const searxngServer = createServer((req, res) => {
+    const u = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (req.method === "GET" && u.pathname === "/search" && u.searchParams.get("format") === "json") {
+      searchQueries.push(u.searchParams.get("q") ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          results: [
+            {
+              title: "NixOS SearXNG Module Reference",
+              url: "https://search.nixos.org/options?show=services.searx.enable",
+              content: "SEARXNG_LIVE_TOKEN_9942: services.searx.settings.search.formats includes json.",
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  const searxngPort = await new Promise<number>((resolve) =>
+    searxngServer.listen(0, "127.0.0.1", () => resolve((searxngServer.address() as { port: number }).port)),
+  );
+  const stubSearxngUrl = `http://127.0.0.1:${searxngPort}`;
+
+  const toolResultsSeenByModel: string[] = [];
+  const llmServer = createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/models") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "stub-qwen" }] }));
+      return;
+    }
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      const msgs: any[] = parsed.messages ?? [];
+      const toolMsgs = msgs.filter((m) => m.role === "tool");
+      res.writeHead(200, { "content-type": "text/event-stream" });
+
+      if (toolMsgs.length === 0) {
+        res.end(
+          sseToolCalls([
+            {
+              id: "c_search",
+              name: "web_search",
+              args: { query: "nixos searx json format" },
+            },
+          ]),
+        );
+        return;
+      }
+
+      const searchOut = textOf(toolMsgs[toolMsgs.length - 1].content);
+      toolResultsSeenByModel.push(searchOut);
+      res.end(
+        sseToolCalls([
+          {
+            id: "c_reply",
+            name: "reply",
+            args: {
+              answer: `Search returned: ${searchOut}`,
+              confidence: 0.95,
+              gaps: [],
+              escalate_forced: "no",
+            },
+          },
+        ]),
+      );
+    });
+  });
+
+  const llmPort = await new Promise<number>((resolve) =>
+    llmServer.listen(0, "127.0.0.1", () => resolve((llmServer.address() as { port: number }).port)),
+  );
+
+  try {
+    const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c231-`);
+    const qFile = `${tmp}/q.jsonl`;
+    const outFile = `${tmp}/out.json`;
+    writeFileSync(
+      qFile,
+      `${JSON.stringify({
+        id: "q-web-search",
+        question: "How do I enable JSON format in SearXNG on NixOS?",
+        expected_claims: ["SEARXNG_LIVE_TOKEN_9942"],
+        expected_citations: ["services.searx.enable"],
+      })}\n`,
+    );
+
+    // 1. Run the CLI with --searxng-url pointing at the local stub SearXNG server
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          new URL("tests/tier1-eval.ts", root).pathname,
+          "--base",
+          `http://127.0.0.1:${llmPort}`,
+          "--searxng-url",
+          stubSearxngUrl,
+          "--questions",
+          qFile,
+          "--out",
+          outFile,
+        ],
+        (err, stdout, stderr) => {
+          if (err) reject(new Error(`${err.message}\nstdout: ${stdout}\nstderr: ${stderr}`));
+          else resolve();
+        },
+      );
+    });
+
+    const written = JSON.parse(readFileSync(outFile, "utf8"));
+    assert.equal(written.searxng_url, stubSearxngUrl, "result file top-level searxng_url must record the configured URL");
+    assert.deepEqual(searchQueries, ["nixos searx json format"]);
+    assert.equal(toolResultsSeenByModel.length, 1);
+    assert.match(toolResultsSeenByModel[0], /NixOS SearXNG Module Reference/);
+    assert.match(toolResultsSeenByModel[0], /SEARXNG_LIVE_TOKEN_9942/);
+    const scoredQ = written.arms.real.runs[0].questions[0];
+    assert.equal(scoredQ.correctness, 1, "question whose model calls web_search must receive the stubbed JSON result and score 1");
+    assert.equal(scoredQ.citation, 1);
+
+    // 2. Mutant: when the hard-coded dead URL ("http://127.0.0.1:1") is used instead, web_search fails and the claim is missed (RED)
+    toolResultsSeenByModel.length = 0;
+    const mutantReport = await runTier1PromptEval({
+      model: "stub-qwen",
+      base: `http://127.0.0.1:${llmPort}`,
+      // Omit searxngUrl (or pass dead URL) to simulate the pre-C2.3.1 hard-coded "http://127.0.0.1:1"
+      promptArms: { real: new URL("prompts/tier1.md", root).pathname, "no-steps": "", "no-citations": "" },
+      questions: [
+        {
+          id: "q-web-search",
+          question: "How do I enable JSON format in SearXNG on NixOS?",
+          expected_claims: ["SEARXNG_LIVE_TOKEN_9942"],
+          expected_citations: ["services.searx.enable"],
+        },
+      ],
+    });
+    assert.equal(mutantReport.searxng_url, "http://127.0.0.1:1", "default searxng_url must be the hermetic dead address");
+    assert.equal(toolResultsSeenByModel.length, 1);
+    assert.doesNotMatch(
+      toolResultsSeenByModel[0],
+      /SEARXNG_LIVE_TOKEN_9942/,
+      "mutant with hard-coded dead URL must not receive the SearXNG result",
+    );
+    assert.equal(
+      mutantReport.arms.real.runs[0].questions[0].correctness,
+      0,
+      "mutant with hard-coded dead URL must score 0 on the web_search claim (RED)",
+    );
+  } finally {
+    searxngServer.close();
+    llmServer.close();
+  }
+});
+
 
 
