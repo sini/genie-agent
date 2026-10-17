@@ -955,7 +955,10 @@
                   "a new thread with S3 down still starts" \
                   "a tombstoned thread with S3 down is refused, not resumed fresh" \
                   "main launches real pi against a stub model" \
-                  "at the 10m deadline, 1 notice is posted and 1 escalation is created with transcript, then teardown (C13 Oracle 3)"; do
+                  "at the 10m deadline, 1 notice is posted and 1 escalation is created with transcript, then teardown (C13 Oracle 3)" \
+                  "recall through main() hits stub hindsight, routes bank selectors, and withholds poisoned entries via seedGuard" \
+                  "tier1Launch seeds operating memory when tier1.memoryRoot is set" \
+                  "close and gc.sweep() succeed with s3: null, and propose with no token is refused cleanly"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out

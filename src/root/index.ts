@@ -10,6 +10,7 @@
 // xmsg and Matrix enter only through the seams below; GA builds their real adapters.
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
+import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
 import { gist } from "../broker/gist.ts";
 import { broker, byKind, outbound } from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
@@ -87,9 +88,11 @@ export interface Config {
   // Tier 1's OpenAI-compatible model.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
   tier1: Omit<Tier1Config, "root">;
-  s3: S3Config;
+  // Hindsight dataplane endpoint for recall ("support" -> genie, "memory" -> genie-memory).
+  hindsightUrl?: string;
+  s3?: S3Config | null;
   // threadLink: the thread's public URL with `{thread}` where the thread id goes; a PR needs it.
-  broker: { tokenFile: string; githubApi?: string; threadLink?: string; guardOut: { base: string; model: string; keyFile?: string } };
+  broker: { tokenFile?: string | null; githubApi?: string; threadLink?: string; guardOut: { base: string; model: string; keyFile?: string } };
   // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
   eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax">;
   experts?: Record<Tier, string>;
@@ -134,9 +137,11 @@ async function guardIn(guard: GuardClient, raw: string): Promise<string> {
 export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
-  const archive = archiver(store, c.s3);
+  const archive = c.s3 ? archiver(store, c.s3) : async () => {};
   const evalIn = withCache(store, perThread(run ?? ((l) => runEval(l, c.eval))));
   const screen = webScreen(io.guard);
+  const guard = seedGuard(io.guard);
+  const hindsightUrl = c.hindsightUrl ?? DEFAULT_HINDSIGHT_ENDPOINT;
   const { base, model, keyFile: outKey } = c.broker.guardOut;
   const guardOut = { base, model, system: readFileSync(new URL("prompts/guard-out.md", repo).pathname, "utf8"), apiKey: outKey && secret(outKey) };
 
@@ -170,6 +175,8 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   writePiModelsJson(agentDir, { baseUrl, api, apiKey: secret(keyFile), id });
   const launch = tier1Launch({
     pi: c.pi,
+    memory: Boolean(c.tier1.memoryRoot),
+    memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
     config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
@@ -221,8 +228,23 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
         return result;
       },
-      recall: async () => {
-        throw new Error("recall is not available yet");
+      // Recall from Hindsight ("support" -> genie, "memory" -> genie-memory), screening every
+      // returned entry's text through S6's seedGuard(io.guard); a withheld entry is dropped.
+      recall: async (req) => {
+        const query = typeof req === "string" ? req : req.query;
+        const bank = typeof req === "string" ? undefined : req.bank;
+        const client = new HindsightRecallClient(hindsightUrl, recallBankId(bank));
+        const res = await client.recall({ query });
+        const results: BankRecallItem[] = [];
+        for (const item of res.results ?? []) {
+          try {
+            const text = await guard.bankEntry(item.text);
+            results.push({ ...item, text });
+          } catch (e) {
+            console.error(`thread ${t}: recall entry ${item.id ?? ""} withheld: ${e}`);
+          }
+        }
+        return { ...(res.entities !== undefined ? { entities: res.entities } : {}), results };
       },
       escalate: (pkg) => {
         lifecycle.disarm(t);
@@ -242,7 +264,17 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         await postEnvelope(t, out.value);
         return { posted: true, escalated: await escalation.reply(t, out.value) };
       },
-      propose: (p) => broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act }),
+      propose: async (p) => {
+        if (!c.broker.tokenFile) {
+          return {
+            thread: t,
+            acted: false,
+            reason: "the proposal broker is not configured on this deployment",
+            redactions: [],
+          };
+        }
+        return broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act });
+      },
       clone: (url) => worktreeFor(c.mirror, url, t),
       screen,
     }),
@@ -256,7 +288,6 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       await archive(thread).catch((e) => console.error(`archive ${thread}: ${e}`));
     }
   }
-  const guard = seedGuard(io.guard);
   const lifecycle: Lifecycle = new ArchivingLifecycle({
     supervisor,
     store,
@@ -275,7 +306,9 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
     },
     deeper: (t) => escalation.deeper(t),
-    replayResume: (t) => replayResume({ supervisor, thread: t, s3: c.s3, guard, store, tier: store.tombstone(t)?.tier }),
+    replayResume: c.s3
+      ? (t) => replayResume({ supervisor, thread: t, s3: c.s3!, guard, store, tier: store.tombstone(t)?.tier })
+      : undefined,
   });
   const gc = new Gc({ store, mirror: c.mirror, archive });
 
