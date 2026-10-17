@@ -45,79 +45,10 @@
               # The schemas and their fixtures are JSON. No gen member formats TypeScript, so
               # src/ is left to tsc.
               treefmt.programs.jsonfmt.enable = true;
-              checks.package = genie-agent.packages.${system}.default;
-              # Pinned operating-memory package ensures MEMORY.md and all link targets exist.
-              checks.operating-memory = genie-agent.packages.${system}.operating-memory;
-              # Every fixture under schemas/fixtures validates or fails as its directory names.
-              checks.schemas = genie-agent.checks.${system}.schemas;
-              # Every credential shape is redacted and named; clean text passes byte-identical.
-              checks.redactor = genie-agent.checks.${system}.redactor;
-              # A parked thread resumes under its first launch's uuid, across a dispatcher restart.
-              checks.dispatcher = genie-agent.checks.${system}.dispatcher;
-              # The injection corpus under corpus/injection lints clean.
-              checks.corpus = genie-agent.checks.${system}.corpus;
-              # Every file under support-memory/ passes the refusal-only admission check.
-              checks.support-memory = genie-agent.checks.${system}.support-memory;
-              # Any guard-in reply outside schemas/verdict.json parses to a reject, and genie-guard
-              # relays a verdict or an error, never the model's text.
-              checks.guard = genie-agent.checks.${system}.guard;
-              # Two threads on one repo share one mirror clone, a refused URL runs no git, a fetch
-              # past the per-repo cap is killed and leaves no mirror (a mirror with a live worktree is
-              # left as it was), and LRU eviction holds the quota but never evicts a pinned mirror.
-              checks.mirror = genie-agent.checks.${system}.mirror;
-              # Tier 1 has exactly twelve tools, confined to its worktrees and public addresses, and
-              # sees web content only through a guard verdict.
-              checks.tier1 = genie-agent.checks.${system}.tier1;
-              # One pi process per thread: a fact planted in one thread is absent from another, and
-              # tearing one down leaves the rest running.
-              checks.supervisor = genie-agent.checks.${system}.supervisor;
-              # Under real pi, a tier-1 tool call reaches the supervisor's Host as the thread whose
-              # process made it, the system prompt carries every skill, and a web result reaches the
-              # model only as the supervisor's guard Screen allows or rewrites it.
-              checks.tier1-bridge = genie-agent.checks.${system}.tier1-bridge;
-              # One eval in flight per thread, threads overlap, and a failed run releases its thread.
-              checks.eval-lock = genie-agent.checks.${system}.eval-lock;
-              # Only the effective tier opens IFD and builders; the untrusted argv is E1's.
-              checks.eval-argv = genie-agent.checks.${system}.eval-argv;
-              # limit_hit: a deadline kill is timeout, an OOM kill oom, any other SIGKILL unknown, a refused
-              # fetch egress, else none.
-              checks.eval-limits = genie-agent.checks.${system}.eval-limits;
-              # A thread's transcript, tier and eval cache survive a restart, on its own paths.
-              checks.state = genie-agent.checks.${system}.state;
-              # Parked at 1 h and resumed with its context; closed on accept or 24 h idle with its
-              # worktrees removed, open after 🔍; on schedule across a restart.
-              checks.lifecycle = genie-agent.checks.${system}.lifecycle;
-              # A forced or below-threshold draft escalates at once, a confident one on 🔍, once.
-              checks.escalation = genie-agent.checks.${system}.escalation;
-              # Kept at 95 h idle, archived then gone at 97 h, mirrors unpinned; a failed archive keeps all.
-              checks.gc = genie-agent.checks.${system}.gc;
-              # The thread's tier falls on a public line and rises only on a trusted `!trust`.
-              checks.tier = genie-agent.checks.${system}.tier;
-              # A proposal failing guard-out is never acted on; a passing one is acted on once, redacted.
-              checks.broker = genie-agent.checks.${system}.broker;
-              # A gist proposal is one POST /gists, redacted, with the Bearer token; a failure is not acted
-              # on, once, and never carries the token.
-              checks.gist = genie-agent.checks.${system}.gist;
-              # A pr proposal opens one PR whose body links the thread, its calls in order; a failed PR
-              # step is not acted on, its branch deleted, and never carries the token.
-              checks.pr = genie-agent.checks.${system}.pr;
-              # One PUT per archive with all four sections, the transcript pi's session file, keyed by
-              # tier; a failed PUT rejects.
-              checks.archive = genie-agent.checks.${system}.archive;
-              # The composition root: an inbound line reaches pi with its tier observed and a guard-in
-              # reject never does; eval at the stored tier; a draft to Post, a forced one to xmsg at
-              # C6's address; a close archives once.
-              checks.root = genie-agent.checks.${system}.root;
-            };
-        }
-        # Each single executable runs its own main and no offered payload. Linux only, so it is
-        # defined only where the subject defines it.
-        {
-          perSystem =
-            { system, lib, ... }:
-            {
-              checks = lib.optionalAttrs ((genie-agent.checks.${system} or { }) ? dispatcher-sea) {
-                inherit (genie-agent.checks.${system}) dispatcher-sea genie-guard-sea;
+              checks = (genie-agent.checks.${system} or { }) // {
+                package = genie-agent.packages.${system}.default;
+                # Pinned operating-memory package ensures MEMORY.md and all link targets exist.
+                operating-memory = genie-agent.packages.${system}.operating-memory;
               };
             };
         }
@@ -129,6 +60,11 @@
               pkgs,
               ...
             }:
+            let
+              # xmsg's own suite is tested in xmsg's CI, not here; building without doCheck avoids
+              # re-running xmsg's cargo test suite when building the integration binary.
+              xmsgNoCheck = xmsg.packages.${system}.default.overrideAttrs { doCheck = false; };
+            in
             {
               checks = lib.optionalAttrs ((genie-agent.packages.${system} or { }) ? genie-guard) {
                 xmsg-integration =
@@ -136,9 +72,13 @@
                     {
                       nativeBuildInputs = [
                         pkgs.nodejs
-                        xmsg.packages.${system}.default
+                        xmsgNoCheck
                         genie-agent.packages.${system}.genie-guard
                       ];
+                      passthru = {
+                        inherit xmsgNoCheck;
+                        genieGuard = genie-agent.packages.${system}.genie-guard;
+                      };
                       src = nixpkgs.lib.fileset.toSource {
                         root = ../.;
                         fileset = nixpkgs.lib.fileset.unions [
@@ -150,7 +90,7 @@
                     }
                     ''
                       cd $src
-                      export XMSG_BIN="${xmsg.packages.${system}.default}/bin/xmsg"
+                      export XMSG_BIN="${xmsgNoCheck}/bin/xmsg"
                       export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
                       rc=0
                       node --test --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
