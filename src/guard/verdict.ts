@@ -69,14 +69,14 @@ function memberKeys(raw: string): string[] | null {
 // The verdict's contract with the envelope it reviewed, beyond the schema.
 function contractErrors(v: Verdict, reviewed: Envelope): string[] {
   const errors: string[] = [];
-  if (v.verdict === "allow" && v.cleaned_text !== reviewed.content.text)
-    errors.push("allow with cleaned_text other than the reviewed text");
   if (v.reason.length > REASON_MAX || /[\r\n]/.test(v.reason)) errors.push("reason over one line");
-  const bound =
-    reviewed.content.text.length +
-    reviewed.history.reduce((n, l) => n + l.text.length, 0) +
-    CLEANED_SLACK;
-  if (v.cleaned_text.length > bound) errors.push("cleaned_text longer than the envelope");
+  if (v.verdict === "rewrite") {
+    const bound =
+      reviewed.content.text.length +
+      reviewed.history.reduce((n, l) => n + l.text.length, 0) +
+      CLEANED_SLACK;
+    if (v.cleaned_text.length > bound) errors.push("cleaned_text longer than the envelope");
+  }
   return errors;
 }
 
@@ -116,6 +116,6 @@ export function parseVerdict(reply: string, reviewed: Envelope): Verdict {
   const v = value as Verdict;
   const broken = contractErrors(v, reviewed);
   if (broken.length) return reject(broken.join("; "));
-  // A reject forwards nothing, whatever text the guard left in it.
-  return v.verdict === "reject" ? { ...v, cleaned_text: "" } : v;
+  // Only a rewrite carries cleaned_text; allow and reject ignore whatever text the guard left.
+  return v.verdict === "rewrite" ? v : { ...v, cleaned_text: "" };
 }

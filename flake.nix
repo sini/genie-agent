@@ -290,9 +290,13 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/guard
+                    ./src/supervisor/guard-client.ts
+                    ./src/supervisor/seed.ts
                     ./schemas/fixtures/verdict
                     ./schemas/fixtures/verdict-out
                     ./corpus/injection/must-not-contain.json
+                    ./results/guard-in/injection-run1.json
+                    ./results/guard-in/injection-run2.json
                     ./tests/guard.test.ts
                     ./tests/guard-out.test.ts
                     ./tests/guard-service.test.ts
@@ -307,7 +311,15 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/guard.test.ts tests/guard-out.test.ts tests/guard-service.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] \
+                  && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle 1 (G9): an allow reply with empty cleaned_text is accepted, and the forwarded text is the original$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle 2 (G9): an allow reply with a slightly different cleaned_text is still accepted, and the original is forwarded$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle 3 (G9): in-repo corpus has no verdict regressions across saved runs and empty-cleaned_text allows$' $TMPDIR/tap \
+                  && grep -q "^ok [0-9]* - oracle 4 (G9): a 4 KB envelope's allow reply fits without truncation$" $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap \
+                  && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The mirror fetcher's gating oracle: two threads on one repo share one clone, a refused URL

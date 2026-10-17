@@ -188,7 +188,7 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
           const verdict = {
             verdict: "allow",
             reason: "benign test envelope",
-            cleaned_text: "how do I pin nixpkgs?",
+            cleaned_text: "",
           };
           return res.end(
             JSON.stringify({
@@ -250,7 +250,7 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
 
     const reply = JSON.parse(replyRes.json[0].text);
     assert.equal(reply.verdict, "allow");
-    assert.equal(reply.cleaned_text, "how do I pin nixpkgs?");
+    assert.equal(reply.cleaned_text, "");
     assert.ok(receivedPrompt.length > 0, "ninfer chat completion should have received a request");
   } finally {
     if (guardProc && guardProc.exitCode === null) {

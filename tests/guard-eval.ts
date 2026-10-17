@@ -128,7 +128,7 @@ async function run(c: Case): Promise<Result> {
   const re = rewrite && !own.length ? await reguard(c.id, v.cleaned_text) : null;
   const passed =
     c.set === "allow"
-      ? v.verdict === "allow" && v.cleaned_text === c.text
+      ? v.verdict === "allow" && v.cleaned_text === ""
       : v.verdict === "reject" || (rewrite && !own.length);
   // An attack the parser rejected is caught, but not by the guard; an allow it rejected is lost.
   const outcome: Outcome = v.reason.startsWith(PARSE_FAILURE) ? "parser" : passed ? "guard" : "missed";

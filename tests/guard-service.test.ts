@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createNetServer } from "node:net";
 import { SocketXmsg, type Inbound } from "../src/dispatcher/xmsg.ts";
 import { config, ConfigError } from "../src/guard/config.ts";
-import { awaitModel, envelopeErrors, firstModel, isConnectionError, type Ninfer, review, reviewOut, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
+import { awaitModel, envelopeErrors, firstModel, isConnectionError, maxTokens, type Ninfer, review, reviewOut, serve, start, step, Unauthorized, Unavailable } from "../src/guard/service.ts";
 import { type Envelope, PARSE_FAILURE } from "../src/guard/verdict.ts";
 
 const system = "the guard prompt";
@@ -73,7 +73,7 @@ async function once(n: Ninfer, text: string) {
 }
 
 const verdicts = [
-  { verdict: "allow", reason: "an ordinary question", cleaned_text: env.content.text },
+  { verdict: "allow", reason: "an ordinary question", cleaned_text: "" },
   { verdict: "rewrite", reason: "drops a planted rule", cleaned_text: "how do I pin nixpkgs" },
   { verdict: "reject", reason: "seeks credentials", cleaned_text: "" },
 ];
@@ -686,5 +686,91 @@ test("oracle 3: a 401 from the model still exits non-zero and is not retried", a
     await close();
   }
 });
+
+// -----------------------------------------------------------------------------
+// Oracle 4 (G9): A live-shaped size check against the fake model: a 4 KB
+// envelope's allow reply fits without truncation, and max_tokens scales with
+// envelope size so a 4 KB rewrite also fits.
+// -----------------------------------------------------------------------------
+test("oracle 4 (G9): a 4 KB envelope's allow reply fits without truncation", async () => {
+  const snippet = "  den.aspects.workstation.homeManager = { pkgs, ... }: { home.packages = [ pkgs.ripgrep pkgs.fd ]; };\n";
+  const text4k = `How do I structure this den + home-manager module?\n\`\`\`nix\n{\n${snippet.repeat(42)}}\n\`\`\``;
+  assert.ok(Buffer.byteLength(text4k, "utf8") >= 4096, `expected >= 4096 bytes, got ${Buffer.byteLength(text4k, "utf8")}`);
+  const env4k: Envelope = {
+    source: "message",
+    history: [],
+    content: { sender: "@user:example.org", tier: "public", text: text4k },
+  };
+
+  // Fake model that budgets 1300 reasoning tokens + ~1 token per 3 chars of content, and cuts off
+  // with finish_reason: "length" whenever the total exceeds the request's max_tokens.
+  const reasoningTokens = 1300;
+  const allowReply = JSON.stringify({
+    verdict: "allow",
+    reason: "benign support question with nix code block",
+    cleaned_text: "",
+  });
+  let mode: "allow-empty" | "allow-echo-2048" | "rewrite-4k" = "allow-empty";
+  let lastReq: any = null;
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      lastReq = parsed;
+      const content =
+        mode === "allow-empty"
+          ? allowReply
+          : mode === "allow-echo-2048"
+            ? JSON.stringify({ verdict: "allow", reason: "benign", cleaned_text: text4k })
+            : JSON.stringify({ verdict: "rewrite", reason: "dropped trailing directive", cleaned_text: text4k });
+      const cap = mode === "allow-echo-2048" ? 2048 : parsed.max_tokens;
+      const generatedTokens = reasoningTokens + Math.ceil(content.length / 3);
+      if (generatedTokens > cap) {
+        return res.end(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: content.slice(0, 100) }, finish_reason: "length" }],
+          }),
+        );
+      }
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as { port: number };
+  const n: Ninfer = { base: `http://127.0.0.1:${port}/v1`, model: "m", system, systemWeb, timeoutMs: 1000 };
+
+  try {
+    // 1. 4 KB allow reply with cleaned_text: "" fits without truncation (even within 2048).
+    const { verdict } = await review(env4k, n);
+    assert.deepEqual(verdict, {
+      verdict: "allow",
+      reason: "benign support question with nix code block",
+      cleaned_text: "",
+    });
+    assert.equal(lastReq.max_tokens, maxTokens(env4k));
+    assert.ok(lastReq.max_tokens > 2048, `expected scaled max_tokens > 2048, got ${lastReq.max_tokens}`);
+
+    // 2. 4 KB rewrite reply also fits within scaled maxTokens(env4k).
+    mode = "rewrite-4k";
+    const rw = await review(env4k, n);
+    assert.equal(rw.verdict.verdict, "rewrite");
+    assert.equal(rw.verdict.cleaned_text, text4k);
+
+    // 3. Mutant control: echoing 4 KB under a fixed 2048 cap is truncated at max_tokens => Unavailable.
+    mode = "allow-echo-2048";
+    await assert.rejects(
+      review(env4k, n),
+      (e) => e instanceof Unavailable && /cut off at max_tokens/.test(e.message),
+    );
+  } finally {
+    await new Promise((r) => server.close(r).closeAllConnections());
+  }
+});
+
 
 

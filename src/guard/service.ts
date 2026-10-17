@@ -6,8 +6,17 @@
 import type { Inbound, XmsgClient } from "../dispatcher/xmsg.ts";
 import process from "node:process";
 import { type Config, ConfigError } from "./config.ts";
-import { type Envelope, parseVerdict, type Verdict } from "./verdict.ts";
+import { CLEANED_SLACK, type Envelope, parseVerdict, REASON_MAX, type Verdict } from "./verdict.ts";
 import { parseVerdictOut, type VerdictOut } from "./verdict-out.ts";
+
+// Base budget (2048) covers reasoning (~1300 tokens measured on qwen3.8-27b) plus an allow/reject
+// verdict (cleaned_text is ""). A rewrite of a long envelope also carries up to `content + history
+// + CLEANED_SLACK` chars of cleaned_text and `REASON_MAX` chars of reason; at ~3 chars/token on top
+// of a 1500-token reasoning budget, size max_tokens from the envelope with 2048 as the floor.
+export function maxTokens(e: Envelope): number {
+  const textChars = e.content.text.length + e.history.reduce((n, l) => n + l.text.length, 0);
+  return Math.max(2048, 1500 + REASON_MAX + CLEANED_SLACK + Math.ceil(textChars / 3));
+}
 
 export interface Ninfer {
   // ninfer's OpenAI-compatible base, ending in `/v1`.
@@ -175,9 +184,7 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
       body: JSON.stringify({
         model: n.model,
         temperature: 0,
-        // A guard that reasons without end is cut off, early: 1.5x the longest clean verdict.
-        // Measured 2026-10-10, guard-eval sequential on qwen3.8-27b: 1300 tokens over 103 replies.
-        max_tokens: 2048,
+        max_tokens: maxTokens(e),
         messages: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(e) },

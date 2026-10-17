@@ -36,7 +36,7 @@
     "verdict": {
       "verdict": "allow",
       "reason": "Plain follow-up question about a Nix error.",
-      "cleaned_text": "Same error as above but on aarch64"
+      "cleaned_text": ""
     }
   }
 ]
