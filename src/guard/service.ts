@@ -9,13 +9,15 @@ import { type Config, ConfigError } from "./config.ts";
 import { CLEANED_SLACK, type Envelope, parseVerdict, REASON_MAX, type Verdict } from "./verdict.ts";
 import { parseVerdictOut, type VerdictOut } from "./verdict-out.ts";
 
-// Base budget (2048) covers reasoning (~1300 tokens measured on qwen3.8-27b) plus an allow/reject
-// verdict (cleaned_text is ""). A rewrite of a long envelope also carries up to `content + history
-// + CLEANED_SLACK` chars of cleaned_text and `REASON_MAX` chars of reason; at ~3 chars/token on top
-// of a 1500-token reasoning budget, size max_tokens from the envelope with 2048 as the floor.
+// Guard requests disable model thinking (`chat_template_kwargs: { enable_thinking: false }`, 0
+// reasoning tokens and 0 verdict regressions across 468 evaluations on qwen3.8-27b).
+// With reasoning disabled, max_tokens is sized strictly for the verdict plus a full rewrite of the
+// envelope (`content + history + CLEANED_SLACK` chars of cleaned_text and `REASON_MAX` chars of
+// reason at ~3 chars/token, with 2048 as the floor). Covers a full 16 KB cleaned_text rewrite
+// while bounding a 2-attempt worst-case runaway stall at 16 KB (5726 tokens) to ~90–127 s.
 export function maxTokens(e: Envelope): number {
   const textChars = e.content.text.length + e.history.reduce((n, l) => n + l.text.length, 0);
-  return Math.max(2048, 1500 + REASON_MAX + CLEANED_SLACK + Math.ceil(textChars / 3));
+  return Math.max(2048, REASON_MAX + CLEANED_SLACK + Math.ceil(textChars / 3));
 }
 
 export interface Ninfer {
@@ -29,9 +31,22 @@ export interface Ninfer {
   timeoutMs?: number;
   // Sent as `Authorization: Bearer` when set; never logged.
   apiKey?: string;
+  log?: (line: string) => void;
 }
 
 const auth = (apiKey?: string): Record<string, string> => (apiKey ? { authorization: `Bearer ${apiKey}` } : {});
+
+function checkModelRegression(parsed: any, choice: any, log?: (line: string) => void): void {
+  const reasoningTokens = Number(parsed?.usage?.completion_tokens_details?.reasoning_tokens ?? 0);
+  const completionTokens = Number(parsed?.usage?.completion_tokens ?? 0);
+  const finishReason = choice?.finish_reason;
+  if (reasoningTokens > 0 || finishReason === "length") {
+    const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    l(
+      `genie-guard: config/model error: finish_reason=${finishReason ?? "unknown"} reasoning_tokens=${reasoningTokens} completion_tokens=${completionTokens}`,
+    );
+  }
+}
 
 // No review happened: ninfer was unreachable or timed out (`dropped`), or answered with an HTTP
 // error or with no message content.
@@ -169,7 +184,7 @@ export async function start(
 ): Promise<Ninfer> {
   const model = await awaitModel(c.base, c.apiKey, c.model, wait, log, signal);
   await awaitRegister(x, wait, log, signal);
-  return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey };
+  return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey, log };
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.
@@ -185,6 +200,7 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
         model: n.model,
         temperature: 0,
         max_tokens: maxTokens(e),
+        chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(e) },
@@ -198,10 +214,13 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
       throw new Unavailable(String(err), true);
     });
     if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
+    let parsed: any;
     let choice: any;
     try {
-      choice = JSON.parse(body).choices?.[0];
+      parsed = JSON.parse(body);
+      choice = parsed?.choices?.[0];
     } catch {}
+    if (parsed !== undefined) checkModelRegression(parsed, choice, n.log);
     const raw: unknown = choice?.message?.content;
     if (choice?.finish_reason !== "length" && typeof raw === "string" && raw.trim().length > 0)
       return { raw, verdict: parseVerdict(raw, e) };
@@ -218,6 +237,7 @@ export interface NinferOut {
   system: string;
   timeoutMs?: number;
   apiKey?: string;
+  log?: (line: string) => void;
 }
 
 export interface OutboundItem {
@@ -256,6 +276,7 @@ export async function reviewOut(
         model: n.model,
         temperature: 0,
         max_tokens: 2048,
+        chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: n.system },
           { role: "user", content: formatOutboundUserContent(item) },
@@ -269,10 +290,13 @@ export async function reviewOut(
       throw new Unavailable(String(err), true);
     });
     if (!res.ok) throw new Unavailable(`HTTP ${res.status} ${body}`);
+    let parsed: any;
     let choice: any;
     try {
-      choice = JSON.parse(body).choices?.[0];
+      parsed = JSON.parse(body);
+      choice = parsed?.choices?.[0];
     } catch {}
+    if (parsed !== undefined) checkModelRegression(parsed, choice, n.log);
     const raw: unknown = choice?.message?.content;
     if (choice?.finish_reason !== "length" && typeof raw === "string" && raw.trim().length > 0)
       return { raw, verdict: parseVerdictOut(raw) };
