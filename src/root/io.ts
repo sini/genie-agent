@@ -158,6 +158,7 @@ export function parseGuardVerdictReply(raw: string): Verdict | Unavailable {
 }
 
 import type { Tier } from "../state/index.ts";
+import { parseEnvelope } from "../tier/index.ts";
 
 const REQUEST_OPEN_RE = /^<request(?:\s+screened="false"(?:\s+note="[^"]*")?)?>$/;
 
@@ -180,7 +181,12 @@ export function parseMatrixForward(
     const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=.+\s+\((trusted|public)\)$/.exec(header);
     if (!m) return null;
     const thread = m[1];
-    const tier = m[2] as Tier;
+    let tier: Tier;
+    try {
+      tier = parseEnvelope(trimmed).request.tier;
+    } catch {
+      return null;
+    }
     const reqOpenIdx = lines.findIndex((l, idx) => idx > 0 && REQUEST_OPEN_RE.test(l));
     const reqCloseIdx = lines.indexOf("</request>", reqOpenIdx + 1);
     if (reqOpenIdx === -1 || reqCloseIdx === -1) return null;

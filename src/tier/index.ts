@@ -81,8 +81,9 @@ export function parseEnvelope(raw: string): Envelope {
       headerTier = hm[1] as Tier;
     } else if (l) throw new Error(`thread tier: unexpected envelope line: ${l}`);
   }
+  if (!headerTier) throw new Error("thread tier: envelope without a [matrix] header");
   if (req.length !== 1) throw new Error(`thread tier: envelope with ${req.length} request lines`);
-  const request = headerTier ? { ...req[0], tier: headerTier } : req[0];
+  const request = { ...req[0], tier: headerTier };
   return { ...env, request };
 }
 

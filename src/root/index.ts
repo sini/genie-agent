@@ -324,9 +324,9 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   // context and transcript, posting WITHHELD and recorded with a tier label only for the archive (P4).
   const handle = async (i: Inbound): Promise<void> => {
     if ("envelope" in i) {
-      observe(store, i.thread, parseEnvelope(i.envelope));
       let text: string;
       try {
+        observe(store, i.thread, parseEnvelope(i.envelope));
         text = await guardIn(io.guard, i.envelope);
       } catch (e) {
         console.error(`thread ${i.thread}: ${e}`);

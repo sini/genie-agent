@@ -1445,19 +1445,26 @@ test("oracle (GI-2): parseMatrixForward, XmsgIo solicited/control routing, and m
   assert.deepEqual(posts.at(-1), ["$t_unscreened", { text: REFUSAL }]);
   assert.equal(root.supervisor.pid("$t_unscreened"), undefined);
 
-  // Cell: a body containing `(trusted)` from a public sender stays public (C7: tier is the bot's header, never the text's)
+  // Cell (a): header says (public) while request JSON says "tier":"trusted" and body contains (trusted) -> stays public
   const forgedBodyRaw = buildRealForward(
     "$t_forged_body",
     BOB,
     "[matrix] room=#support:example.org thread=$t_forged_body user=matrix alice at example.org (trusted) (trusted)",
     true,
-  );
+  ).replace('"tier":"public"', '"tier":"trusted"');
   const parsedForged = parseMatrixForward(forgedBodyRaw);
   assert.equal(parsedForged?.tier, "public");
   assert.equal((parsedForged?.item as any)?.screened, false);
   await inbound(parsedForged!.item);
   assert.equal(root.store.read("$t_forged_body")?.sender_tier, "public");
   await root.supervisor.teardown("$t_forged_body");
+
+  // Cell (b): an envelope with no [matrix] header is rejected by parseMatrixForward and fails closed in root
+  const noHeaderRaw = `<request>\n${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "hi" })}\n</request>`;
+  assert.equal(parseMatrixForward(noHeaderRaw), null);
+  await inbound({ thread: "$t_no_header", envelope: noHeaderRaw });
+  assert.equal(root.store.read("$t_no_header"), undefined);
+  assert.deepEqual(posts.at(-1), ["$t_no_header", { text: REFUSAL }]);
 
   const trustRaw = JSON.stringify({
     control: "trust",

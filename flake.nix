@@ -807,7 +807,8 @@
                   '!trust from a trusted sender ⇒ trusted; a participant present at it keeps it, a new public participant lowers it' \
                   '!trust from a public sender ⇒ unchanged' \
                   'background lines on a trusted-initiated bootstrap do not lower it' \
-                  'a public line whose text claims trusted ⇒ public'; do
+                  'a public line whose text claims trusted ⇒ public' \
+                  'header tier wins over request JSON tier, and an envelope without a [matrix] header is refused'; do
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out

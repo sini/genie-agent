@@ -114,6 +114,21 @@ test("an envelope line without a tier tag is refused, never read as a tier", () 
   assert.throws(() => parseEnvelope(e.replace(/<request>[^]*<\/request>/, "")), /0 request lines/);
 });
 
+test("oracle: header tier wins over request JSON tier, and an envelope without a [matrix] header is refused", () => {
+  // (a) Header says (public) while the request line's JSON says "tier":"trusted" -> resulting tier is public
+  const headerPublicReqTrusted =
+    `[matrix] room=#support:example.org thread=$root user=${BOB} (public)\n\n` +
+    `<request>\n${JSON.stringify({ sender: BOB, sender_id: BOB_ID, tier: "trusted", text: "hi" })}\n</request>`;
+  assert.equal(parseEnvelope(headerPublicReqTrusted).request.tier, "public");
+  assert.deepEqual(run(headerPublicReqTrusted), ["public"]);
+
+  // (b) An envelope with no [matrix] header throws and leaves the thread fail-closed
+  const noHeader = `<request>\n${JSON.stringify({ sender: ALICE, sender_id: ALICE_ID, tier: "trusted", text: "hi" })}\n</request>`;
+  const thread = `t_no_header_${n++}`;
+  assert.throws(() => observe(store(), thread, parseEnvelope(noHeader)), /thread tier: envelope without a \[matrix\] header/);
+  assert.equal(store().read(thread), undefined);
+});
+
 test("parseEnvelope reads the request, thread and background blocks", () => {
   const e: Envelope = parseEnvelope(envelope([ALICE, "q"], [[BOB, "a"]], [[CAROL, "b"]]));
   assert.deepEqual(e, {
