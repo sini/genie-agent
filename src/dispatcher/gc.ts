@@ -88,7 +88,7 @@ export class DispatcherGc {
     if (existsSync(transcriptFile)) {
       rmSync(transcriptFile, { recursive: true, force: true });
     }
-    this.d.removeWorktree(id);
+    this.d.removeWorkingCopy(id);
     delete this.d.journal.threads[id];
     this.d.save();
   }

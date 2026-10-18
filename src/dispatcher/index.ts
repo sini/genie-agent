@@ -3,7 +3,7 @@
 // is journalled before it is acted on, so a restart from the journal resumes what a kill left.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import type { Herdr } from "./herdr.ts";
 import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.ts";
 
@@ -32,7 +32,6 @@ export interface Options {
 }
 
 const baseName = (p: string): string => p.replace(/\/+$/, "").split("/").pop() ?? "";
-const dirName = (p: string): string => p.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
 
 function isGitRepo(dir: string): boolean {
   try {
@@ -88,7 +87,7 @@ export class Dispatcher {
     return this.o.model ? ["--model", this.o.model] : [];
   }
 
-  worktreeDir(threadId: string): string {
+  workingCopyDir(threadId: string): string {
     return `${this.o.stateDir}/worktrees/${threadId}`;
   }
 
@@ -141,8 +140,8 @@ export class Dispatcher {
     return null;
   }
 
-  private prepareWorktree(threadId: string, t: Thread): string {
-    const baseDir = this.worktreeDir(threadId);
+  private prepareWorkingCopy(threadId: string, t: Thread): string {
+    const baseDir = this.workingCopyDir(threadId);
     mkdirSync(baseDir, { recursive: true, mode: 0o700 });
     const materialized: string[] = [];
     for (const spec of t.repos ?? []) {
@@ -150,57 +149,15 @@ export class Dispatcher {
       if (!resolved) continue;
       const dest = `${baseDir}/${resolved.name}`;
       if (!existsSync(dest)) {
-        try {
-          execFileSync("git", ["-C", resolved.sourcePath, "worktree", "add", "--quiet", "--force", "--detach", dest]);
-        } catch {
-          execFileSync("git", ["clone", "--quiet", "--no-hardlinks", resolved.sourcePath, dest]);
-        }
+        execFileSync("git", ["clone", "--quiet", "--no-hardlinks", resolved.sourcePath, dest]);
       }
       materialized.push(dest);
     }
     return materialized[0] ?? baseDir;
   }
 
-  removeWorktree(threadId: string): void {
-    const baseDir = this.worktreeDir(threadId);
-    const t = this.journal.threads[threadId];
-    const repoNames = new Set<string>(
-      (t?.repos ?? []).map(normalizeRepoName).filter((n): n is string => n !== null),
-    );
-    if (existsSync(baseDir)) {
-      try {
-        for (const entry of readdirSync(baseDir)) {
-          if (!entry.startsWith(".")) repoNames.add(entry);
-        }
-      } catch {}
-    }
-    for (const name of repoNames) {
-      const dest = `${baseDir}/${name}`;
-      const sourcePaths = new Set<string>();
-      const resolved = this.resolveSourceRepo(name);
-      if (resolved) sourcePaths.add(resolved.sourcePath);
-      try {
-        const dotGit = `${dest}/.git`;
-        if (existsSync(dotGit) && statSync(dotGit).isFile()) {
-          const content = readFileSync(dotGit, "utf8");
-          const m = /^gitdir:\s*(.+)$/m.exec(content);
-          if (m) {
-            // gitdir points to <source>/.git/worktrees/<id> or <bare>/worktrees/<id>
-            const wtMetaDir = m[1].trim();
-            const gitDir = dirName(dirName(wtMetaDir));
-            sourcePaths.add(baseName(gitDir) === ".git" ? dirName(gitDir) : gitDir);
-          }
-        }
-      } catch {}
-      for (const src of sourcePaths) {
-        try {
-          execFileSync("git", ["-C", src, "worktree", "remove", "--force", dest]);
-        } catch {}
-        try {
-          execFileSync("git", ["-C", src, "worktree", "prune"]);
-        } catch {}
-      }
-    }
+  removeWorkingCopy(threadId: string): void {
+    const baseDir = this.workingCopyDir(threadId);
     if (existsSync(baseDir)) {
       rmSync(baseDir, { recursive: true, force: true });
     }
@@ -247,7 +204,7 @@ export class Dispatcher {
   async escalate(threadId: string, repos?: string | string[]): Promise<Thread> {
     const t = this.thread(threadId, repos);
     if (t.state === "live") return t;
-    const paneCwd = this.prepareWorktree(threadId, t);
+    const paneCwd = this.prepareWorkingCopy(threadId, t);
     const args = t.launched
       ? ["--resume", t.session, ...this.modelArgs()]
       : ["-n", t.name, "--session-id", t.session, ...this.modelArgs()];

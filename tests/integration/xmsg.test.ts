@@ -1244,17 +1244,19 @@ test(
 );
 
 // -----------------------------------------------------------------------------
-// Oracle 6 (GI-3.1): Dispatcher creates each thread's working copy at spawn and removes it at 96h GC
+// Oracle 6 (GI-3.1): Dispatcher creates each thread's isolated working copy at spawn and removes it at 96h GC
 // - Against real xmsg serve, spawning a thread creates <state-dir>/worktrees/<thread-id> and starts
-//   the pane with its cwd inside it (a git worktree of the requested repo from source-repos, or an
-//   empty working dir when no repo is named)
-// - A fake-clock GC at 96h removes the directory and the worktree's registration in the source repo
+//   the pane with its cwd inside it (an independent git clone of the requested repo from source-repos,
+//   or an empty working dir when no repo is named)
+// - Making a commit and moving a branch inside the copy leaves the writable source repo's
+//   `git worktree list`, `git for-each-ref`, and `git count-objects` unchanged
+// - A fake-clock GC at 96h removes the directory
 // Mutants (verified by source edit & revert):
-//   1. Skip worktree creation at spawn => RED
-//   2. Skip worktree removal at D3 GC => RED
+//   1. Restore `git worktree add` in prepareWorkingCopy => RED
+//   2. Skip working copy removal at D3 GC => RED
 // -----------------------------------------------------------------------------
 test(
-  "oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates its worktree and 96h fake-clock GC removes the dir and source worktree registration",
+  "oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates an isolated clone (source worktree list, refs, and objects unchanged after commit/branch move) and 96h fake-clock GC removes the dir",
   { timeout: 30_000 },
   async () => {
     const node = await startXmsg({
@@ -1286,6 +1288,10 @@ test(
       writeFileSync(join(sourceRepoDir, "README.md"), "# demo-repo\n");
       git(["-C", sourceRepoDir, "add", "README.md"]);
       git(["-C", sourceRepoDir, "commit", "-q", "-m", "initial commit"]);
+
+      const wtListBaseline = git(["-C", sourceRepoDir, "worktree", "list"]);
+      const refsBaseline = git(["-C", sourceRepoDir, "for-each-ref"]);
+      const objectsBaseline = git(["-C", sourceRepoDir, "count-objects"]);
 
       let nowMs = 1_000_000;
       let nextTimerId = 0;
@@ -1402,21 +1408,38 @@ test(
       const repoWorktreePath = join(repoThreadDir, "demo-repo");
       const emptyThreadDir = join(statePublic, "worktrees", "$th-empty");
 
-      // Verify $th-repo created <state-dir>/worktrees/$th-repo/demo-repo as a git worktree and pane cwd is inside it
-      assert.equal(existsSync(repoThreadDir), true, "thread worktree dir must exist at spawn");
-      assert.equal(existsSync(join(repoWorktreePath, "README.md")), true, "worktree must contain repo checkout");
+      // Verify $th-repo created <state-dir>/worktrees/$th-repo/demo-repo as an isolated working copy and pane cwd is inside it
+      assert.equal(existsSync(repoThreadDir), true, "thread working copy dir must exist at spawn");
+      assert.equal(existsSync(join(repoWorktreePath, "README.md")), true, "working copy must contain repo checkout");
       const repoStart = startedSpecs.find((s) => s.cwd.startsWith(repoThreadDir));
       assert.ok(repoStart, `expected pane cwd inside ${repoThreadDir}, got ${JSON.stringify(startedSpecs.map((s) => s.cwd))}`);
       assert.equal(repoStart.cwd, repoWorktreePath);
 
-      const wtListBefore = git(["-C", sourceRepoDir, "worktree", "list"]);
-      assert.ok(
-        wtListBefore.includes(repoWorktreePath),
-        `git worktree list in source repo must include ${repoWorktreePath}, got:\n${wtListBefore}`,
+      // Make a commit and move a branch inside the working copy on a writable source repo
+      writeFileSync(join(repoWorktreePath, "mutated.txt"), "thread-local change\n");
+      git(["-C", repoWorktreePath, "add", "mutated.txt"]);
+      git(["-C", repoWorktreePath, "commit", "-q", "-m", "thread-local commit"]);
+      git(["-C", repoWorktreePath, "branch", "-f", "thread-branch", "HEAD"]);
+
+      // Assert the writable source repo's worktree list, refs, and object count are completely unchanged
+      assert.equal(
+        git(["-C", sourceRepoDir, "worktree", "list"]),
+        wtListBaseline,
+        "source repo git worktree list must be unchanged",
+      );
+      assert.equal(
+        git(["-C", sourceRepoDir, "for-each-ref"]),
+        refsBaseline,
+        "source repo git for-each-ref must be unchanged",
+      );
+      assert.equal(
+        git(["-C", sourceRepoDir, "count-objects"]),
+        objectsBaseline,
+        "source repo git count-objects must be unchanged",
       );
 
       // Verify $th-empty created an empty working dir at <state-dir>/worktrees/$th-empty and pane cwd is inside it
-      assert.equal(existsSync(emptyThreadDir), true, "empty thread worktree dir must exist at spawn");
+      assert.equal(existsSync(emptyThreadDir), true, "empty thread working dir must exist at spawn");
       const emptyStart = startedSpecs.find((s) => s.cwd.startsWith(emptyThreadDir));
       assert.ok(emptyStart, `expected pane cwd inside ${emptyThreadDir}`);
       assert.equal(emptyStart.cwd, emptyThreadDir);
@@ -1434,14 +1457,8 @@ test(
 
       assert.equal(pubHandle.d.journal.threads["$th-repo"], undefined, "$th-repo must be GC'd at 96h");
       assert.equal(pubHandle.d.journal.threads["$th-empty"], undefined, "$th-empty must be GC'd at 96h");
-      assert.equal(existsSync(repoThreadDir), false, "$th-repo worktree dir must be removed at 96h GC");
-      assert.equal(existsSync(emptyThreadDir), false, "$th-empty worktree dir must be removed at 96h GC");
-
-      const wtListAfter = git(["-C", sourceRepoDir, "worktree", "list"]);
-      assert.ok(
-        !wtListAfter.includes(repoWorktreePath),
-        `git worktree list in source repo must no longer include ${repoWorktreePath} after 96h GC, got:\n${wtListAfter}`,
-      );
+      assert.equal(existsSync(repoThreadDir), false, "$th-repo working copy dir must be removed at 96h GC");
+      assert.equal(existsSync(emptyThreadDir), false, "$th-empty working copy dir must be removed at 96h GC");
     } finally {
       if (pubHandle) {
         pubHandle.del.stop();
