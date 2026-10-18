@@ -108,8 +108,62 @@ let
     ];
   };
 
+  # Evaluate a G11 configuration with guard.enable = false, guardRef = null, and broker.guardOut.enable = false
+  evalNoGuard = nixpkgs.lib.nixosSystem {
+    system = pkgs.stdenv.hostPlatform.system;
+    modules = [
+      self.nixosModules.default
+      {
+        system.stateVersion = "25.05";
+        services.genie-agent = {
+          enable = true;
+          user = "sini";
+          xmsgSocket = "/run/user/1000/xmsg";
+          model = {
+            baseUrl = "http://10.9.2.2:18020/v1";
+            id = "qwen3.6-35b-a3b";
+            keyFile = "/home/sini/.config/hyperqwen/api-key";
+          };
+          tier1 = {
+            searxngUrl = "http://10.11.0.24:8080";
+          };
+          guardRef = null;
+          guard.enable = false;
+          broker.guardOut.enable = false;
+        };
+      }
+    ];
+  };
+
+  # Evaluate a configuration with guard.enable = true and guardRef = null to verify the assertion fails
+  evalBadGuardRef = nixpkgs.lib.nixosSystem {
+    system = pkgs.stdenv.hostPlatform.system;
+    modules = [
+      self.nixosModules.default
+      {
+        system.stateVersion = "25.05";
+        services.genie-agent = {
+          enable = true;
+          user = "sini";
+          xmsgSocket = "/run/user/1000/xmsg";
+          model = {
+            baseUrl = "http://10.9.2.2:18020/v1";
+            id = "qwen3.6-35b-a3b";
+            keyFile = "/home/sini/.config/hyperqwen/api-key";
+          };
+          tier1 = {
+            searxngUrl = "http://10.11.0.24:8080";
+          };
+          guardRef = null;
+          guard.enable = true;
+        };
+      }
+    ];
+  };
+
   localCfg = evalLocal.config.services.genie-agent;
   fullCfg = evalFull.config.services.genie-agent;
+  noGuardCfg = evalNoGuard.config.services.genie-agent;
 
   localRootJson = shared.mkRootConfigJson { inherit lib pkgs; } localCfg {
     modelKeyFile = "/run/credentials/genie-agent.service/model-key";
@@ -123,6 +177,13 @@ let
     guardOutKeyFile = "/run/credentials/genie-agent.service/guard-out-key";
     brokerTokenFile = "/run/credentials/genie-agent.service/broker-token";
     s3SecretKeyFile = "/run/credentials/genie-agent.service/s3-secret-key";
+  };
+
+  noGuardRootJson = shared.mkRootConfigJson { inherit lib pkgs; } noGuardCfg {
+    modelKeyFile = "/run/credentials/genie-agent.service/model-key";
+    guardOutKeyFile = null;
+    brokerTokenFile = null;
+    s3SecretKeyFile = null;
   };
 
   extractUnit = u: {
@@ -181,8 +242,19 @@ let
         extractUnit
           evalLocal.config.systemd.services."genie-dispatcher@trusted";
     };
+    noGuardUnits = {
+      hasGenieGuard = evalNoGuard.config.systemd.services ? genie-guard;
+      genieAgent = extractUnit evalNoGuard.config.systemd.services.genie-agent;
+    };
+    noGuardFailedAssertions = lib.filter (lib.hasPrefix "services.genie-agent:") (
+      map (a: a.message) (lib.filter (a: !a.assertion) evalNoGuard.config.assertions)
+    );
+    badGuardRefFailedAssertions = lib.filter (lib.hasPrefix "services.genie-agent:") (
+      map (a: a.message) (lib.filter (a: !a.assertion) evalBadGuardRef.config.assertions)
+    );
     localRootAttrs = localRootJson.passthru.attrs;
     fullRootAttrs = fullRootJson.passthru.attrs;
+    noGuardRootAttrs = noGuardRootJson.passthru.attrs;
   };
 in
 pkgs.runCommand "genie-agent-nixos-module"
@@ -215,8 +287,10 @@ pkgs.runCommand "genie-agent-nixos-module"
     import type { Config } from "./index.ts";
     const localConfig: Config = $(cat "${localRootJson}");
     const fullConfig: Config = $(cat "${fullRootJson}");
+    const noGuardConfig: Config = $(cat "${noGuardRootJson}");
     void localConfig;
     void fullConfig;
+    void noGuardConfig;
     EOF
     tsc --noEmit -p .
     rm -f src/root/check-config-types.ts
@@ -227,6 +301,7 @@ pkgs.runCommand "genie-agent-nixos-module"
     [ "$rc" -eq 0 ] \
       && grep -q '^ok [0-9]* - oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expert deny rules, store-path-free secrets, and README isolation disclosure$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAttrs and src/root/index.ts Config$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false omit genie-guard unit, xmsg.guard, and guard-out-key credential; guard.enable = true with guardRef = null triggers assertion$' $TMPDIR/tap \
       && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
     touch $out
   ''

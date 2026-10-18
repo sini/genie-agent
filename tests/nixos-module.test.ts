@@ -132,7 +132,7 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
 
   const interfaceFields: string[] = [];
   for (const line of configBlockMatch[1].split("\n")) {
-    const m = /^\s+([a-zA-Z0-9_]+)\??:/.exec(line);
+    const m = /^ {2}([a-zA-Z0-9_]+)\??:/.exec(line);
     if (m) interfaceFields.push(m[1]);
   }
   assert.ok(interfaceFields.length >= 10, `expected >= 10 fields in Config interface, got ${interfaceFields.length}`);
@@ -171,8 +171,10 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
   );
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.broker.guardOut).sort(),
-    ["base", "keyFile", "model"],
+    ["base", "enable", "keyFile", "model"],
   );
+  assert.deepEqual(summary.localRootAttrs.guard, { enable: true });
+  assert.deepEqual(summary.fullRootAttrs.guard, { enable: true });
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.eval).sort(),
     ["builders", "memoryMax", "timeoutMs"],
@@ -185,4 +187,21 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
     Object.keys(summary.fullRootAttrs.xmsg.guard).sort(),
     ["maxConcurrency", "target", "timeoutMs"],
   );
+});
+
+test("oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false omit genie-guard unit, xmsg.guard, and guard-out-key credential; guard.enable = true with guardRef = null triggers assertion", () => {
+  assert.deepEqual(summary.noGuardFailedAssertions, []);
+  assert.equal(summary.noGuardUnits.hasGenieGuard, false, "genie-guard.service must not be defined when guard.enable is false");
+  assert.deepEqual(summary.noGuardUnits.genieAgent.after, ["network.target"]);
+  assert.deepEqual(summary.noGuardUnits.genieAgent.serviceConfig.LoadCredential, [
+    "model-key:/home/sini/.config/hyperqwen/api-key",
+  ]);
+  assert.deepEqual(summary.noGuardRootAttrs.guard, { enable: false });
+  assert.equal(summary.noGuardRootAttrs.broker.guardOut.enable, false);
+  assert.equal("keyFile" in summary.noGuardRootAttrs.broker.guardOut, false);
+  assert.deepEqual(summary.noGuardRootAttrs.xmsg, { service: "genie" });
+
+  assert.deepEqual(summary.badGuardRefFailedAssertions, [
+    "services.genie-agent: guardRef must be set when guard.enable is true.",
+  ]);
 });

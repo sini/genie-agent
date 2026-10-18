@@ -283,6 +283,12 @@ rec {
               description = "Outbound guard-out model settings.";
               type = lib.types.submodule {
                 options = {
+                  enable = lib.mkOption {
+                    type = lib.types.bool;
+                    default = true;
+                    description = "Whether to run the outbound guard-out model check (the deterministic redactor always runs).";
+                  };
+
                   base = lib.mkOption {
                     type = lib.types.str;
                     default = cfg.model.baseUrl;
@@ -350,10 +356,10 @@ rec {
       };
 
       guardRef = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         default = "genie-guard";
         example = "genie-guard@sini.bitstream";
-        description = "xmsg address of the guard-in service.";
+        description = "xmsg address of the guard-in service (null when guard.enable is false).";
       };
 
       guardMaxConcurrency = lib.mkOption {
@@ -366,6 +372,53 @@ rec {
         type = lib.types.ints.positive;
         default = 120000;
         description = "Timeout in milliseconds for each guard-in request.";
+      };
+
+      guard = lib.mkOption {
+        default = { };
+        description = "Inbound guard-in screening and local genie-guard service configuration.";
+        type = lib.types.submodule {
+          options = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether to screen inbound messages, web results, recalled entries, and escalation packages through guard-in (and enable the local genie-guard service in NixOS module mode).";
+            };
+
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = sysPackages.genie-guard;
+              defaultText = lib.literalExpression "genie-agent.packages.\${system}.genie-guard";
+              description = "The genie-guard package.";
+            };
+
+            ninferUrl = lib.mkOption {
+              type = lib.types.str;
+              default = cfg.model.baseUrl;
+              defaultText = lib.literalExpression "cfg.model.baseUrl";
+              description = "OpenAI-compatible base URL for genie-guard.";
+            };
+
+            model = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Optional model ID override for genie-guard.";
+            };
+
+            timeoutMs = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 120000;
+              description = "Per-review timeout in milliseconds for genie-guard.";
+            };
+
+            apiKeyFile = lib.mkOption {
+              type = lib.types.nullOr secretPath;
+              default = cfg.model.keyFile;
+              defaultText = lib.literalExpression "cfg.model.keyFile";
+              description = "Optional API key file for genie-guard (must not be in /nix/store).";
+            };
+          };
+        };
       };
 
       experts = lib.mkOption {
@@ -450,6 +503,10 @@ rec {
         assertion = (cfg.broker.threadLink != null) -> lib.hasInfix "{thread}" cfg.broker.threadLink;
         message = "services.genie-agent.broker.threadLink must contain the `{thread}` placeholder.";
       }
+      {
+        assertion = cfg.guard.enable -> (cfg.guardRef != null && cfg.guardRef != "");
+        message = "services.genie-agent: guardRef must be set when guard.enable is true.";
+      }
     ];
 
   # Renders the exact Config object expected by src/root/index.ts.
@@ -490,6 +547,7 @@ rec {
       };
 
       guardOutAttrs = {
+        enable = cfg.broker.guardOut.enable;
         base = cfg.broker.guardOut.base;
         model = cfg.broker.guardOut.model;
       }
@@ -531,6 +589,9 @@ rec {
         keyFile = modelKeyFile;
       };
       tier1 = tier1Attrs;
+      guard = {
+        enable = cfg.guard.enable;
+      };
       hindsightUrl = cfg.hindsightUrl;
       s3 =
         if cfg.s3 == null then
@@ -551,6 +612,8 @@ rec {
       };
       xmsg = {
         service = cfg.serviceName;
+      }
+      // lib.optionalAttrs (cfg.guard.enable && cfg.guardRef != null) {
         guard = {
           target = cfg.guardRef;
           maxConcurrency = cfg.guardMaxConcurrency;

@@ -468,6 +468,7 @@
                   && grep -q '^ok [0-9]* - oracle (G10 c): the second page is served from the per-thread cache with one remote request in total$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (G10 d): under the screening window, behaviour is unchanged$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (G10 part 2): tier1 prompts and web_fetch tool description carry user-linked gist and paging rules$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G11): parameterized web_fetch (including G10 100 KiB paging) and web_search over webScreen enabled true and false: off mode makes 0 guard calls and matches on-mode allow$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
@@ -501,7 +502,8 @@
                   "clean bank entries and clean replay fixtures are screened and seed the session unchanged" \
                   "a rewrite in a bank entry or replay sends the guard's cleaned_text, not the injection" \
                   "the seed guard unavailable, throwing or malformed refuses to seed the session" \
-                  "each seed check is a fresh session: source recall, history empty"; do
+                  "each seed check is a fresh session: source recall, history empty" \
+                  "parameterized seedGuard over enabled true and false: off mode makes 0 guard calls and seeds session identically to on-mode allow"; do
                   sed -n 's/^ok [0-9]* - oracle: //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 touch $out
@@ -774,6 +776,7 @@
                   'each check is a fresh session: no history, no earlier thread text, one field per envelope'; do
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -q '^ok [0-9]* - oracle (G11): parameterized escalationGuard over enabled true and false: off mode makes 0 guard calls and matches on-mode allow$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The thread's tier from the envelope's per-line tags: falls on a public line, rises only on a
@@ -871,7 +874,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/broker.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The gist action through the broker against a stub GitHub: one POST /gists with the redacted
@@ -1034,6 +1037,7 @@
                   "close and gc.sweep() succeed with s3: null, and propose with no token is refused cleanly"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -q '^ok [0-9]* - oracle (G11): parameterized root pipeline over guard.enable and broker.guardOut.enable (true vs false): off mode constructs no XmsgGuardClient, makes 0 guard/guardOut calls, appends UNSCREENED_PROMPT, redacts outbound replies/proposals/expert replies, and matches on-mode allow$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover

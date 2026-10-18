@@ -138,3 +138,38 @@ test("the token reaches the act and nothing else", async () => {
     n.close();
   }
 });
+
+test("oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls", async () => {
+  const cred = credential();
+  const raw = JSON.stringify({
+    kind: "pr",
+    repo: "alice/nix-config",
+    branch: "genie/fix-foo",
+    files: { "hosts/laptop.nix": `{ token = "${cred}"; }\n` },
+    title: `Enable foo ${cred}`,
+    body: `Thread: https://matrix.to/#/!abc:example.org\n${cred}`,
+  });
+
+  // On-mode allow baseline
+  const onRun = await run(verdict("pass", "clean"), raw);
+  assert.equal(onRun.requests.length, 1);
+
+  // Off-mode against a stub ninfer that would return 500 if called
+  const n = await ninfer("should not be called", 500);
+  const { act, calls } = recordingAct();
+  try {
+    const offAction = await broker("!t:example.org", raw, {
+      tokenFile: tokenFile(randomUUID()),
+      guard: { enable: false, base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(n.requests.length, 0, "guard-out must receive 0 calls when enable is false");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(offAction, onRun.action, "off-mode action must match on-mode allow action including redactions");
+    const sent = JSON.stringify(calls[0].p);
+    assert.ok(!sent.includes(cred), "credential must be redacted even when guard-out is off");
+    assert.deepEqual(calls[0].p, onRun.calls[0].p, "off-mode redacted proposal must equal on-mode allow proposal");
+  } finally {
+    n.close();
+  }
+});

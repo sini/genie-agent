@@ -104,7 +104,7 @@ const resolver = async (h: string) => (names[h] ? [{ address: names[h], family: 
 type Call = { tool: string; arg: unknown };
 
 // A recording Host. Its clone is P1's worktreeFor over a git spy that only makes the directory.
-function host(calls: Call[], guard: GuardClient): Host {
+function host(calls: Call[], guard: GuardClient | undefined, guardEnabled = true): Host {
   const record = (tool: string) => async (arg: unknown) => {
     calls.push({ tool, arg });
     return { ok: true };
@@ -115,7 +115,7 @@ function host(calls: Call[], guard: GuardClient): Host {
     escalate: record("escalate"),
     reply: record("reply"),
     propose: record("propose"),
-    screen: webScreen(guard),
+    screen: webScreen(guard, { enabled: guardEnabled }),
     async clone(url) {
       calls.push({ tool: "clone", arg: url });
       return worktreeFor({ mirrorRoot: `${tmp}/mirrors`, worktreeRoot }, url, "t1", async (args) => {
@@ -130,7 +130,7 @@ function host(calls: Call[], guard: GuardClient): Host {
 const allow: GuardClient = { check: async (e) => ({ verdict: "allow", reason: "ok", cleaned_text: e.content.text }) };
 
 // The extension loaded into a recording pi.
-function load1(opts: { guard?: GuardClient; calls?: Call[]; cluster?: string[]; fetchMaxBytes?: number; screenMaxBytes?: number } = {}) {
+function load1(opts: { guard?: GuardClient; guardEnabled?: boolean; calls?: Call[]; cluster?: string[]; fetchMaxBytes?: number; screenMaxBytes?: number } = {}) {
   const tools = new Map<string, { description: string; parameters: any; execute(id: string, p: any): Promise<any> }>();
   const handlers = new Map<string, (e?: any) => Promise<any>>();
   let active: string[] = [];
@@ -149,7 +149,7 @@ function load1(opts: { guard?: GuardClient; calls?: Call[]; cluster?: string[]; 
       timeoutMs: 3000,
       exempt: ["127.0.0.2"],
     },
-    { host: host(opts.calls ?? [], opts.guard ?? allow), resolve: resolver },
+    { host: host(opts.calls ?? [], opts.guard ?? allow, opts.guardEnabled ?? true), resolve: resolver },
   )(pi);
   const run = async (name: string, params: unknown): Promise<string> =>
     (await tools.get(name)!.execute("id", params)).content[0].text;
@@ -687,6 +687,66 @@ test("mutant (G10 part 2): dropping the gist guidance paragraph fails the G10 pa
     () => assertG10PromptGuidance(withoutGistParagraph, "mutant-no-gist-paragraph"),
     /must prefer web_fetch on raw gist URL|must require quoting only the lines that matter/,
   );
+});
+
+test("oracle (G11): parameterized web_fetch (including G10 100 KiB paging) and web_search over webScreen enabled true and false: off mode makes 0 guard calls and matches on-mode allow", async () => {
+  const runs: {
+    enabled: boolean;
+    guardCalls: number;
+    shortOut: string;
+    searchOut: string;
+    pagedOuts: string[];
+    pageBodies: string[];
+  }[] = [];
+
+  for (const enabled of [true, false] as const) {
+    const seen: Envelope[] = [];
+    const spyGuard: GuardClient = {
+      check: async (e) => {
+        seen.push(e);
+        if (!enabled) throw new Error("guard must not be called when enabled is false");
+        return { verdict: "allow", reason: "ok", cleaned_text: "" };
+      },
+    };
+    const t = load1({ guard: spyGuard, guardEnabled: enabled, fetchMaxBytes: 1 << 20 });
+    const shortOut = await t.run("web_fetch", { url: `http://ok.test:${okPort}/page` });
+    const searchOut = await t.run("web_search", { query: "nix flakes" });
+
+    const pagedOuts: string[] = [];
+    const pageBodies: string[] = [];
+    let offset: number | undefined;
+    for (let step = 0; step < 10; step++) {
+      const out = await t.run("web_fetch", {
+        url: `http://ok.test:${okPort}/gist-100k`,
+        ...(offset !== undefined ? { offset } : {}),
+      });
+      pagedOuts.push(out);
+      const nextMatch = out.match(NEXT_FOOTER_RE);
+      if (nextMatch) {
+        pageBodies.push(out.slice(0, out.length - nextMatch[0].length));
+        offset = Number(nextMatch[4]);
+      } else {
+        assert.match(out, END_FOOTER_RE);
+        pageBodies.push(out.replace(END_FOOTER_RE, ""));
+        break;
+      }
+    }
+    assert.equal(pageBodies.join(""), DOC_100K, `enabled=${enabled}: 4 pages must reassemble byte-exactly`);
+    runs.push({
+      enabled,
+      guardCalls: seen.length,
+      shortOut,
+      searchOut,
+      pagedOuts,
+      pageBodies,
+    });
+  }
+
+  assert.equal(runs[0].guardCalls, 6, "on-mode must call guard 6 times (1 short page + 1 search + 4 G10 pages)");
+  assert.equal(runs[1].guardCalls, 0, "off-mode must make 0 guard calls");
+  assert.equal(runs[1].shortOut, runs[0].shortOut, "off-mode short web_fetch must equal on-mode allow");
+  assert.equal(runs[1].searchOut, runs[0].searchOut, "off-mode web_search must equal on-mode allow");
+  assert.deepEqual(runs[1].pagedOuts, runs[0].pagedOuts, "off-mode G10 4-page web_fetch outputs must equal on-mode allow byte-for-byte");
 });
 
 

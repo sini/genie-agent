@@ -3,7 +3,7 @@
 // (or `config.xmsg.service`), starts lifecycle/GC timers, and runs the intake loop until stopped.
 import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
-import { type Config as RootConfig, main } from "./index.ts";
+import { type Config as RootConfig, main, validateRootConfig } from "./index.ts";
 import { XmsgIo } from "./io.ts";
 
 export class ConfigError extends Error {}
@@ -38,11 +38,13 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
 
 async function run(opts: CliOptions): Promise<void> {
   const raw: RootConfig = JSON.parse(readFileSync(opts.configPath, "utf8"));
+  const { guardEnable } = validateRootConfig(raw);
   const io = new XmsgIo({
     xmsgDir: raw.xmsg?.xmsgDir ?? opts.xmsgDir,
     service: raw.xmsg?.service ?? "genie",
     pollWaitMs: raw.xmsg?.pollWaitMs,
-    guard: raw.xmsg?.guard,
+    guard: guardEnable ? raw.xmsg?.guard : null,
+    guardEnable,
   });
   await io.register();
   const root = main(opts.configPath, io);

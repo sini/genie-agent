@@ -75,7 +75,7 @@ export interface Post {
 export interface Io {
   intake: Intake;
   post: Post;
-  guard: GuardClient;
+  guard?: GuardClient;
   xmsg: XmsgSend;
 }
 
@@ -89,17 +89,25 @@ export interface Config {
   // Tier 1's OpenAI-compatible model.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
   tier1: Omit<Tier1Config, "root">;
+  // Inbound guard-in screening switch (G11; default true).
+  guard?: { enable?: boolean };
   // Hindsight dataplane endpoint for recall ("support" -> genie, "memory" -> genie-memory).
   hindsightUrl?: string;
   s3?: S3Config | null;
   // threadLink: the thread's public URL with `{thread}` where the thread id goes; a PR needs it.
-  broker: { tokenFile?: string | null; githubApi?: string; threadLink?: string; guardOut: { base: string; model: string; keyFile?: string } };
+  broker: {
+    tokenFile?: string | null;
+    githubApi?: string;
+    threadLink?: string;
+    guardOut?: { enable?: boolean; base?: string; model?: string; keyFile?: string };
+  };
   // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
   eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax">;
   experts?: Record<Tier, string>;
   xmsg?: XmsgIoOptions;
 }
 
+import type { GuardOutConfig } from "../broker/index.ts";
 import type { XmsgIoOptions } from "./io.ts";
 export { parseGuardVerdictReply, parseMatrixForward, XmsgGuardClient, type XmsgGuardClientOptions, XmsgIo, type XmsgIoOptions } from "./io.ts";
 
@@ -120,7 +128,13 @@ export const approvalRequest = approvalNotice;
 // context line its history, in envelope order, each with its authenticated tier. Runs on every
 // inbound envelope, including fail-open forwards (`<request screened="false" note="…">`). The text
 // tier 1 may see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
-async function guardIn(guard: GuardClient, raw: string): Promise<string> {
+// When `enabled` is false (G11), passes `content.text` through unscreened without calling the guard.
+export async function guardIn(
+  guard: GuardClient | undefined,
+  raw: string,
+  opts: { enabled?: boolean } = {},
+): Promise<string> {
+  const enabled = opts.enabled ?? true;
   const history: Line[] = [];
   let content: Line | undefined;
   let inRequest = false;
@@ -133,7 +147,10 @@ async function guardIn(guard: GuardClient, raw: string): Promise<string> {
       inRequest ? (content = { sender, tier, text }) : history.push({ sender, tier, text });
     }
   }
-  const e: Envelope = { source: "message", history, content: content! };
+  if (!content) throw new Error("guard-in: an envelope without request content");
+  if (!enabled) return content.text;
+  if (!guard) throw new Error("guard-in: no verdict");
+  const e: Envelope = { source: "message", history, content };
   const v = await guard.check(e).catch((err) => ({ unavailable: String(err) }));
   if ("unavailable" in v || verdictErrors(v).length) throw new Error("guard-in: no verdict");
   if (v.verdict === "allow") return e.content.text;
@@ -141,16 +158,40 @@ async function guardIn(guard: GuardClient, raw: string): Promise<string> {
   throw new Error(`guard-in: rejected: ${v.reason}`);
 }
 
+export function validateRootConfig(c: Config): { guardEnable: boolean; guardOutEnable: boolean } {
+  const guardEnable = c.guard?.enable ?? true;
+  const guardOutEnable = c.broker?.guardOut?.enable ?? true;
+  if (guardEnable && c.xmsg !== undefined && "guard" in c.xmsg) {
+    if (c.xmsg.guard === null || (c.xmsg.guard !== undefined && "target" in c.xmsg.guard && !c.xmsg.guard.target)) {
+      throw new Error("xmsg.guard.target is required when guard.enable is true");
+    }
+  }
+  if (guardOutEnable) {
+    if (!c.broker?.guardOut?.base || !c.broker?.guardOut?.model) {
+      throw new Error("broker.guardOut.base and broker.guardOut.model are required when broker.guardOut.enable is true");
+    }
+  }
+  return { guardEnable, guardOutEnable };
+}
+
 export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
+  const { guardEnable, guardOutEnable } = validateRootConfig(c);
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
   const archive = c.s3 ? archiver(store, c.s3) : async () => {};
   const evalIn = withCache(store, perThread(run ?? ((l) => runEval(l, c.eval))));
-  const screen = webScreen(io.guard);
-  const guard = seedGuard(io.guard);
+  const screen = webScreen(io.guard, { enabled: guardEnable });
+  const guard = seedGuard(io.guard, { enabled: guardEnable });
   const hindsightUrl = c.hindsightUrl ?? DEFAULT_HINDSIGHT_ENDPOINT;
-  const { base, model, keyFile: outKey } = c.broker.guardOut;
-  const guardOut = { base, model, system: readFileSync(new URL("prompts/guard-out.md", repo).pathname, "utf8"), apiKey: outKey && secret(outKey) };
+  const guardOut: GuardOutConfig = guardOutEnable
+    ? {
+        enable: true,
+        base: c.broker.guardOut!.base!,
+        model: c.broker.guardOut!.model!,
+        system: readFileSync(new URL("prompts/guard-out.md", repo).pathname, "utf8"),
+        apiKey: c.broker.guardOut!.keyFile && secret(c.broker.guardOut!.keyFile),
+      }
+    : { enable: false };
 
   // C5's record of the thread: its latest cleaned question and its evals, beside P2's state.
   type Context = { cleaned_question: string; eval_transcript: unknown[] };
@@ -158,7 +199,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   const context = (t: string): Context => (existsSync(file(t)) ? JSON.parse(readFileSync(file(t), "utf8")) : { cleaned_question: "", eval_transcript: [] });
   const setContext = (t: string, x: Partial<Context>) => writeFileSync(file(t), JSON.stringify({ ...context(t), ...x }));
 
-  const { githubApi, threadLink } = c.broker;
+  const { githubApi, threadLink } = c.broker ?? {};
   const link = (t: string) => {
     if (!threadLink) throw new Error("broker.threadLink is not configured");
     return threadLink.replace("{thread}", encodeURIComponent(t));
@@ -168,7 +209,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   const escalation = new Escalation({
     store,
     xmsg: io.xmsg,
-    guard: escalationGuard(io.guard),
+    guard: escalationGuard(io.guard, { enabled: guardEnable }),
     route: router(c.experts),
     context: (t) => {
       const { cleaned_question, eval_transcript } = context(t);
@@ -184,6 +225,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
     pi: c.pi,
     memory: Boolean(c.tier1.memoryRoot),
     memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
+    screened: guardEnable,
     config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
@@ -327,7 +369,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       let text: string;
       try {
         observe(store, i.thread, parseEnvelope(i.envelope));
-        text = await guardIn(io.guard, i.envelope);
+        text = await guardIn(io.guard, i.envelope, { enabled: guardEnable });
       } catch (e) {
         console.error(`thread ${i.thread}: ${e}`);
         await postEnvelope(i.thread, REFUSAL);

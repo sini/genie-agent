@@ -257,3 +257,28 @@ test("oracle: each check is a fresh session: no history, no earlier thread text,
   assert.ok(later.every((t) => !t.includes("earlier-thread-line")));
   assert.deepEqual(later.sort(), strings(pkg).sort());
 });
+
+test("oracle (G11): parameterized escalationGuard over enabled true and false: off mode makes 0 guard calls and matches on-mode allow", async () => {
+  const pkg = pkgWith("value: false");
+  const outcomes: { enabled: boolean; delivered: { to: string; text: string }[]; guardCalls: number; status?: string }[] = [];
+
+  for (const enabled of [true, false] as const) {
+    const g = new FakeGuard(enabled ? undefined : "throw");
+    const { thread, store, xmsg, esc } = boot("trusted", router(), escalationGuard(g, { enabled }));
+    await esc.escalate(thread, pkg);
+    assert.equal(xmsg.delivered.length, 1);
+    const parsed = JSON.parse(xmsg.delivered[0].text);
+    assert.deepEqual(parsed, { ...pkg, thread_id: thread });
+    outcomes.push({
+      enabled,
+      delivered: [{ to: xmsg.delivered[0].to, text: JSON.stringify({ ...parsed, thread_id: "normalized" }) }],
+      guardCalls: g.seen.length,
+      status: store.read(thread)?.status,
+    });
+  }
+
+  assert.equal(outcomes[0].guardCalls, strings(pkg).length, "on-mode must screen every non-empty string");
+  assert.equal(outcomes[1].guardCalls, 0, "off-mode must make 0 guard calls");
+  assert.deepEqual(outcomes[1].delivered, outcomes[0].delivered, "off-mode delivered package and route must match on-mode allow");
+  assert.equal(outcomes[1].status, outcomes[0].status);
+});

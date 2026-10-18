@@ -12,9 +12,15 @@ import { verdictErrors } from "../guard/verdict.ts";
 import type { GuardClient, Unavailable } from "../supervisor/guard-client.ts";
 import type { Package } from "./index.ts";
 
-export function escalationGuard(client: GuardClient): (pkg: Package) => Promise<Package> {
+export function escalationGuard(
+  client: GuardClient | undefined,
+  opts: { enabled?: boolean } = {},
+): (pkg: Package) => Promise<Package> {
+  const enabled = opts.enabled ?? true;
   const refused = (why: string) => new Error(`escalation refused by the guard: ${why}`);
   const screen = async (text: string): Promise<string> => {
+    if (!enabled) return text;
+    if (!client) throw refused("unavailable (guard client not configured)");
     let v: Verdict | Unavailable;
     try {
       v = await client.check({ source: "eval_stdout", history: [], content: { text } });

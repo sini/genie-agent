@@ -221,3 +221,35 @@ test("oracle: each seed check is a fresh session: source recall, history empty",
     await s.shutdown();
   }
 });
+
+test("oracle: parameterized seedGuard over enabled true and false: off mode makes 0 guard calls and seeds session identically to on-mode allow", async () => {
+  const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
+  try {
+    const cleanBank = "The repo uses flakes with standard nixfmt.";
+    const cleanReplay = JSON.stringify({ role: "user", content: "How do I build the devShell?" }) + "\n";
+    const cleanMsgs = [{ role: "assistant", content: "Run nix develop." }];
+
+    const results: { enabled: boolean; guardCalls: number; msgsStr: string; msgsArr: string }[] = [];
+    for (const enabled of [true, false] as const) {
+      const g = new FakeGuard(enabled ? undefined : "throw");
+      const guard = seedGuard(g, { enabled });
+      const tStr = `thread-g11-str-${enabled}`;
+      const tArr = `thread-g11-arr-${enabled}`;
+      await seedSession(s, tStr, { bankEntry: cleanBank, transcript: cleanReplay }, guard);
+      await seedSession(s, tArr, { transcript: cleanMsgs }, guard);
+      results.push({
+        enabled,
+        guardCalls: g.seen.length,
+        msgsStr: await messages(s, tStr),
+        msgsArr: await messages(s, tArr),
+      });
+    }
+
+    assert.equal(results[0].guardCalls, 3, "on-mode must call guard for bankEntry, transcript line, and transcriptMessages");
+    assert.equal(results[1].guardCalls, 0, "off-mode must make 0 guard calls");
+    assert.equal(results[1].msgsStr, results[0].msgsStr, "off-mode seeded messages (string transcript) must equal on-mode allow");
+    assert.equal(results[1].msgsArr, results[0].msgsArr, "off-mode seeded messages (array transcript) must equal on-mode allow");
+  } finally {
+    await s.shutdown();
+  }
+});

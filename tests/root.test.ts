@@ -1543,3 +1543,263 @@ test("oracle (GI-2): parseMatrixForward, XmsgIo solicited/control routing, and m
   }
 });
 
+test("oracle (G11): parameterized root pipeline over guard.enable and broker.guardOut.enable (true vs false): off mode constructs no XmsgGuardClient, makes 0 guard/guardOut calls, appends UNSCREENED_PROMPT, redacts outbound replies/proposals/expert replies, and matches on-mode allow", async () => {
+  // 1. Config validation and XmsgIo construction when guard.enable is true vs false
+  const fakeXmsgClient = {
+    register: async () => ({}),
+    close: () => {},
+    list: async () => [],
+    send: async () => "m1",
+    reply: async () => {},
+    ack: async () => {},
+    replies: async () => [],
+    poll: async () => null,
+  };
+  const ioOff = new XmsgIo({ guardEnable: false, guard: null }, fakeXmsgClient);
+  assert.equal(ioOff.guard, undefined, "XmsgIo must not construct XmsgGuardClient when guardEnable is false");
+  ioOff.close();
+
+  assert.throws(
+    () => new XmsgIo({ guardEnable: true, guard: { target: "" } }, fakeXmsgClient),
+    /xmsg\.guard\.target is required when guard\.enable is true/,
+  );
+
+  const badCfgTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-g11-badcfg-`);
+  writeFileSync(`${badCfgTmp}/model-key`, "k\n");
+  const badGuardCfg = `${badCfgTmp}/bad-guard.json`;
+  writeFileSync(
+    badGuardCfg,
+    JSON.stringify({
+      stateRoot: `${badCfgTmp}/state`,
+      storeRoot: `${badCfgTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${badCfgTmp}/worktrees` },
+      pi,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${badCfgTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      guard: { enable: true },
+      xmsg: { service: "genie", guard: null },
+      broker: { guardOut: { enable: true, base: "http://127.0.0.1:1/v1", model: "m" } },
+    }),
+  );
+  assert.throws(
+    () => main(badGuardCfg, { intake: { next: async () => null }, post: { post: async () => {} }, xmsg }),
+    /xmsg\.guard\.target is required when guard\.enable is true/,
+  );
+
+  const badGuardOutCfg = `${badCfgTmp}/bad-guard-out.json`;
+  writeFileSync(
+    badGuardOutCfg,
+    JSON.stringify({
+      stateRoot: `${badCfgTmp}/state`,
+      storeRoot: `${badCfgTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${badCfgTmp}/worktrees` },
+      pi,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${badCfgTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      guard: { enable: false },
+      broker: { guardOut: { enable: true } },
+    }),
+  );
+  assert.throws(
+    () => main(badGuardOutCfg, { intake: { next: async () => null }, post: { post: async () => {} }, xmsg }),
+    /broker\.guardOut\.base and broker\.guardOut\.model are required when broker\.guardOut\.enable is true/,
+  );
+
+  // 2. Parameterized root pipeline run in both modes (enabled = true vs enabled = false)
+  const cred = `ghp_${randomBytes(27).toString("base64").replace(/[+/=]/g, "x")}`;
+  type ModeResult = {
+    enabled: boolean;
+    guardInCalls: number;
+    guardOutCalls: number;
+    appendedPrompts: string[];
+    recallOut: unknown;
+    screenOut: unknown;
+    replyRes: unknown;
+    proposeRes: unknown;
+    posts: [string, unknown][];
+    sends: { to: string; text: string }[];
+  };
+  const modeResults: ModeResult[] = [];
+
+  for (const enabled of [true, false] as const) {
+    const modeTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-g11-mode-${enabled}-`);
+    for (const f of ["model", "s3", "token"]) writeFileSync(`${modeTmp}/${f}-key`, "k\n");
+    const argvFile = `${modeTmp}/argv.json`;
+    const piSpy = `${modeTmp}/pi-spy`;
+    writeFileSync(
+      piSpy,
+      `#!/bin/sh\nexport PI_SETTLE=manual\n"${process.execPath}" -e 'require("fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+    );
+    chmodSync(piSpy, 0o755);
+
+    const cfgPath = `${modeTmp}/config.json`;
+    writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        stateRoot: `${modeTmp}/state`,
+        storeRoot: `${modeTmp}/store`,
+        mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${modeTmp}/worktrees` },
+        pi: piSpy,
+        model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${modeTmp}/model-key` },
+        tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+        guard: { enable: enabled },
+        hindsightUrl: `http://127.0.0.1:${(hindsight.address() as AddressInfo).port}`,
+        s3: {
+          endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`,
+          region: "garage",
+          bucket: "genie-transcripts",
+          accessKeyId: "GK",
+          secretKeyFile: `${modeTmp}/s3-key`,
+        },
+        broker: {
+          tokenFile: `${modeTmp}/token-key`,
+          githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+          threadLink: "https://chat.example.org/thread/{thread}",
+          guardOut: enabled
+            ? { enable: true, base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" }
+            : { enable: false },
+        },
+      }),
+    );
+
+    const modeGuardCalls: Envelope[] = [];
+    const modeGuard = {
+      check: async (e: Envelope): Promise<Verdict> => {
+        modeGuardCalls.push(e);
+        if (!enabled) throw new Error("guardClient.check must not be called when guard.enable is false");
+        return { verdict: "allow", reason: "clean", cleaned_text: "" };
+      },
+    };
+    const modeBatches: Inbound[][] = [];
+    const modePosts: [string, unknown][] = [];
+    const modeSends: { to: string; text: string }[] = [];
+    const reviewsBefore = reviews.length;
+
+    const modeRoot = main(
+      cfgPath,
+      {
+        intake: { next: async () => modeBatches.shift() ?? null },
+        post: { post: async (t, m) => (modePosts.push([t, m]), `$ev_${modePosts.length}`) },
+        guard: modeGuard,
+        xmsg: { send: async (to, text) => `m${modeSends.push({ to, text })}` },
+      },
+      async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+    );
+
+    try {
+      const th = "th_g11";
+      // (a) Inbound request envelope -> guardIn
+      modeBatches.push([{ thread: th, envelope: envelope(BOB, "how does den wire modules?") }]);
+      await modeRoot.run();
+
+      const argv: string[] = JSON.parse(readFileSync(argvFile, "utf8"));
+      const appendedPrompts: string[] = [];
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === "--append-system-prompt" && i + 1 < argv.length) {
+          appendedPrompts.push(argv[i + 1]);
+        }
+      }
+
+      // (b) Host.screen (webScreen)
+      const screenOut = JSON.parse(
+        (
+          (await modeRoot.supervisor.command(th, {
+            type: "host",
+            title: BRIDGE,
+            placeholder: JSON.stringify({ method: "screen", arg: "web page body" }),
+          })).data as any
+        ).value,
+      );
+
+      // (c) Host.recall (seedGuard)
+      const recallOut = JSON.parse(
+        (
+          (await modeRoot.supervisor.command(th, {
+            type: "host",
+            title: BRIDGE,
+            placeholder: JSON.stringify({ method: "recall", arg: { query: "q", bank: "support" } }),
+          })).data as any
+        ).value,
+      );
+
+      // (d) Host.reply with credential + escalate_forced -> outbound redactor + guardOut + escalationGuard
+      const replyDraft = {
+        answer: `Here is the answer (token ${cred} redacted)`,
+        confidence: 0.9,
+        gaps: [`gap with ${cred}`],
+        escalate_forced: true,
+      };
+      const replyRes = JSON.parse(
+        (
+          (await modeRoot.supervisor.command(th, {
+            type: "host",
+            title: BRIDGE,
+            placeholder: JSON.stringify({ method: "reply", arg: replyDraft }),
+          })).data as any
+        ).value,
+      );
+
+      // (e) Host.propose with credential -> broker outbound redactor + guardOut
+      const proposeRes = JSON.parse(
+        (
+          (await modeRoot.supervisor.command(th, {
+            type: "host",
+            title: BRIDGE,
+            placeholder: JSON.stringify({
+              method: "propose",
+              arg: {
+                kind: "gist",
+                title: `Gist ${cred}`,
+                body: `Body ${cred}`,
+                files: { "flake.nix": `{ token = "${cred}"; }\n` },
+              },
+            }),
+          })).data as any
+        ).value,
+      );
+
+      // (f) Inbound expert reply with credential -> outbound redactor + guardOut
+      modeBatches.push([{ thread: th, expert: `Expert answer with ${cred}` }]);
+      await modeRoot.run();
+
+      modeResults.push({
+        enabled,
+        guardInCalls: modeGuardCalls.length,
+        guardOutCalls: reviews.length - reviewsBefore,
+        appendedPrompts,
+        recallOut,
+        screenOut,
+        replyRes,
+        proposeRes,
+        posts: modePosts,
+        sends: modeSends,
+      });
+    } finally {
+      await modeRoot.stop();
+    }
+  }
+
+  const [onRes, offRes] = modeResults;
+  assert.ok(onRes.guardInCalls >= 8, `expected >= 8 guardIn calls in on-mode, got ${onRes.guardInCalls}`);
+  assert.equal(onRes.guardOutCalls, 3, "on-mode must make 3 guard-out calls (reply, propose, expert)");
+  assert.equal(offRes.guardInCalls, 0, "off-mode must make 0 guard-in calls across guardIn, webScreen, seedGuard, escalationGuard");
+  assert.equal(offRes.guardOutCalls, 0, "off-mode must make 0 guard-out calls across reply, propose, expert");
+
+  // Off-mode appends UNSCREENED_PROMPT to pi's system prompt
+  assert.equal(onRes.appendedPrompts.length, 1);
+  assert.equal(offRes.appendedPrompts.length, 2);
+  assert.match(offRes.appendedPrompts[1], /# Unscreened Mode \(guard\.enable = false\)/);
+
+  // Outcomes match on-mode allow and deterministic redactor ran in both modes
+  assert.deepEqual(offRes.screenOut, onRes.screenOut);
+  assert.deepEqual(offRes.recallOut, onRes.recallOut);
+  assert.deepEqual(offRes.replyRes, onRes.replyRes);
+  assert.deepEqual(offRes.proposeRes, onRes.proposeRes);
+  assert.deepEqual(offRes.posts, onRes.posts);
+  assert.deepEqual(offRes.sends, onRes.sends);
+
+  const allOffPostedAndSent = JSON.stringify([offRes.posts, offRes.sends, offRes.proposeRes]);
+  assert.ok(!allOffPostedAndSent.includes(cred), "off-mode must still redact credentials via the deterministic redactor");
+  assert.ok(allOffPostedAndSent.includes("[redacted:github-token]"), "off-mode must contain [redacted:github-token]");
+});
+

@@ -15,11 +15,18 @@ export const DEFAULT_SCREEN_MAX_BYTES = 32 * 1024;
 
 // Host.screen over guard: a web result as the model may see it, the fetched text on allow and
 // the guard's cleaned_text on rewrite. A reject, unavailable, a throw, or a reply that is not a
-// verdict withholds it.
-export function webScreen(guard: GuardClient): (text: string) => Promise<string> {
+// verdict withholds it. When `enabled` is false (G11), passes text through unscreened without
+// calling the guard.
+export function webScreen(
+  guard: GuardClient | undefined,
+  opts: { enabled?: boolean } = {},
+): (text: string) => Promise<string> {
+  const enabled = opts.enabled ?? true;
   return async (text) => {
     const withheld = (why: string) => new Error(`web content withheld: ${why}`);
     if (typeof text !== "string") throw withheld("it is not text");
+    if (!enabled) return text;
+    if (!guard) throw withheld("the guard is unavailable (guard client not configured)");
     let v: Verdict | Unavailable;
     try {
       v = await guard.check({ source: "web", history: [], content: { text } });

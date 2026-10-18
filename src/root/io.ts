@@ -272,15 +272,17 @@ export interface XmsgIoOptions {
   xmsgDir?: string;
   service?: string;
   pollWaitMs?: number;
-  guard?: XmsgGuardClientOptions;
+  guard?: XmsgGuardClientOptions | null;
+  guardEnable?: boolean;
 }
 
 // Real Io adapter over SocketXmsg: registers as `service` (default `"genie"`), polls the service
 // inbox, routes guard verdicts and expert replies by `inReplyTo`, parses matrix-xmsg forwards into
-// `Inbound`, and replies to the thread's latest forward on `post()`.
+// `Inbound`, and replies to the thread's latest forward on `post()`. When `guardEnable` is false
+// (G11), no `XmsgGuardClient` is constructed.
 export class XmsgIo implements Io {
   readonly client: XmsgClient & { register(): Promise<unknown>; close(): void };
-  readonly guard: XmsgGuardClient;
+  readonly guard?: XmsgGuardClient;
   readonly intake: Intake;
   readonly post: Post;
   readonly xmsg: XmsgSend;
@@ -300,9 +302,13 @@ export class XmsgIo implements Io {
   ) {
     const dir = opts.xmsgDir ?? `${process.env.XDG_RUNTIME_DIR ?? "/run"}/xmsg`;
     const service = opts.service ?? "genie";
+    const guardEnable = opts.guardEnable ?? (opts.guard !== null);
+    if (guardEnable && opts.guard !== undefined && (opts.guard === null || ("target" in opts.guard && !opts.guard.target))) {
+      throw new Error("xmsg.guard.target is required when guard.enable is true");
+    }
     this.client = client ?? new SocketXmsg(dir, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
-    this.guard = new XmsgGuardClient(this.client, opts.guard);
+    this.guard = guardEnable ? new XmsgGuardClient(this.client, opts.guard ?? undefined) : undefined;
 
     this.xmsg = {
       send: async (to: string, text: string, key: string): Promise<string> => {
@@ -364,7 +370,7 @@ export class XmsgIo implements Io {
 
   close(): void {
     this.closed = true;
-    this.guard.close();
+    this.guard?.close();
     this.wakeIntake();
     this.client.close();
   }
@@ -414,7 +420,7 @@ export class XmsgIo implements Io {
   private async handleRaw(m: RawXmsgInbound): Promise<void> {
     if (m.inReplyTo) {
       // 1. Pushed guard verdict reply
-      if (this.guard.routeReply(m.inReplyTo, m.text)) {
+      if (this.guard?.routeReply(m.inReplyTo, m.text)) {
         return;
       }
 

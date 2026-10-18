@@ -18,7 +18,10 @@ let
   credDir = "/run/credentials/genie-agent.service";
   modelKeyRuntime = "${credDir}/model-key";
   guardOutKeyRuntime =
-    if cfg.broker.guardOut.keyFile != null then "${credDir}/guard-out-key" else null;
+    if cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null then
+      "${credDir}/guard-out-key"
+    else
+      null;
   brokerTokenRuntime = if cfg.broker.tokenFile != null then "${credDir}/broker-token" else null;
   s3SecretKeyRuntime = if cfg.s3 != null then "${credDir}/s3-secret-key" else null;
 
@@ -264,49 +267,6 @@ in
         default = false;
         description = "Whether to run genie-agent with systemd DynamicUser (must be false when xmsgSocket is set).";
       };
-
-      guard = lib.mkOption {
-        default = { };
-        description = "Optional local genie-guard service configuration.";
-        type = lib.types.submodule {
-          options = {
-            enable = lib.mkEnableOption "local genie-guard service";
-
-            package = lib.mkOption {
-              type = lib.types.package;
-              default = sysPackages.genie-guard;
-              defaultText = lib.literalExpression "genie-agent.packages.\${system}.genie-guard";
-              description = "The genie-guard package.";
-            };
-
-            ninferUrl = lib.mkOption {
-              type = lib.types.str;
-              default = cfg.model.baseUrl;
-              defaultText = lib.literalExpression "cfg.model.baseUrl";
-              description = "OpenAI-compatible base URL for genie-guard.";
-            };
-
-            model = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Optional model ID override for genie-guard.";
-            };
-
-            timeoutMs = lib.mkOption {
-              type = lib.types.ints.positive;
-              default = 120000;
-              description = "Per-review timeout in milliseconds for genie-guard.";
-            };
-
-            apiKeyFile = lib.mkOption {
-              type = lib.types.nullOr secretPath;
-              default = cfg.model.keyFile;
-              defaultText = lib.literalExpression "cfg.model.keyFile";
-              description = "Optional API key file for genie-guard (must not be in /nix/store).";
-            };
-          };
-        };
-      };
     };
 
   config = lib.mkIf cfg.enable {
@@ -367,7 +327,7 @@ in
               "model-key:${toString cfg.model.keyFile}"
             ]
             ++ lib.optional (
-              cfg.broker.guardOut.keyFile != null
+              cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null
             ) "guard-out-key:${toString cfg.broker.guardOut.keyFile}"
             ++ lib.optional (cfg.broker.tokenFile != null) "broker-token:${toString cfg.broker.tokenFile}"
             ++ lib.optional (cfg.s3 != null) "s3-secret-key:${toString cfg.s3.secretKeyFile}";

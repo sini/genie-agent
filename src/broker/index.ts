@@ -33,10 +33,14 @@ export const byKind =
     return acts[p.kind](p, token, thread);
   };
 
+export type GuardOutConfig =
+  | (NinferOut & { enable?: boolean })
+  | { enable: false; base?: string; model?: string; system?: string; apiKey?: string };
+
 export interface Config {
   // Read at act time, never from argv or the environment.
   tokenFile: string;
-  guard: NinferOut;
+  guard: GuardOutConfig;
   act: Act;
   // As the redactor takes them, from secretLineHashes.
   secretFileHashes?: string[];
@@ -57,10 +61,12 @@ const schema = load("proposal");
 // redacts every string that will leave through the scrub it is handed, the question is redacted too,
 // and guard-out then judges exactly those bytes, so no credential enters its context and what it
 // passed is what is published. Resolves to the redacted value guard-out passed, or why it did not.
+// When `guard.enable === false` (G11), the deterministic redactor still runs unconditionally and
+// only the guard-out model call is skipped.
 export async function outbound<T>(
   question: string,
   build: (scrub: (s: string) => string) => T,
-  guard: NinferOut,
+  guard: GuardOutConfig,
   secretFileHashes?: string[],
 ): Promise<{ redactions: string[] } & ({ value: T } | { reason: string })> {
   const redactions: string[] = [];
@@ -70,6 +76,9 @@ export async function outbound<T>(
     return r.text;
   };
   const value = build(scrub);
+  if (guard.enable === false) {
+    return { redactions, value };
+  }
   try {
     const { verdict } = await reviewOut({ question: scrub(question), answer: JSON.stringify(value, null, 2) }, guard);
     if (verdict.verdict !== "pass") return { redactions, reason: `guard-out: ${verdict.reason}` };

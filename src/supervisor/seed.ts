@@ -29,10 +29,16 @@ export interface SeedInput {
   transcript?: string | TranscriptMessage[];
 }
 
-export function seedGuard(client: GuardClient): SeedGuard {
+export function seedGuard(
+  client: GuardClient | undefined,
+  opts: { enabled?: boolean } = {},
+): SeedGuard {
+  const enabled = opts.enabled ?? true;
   const refused = (why: string) => new Error(`seed refused by the guard: ${why}`);
 
   const screen = async (text: string): Promise<string> => {
+    if (!enabled) return text;
+    if (!client) throw refused("unavailable (guard client not configured)");
     let v: Verdict | Unavailable;
     try {
       v = await client.check({ source: "recall", history: [], content: { text } });
