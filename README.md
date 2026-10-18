@@ -64,6 +64,12 @@ The boundary is enforced across process and credential boundaries:
 
 Note: The boundary only holds if the live Hindsight API requires the write token (`Authorization: Bearer <token>`). If it accepts unauthenticated writes today, that is a deployment gap for the owner, not something to fix in code.
 
+## Deployment (`nixosModules.default`)
+
+`flake.nix` exports `nixosModules.default` (aliased as `nixosModules.genie-agent`), backed by the shared option surface in `nix/options.nix` (shared with the Kubernetes manifest renderer `I12`). It configures `genie-agent.service` (Tier 1 composition root on `pi`), optional `genie-guard.service`, and optional `genie-herdr@<tier>.service` + `genie-dispatcher@<tier>.service` (`public` and `trusted` expert tiers).
+
+> **Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus and Claude credentials. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel, network, or credential isolation between `@public` and `@trusted` expert sessions.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).
+
 ## Tests
 
 ```sh

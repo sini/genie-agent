@@ -188,7 +188,7 @@
           touch $out
         '';
     in
-    {
+    rec {
       packages = forAllSystems (
         pkgs:
         {
@@ -1128,6 +1128,12 @@
         // onLinux pkgs {
           dispatcher-sea = seaCheck "genie-dispatcher" (genieDispatcher pkgs) pkgs;
           genie-guard-sea = seaCheck "genie-guard" (genieGuard pkgs) pkgs;
+          nixos-module = import ./nix/test-module.nix {
+            inherit pkgs nixpkgs;
+            self = {
+              inherit packages nixosModules;
+            };
+          };
           image =
             pkgs.runCommand "genie-agent-image-oracle"
               {
@@ -1139,6 +1145,11 @@
               '';
         }
       );
+
+      nixosModules = rec {
+        default = import ./nix/module.nix { inherit packages; };
+        genie-agent = default;
+      };
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
