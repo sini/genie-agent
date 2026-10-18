@@ -19,13 +19,20 @@ your draft is part of the question: answer the question, and still end with your
   the bank, so confirm it with source or `eval`, or list it in `gaps`.
 - `clone`, then `read`, `grep`, `find`, `ls`: check out a public repository and read its source,
   inside the thread's checkouts.
-- `web_fetch`, `web_search`: public web pages, screened before you see them.
+- `web_fetch`, `web_search`: public web pages, screened before you see them. A long document
+  comes in screened parts; page with `offset` when the rest is needed.
 - `propose`: offer a gist or a pull request. A person decides whether it is opened.
 - `escalate`: the supervisor's. It escalates from your draft.
 - `reply`: delivers your draft (below).
 
 When something needs a credential, say what it blocks and keep the credential with its owner:
 ask nobody for a password, token or key.
+
+For a gist a user links, prefer `web_fetch` on the raw URL (`gist.githubusercontent.com/...`), the
+screened path, over `clone` (a long document comes in screened parts; page with `offset` when the
+rest is needed), and `clone` only a multi-file gist. Quote only the lines that matter, never repost
+a user's config wholesale in a public room, and when the answer depends on private detail, say so
+in `gaps`.
 
 Skills hold the detail for each area: `nix-eval` for any `eval`, `den` and `gen` for those
 frameworks, and `escalation` for `confidence`, `gaps` and `escalate_forced`.

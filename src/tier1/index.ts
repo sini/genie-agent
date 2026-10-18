@@ -7,8 +7,11 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { checkUrl } from "../mirror/index.ts";
+import { DEFAULT_SCREEN_MAX_BYTES } from "../supervisor/guard-client.ts";
 import { errors, forModel, fromModel, load, type Schema } from "./schema.ts";
 import { fetchText, refusedList, type Resolver, search, systemResolver } from "./web.ts";
+
+export { DEFAULT_SCREEN_MAX_BYTES };
 
 // Operating memory index at memoryPath, as tier 1's system prompt carries it.
 // Rewrites relative markdown links to `/memory/<slug>` so tier 1 can pass them directly to read/grep/find/ls.
@@ -65,6 +68,7 @@ export interface Config {
   // CIDRs of the cluster's pod and service networks, refused like the private ranges.
   cluster: string[];
   fetchMaxBytes?: number;
+  screenMaxBytes?: number;
   searchResults?: number;
   timeoutMs?: number;
   // Per-question turn deadline (default: 600_000 ms) and check-in (default: 300_000 ms).
@@ -193,6 +197,37 @@ export function confine(root: string, raw: unknown, memoryRoot = "/memory"): str
   return real;
 }
 
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder();
+
+// Slice one screened window [offset, end) of at most maxBytes from buf, cutting at the last
+// newline within the window when one exists before EOF (or at a UTF-8 codepoint boundary otherwise).
+export function sliceWebPage(
+  buf: Uint8Array,
+  offset: number,
+  maxBytes = DEFAULT_SCREEN_MAX_BYTES,
+): { page: string; end: number; total: number; paged: boolean } {
+  const total = buf.length;
+  if (offset === 0 && total <= maxBytes) {
+    return { page: utf8Decoder.decode(buf), end: total, total, paged: false };
+  }
+  if (offset >= total) {
+    return { page: "", end: total, total, paged: true };
+  }
+  const maxEnd = Math.min(offset + maxBytes, total);
+  let end = maxEnd;
+  if (maxEnd < total) {
+    const lastNl = buf.subarray(offset, maxEnd).lastIndexOf(0x0a);
+    if (lastNl !== -1) {
+      end = offset + lastNl + 1;
+    } else {
+      while (end > offset && (buf[end] & 0xc0) === 0x80) end--;
+      if (end === offset) end = maxEnd;
+    }
+  }
+  return { page: utf8Decoder.decode(buf.subarray(offset, end)), end, total, paged: true };
+}
+
 export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
   const fetchOptions = {
     resolve: deps.resolve ?? systemResolver,
@@ -200,6 +235,21 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     exempt: cfg.exempt,
     maxBytes: cfg.fetchMaxBytes ?? 1 << 20,
     timeoutMs: cfg.timeoutMs ?? 15_000,
+  };
+  const screenMaxBytes = cfg.screenMaxBytes ?? DEFAULT_SCREEN_MAX_BYTES;
+  const webFetchCache = new Map<string, Uint8Array>();
+  const webFetchSchema: Schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["url"],
+    properties: {
+      url: nonEmpty,
+      offset: {
+        type: "integer",
+        minimum: 0,
+        description: "Byte offset for paging a long document (default: 0).",
+      },
+    },
   };
 
   // A C1 tool: the repo's schema validates the arguments, then the Host acts.
@@ -256,10 +306,43 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     {
       name: "web_fetch",
       label: "web_fetch",
-      description: "Fetch a public http(s) URL as text (HTML reduced to text, JSON as is).",
-      parameters: object({ url: nonEmpty }),
-      async execute(_id: string, params: { url: string }) {
-        return text(await deps.host.screen(await fetchText(params.url, fetchOptions)));
+      description: "Fetch a public http(s) URL as text (HTML reduced to text, JSON as is). A long document comes in screened parts; pass offset (in bytes) to page when the rest is needed.",
+      parameters: forModel(webFetchSchema),
+      async execute(_id: string, rawParams: { url: string; offset?: number }) {
+        const value = fromModel(webFetchSchema, rawParams);
+        const bad = errors(webFetchSchema, value);
+        if (bad.length) throw new Error(`invalid web_fetch arguments: ${bad.join("; ")}`);
+        const params = value as { url: string; offset?: number };
+        const offset = params.offset ?? 0;
+        let buf = webFetchCache.get(params.url);
+        if (!buf) {
+          const fetched = await fetchText(params.url, fetchOptions);
+          buf = utf8Encoder.encode(fetched);
+          webFetchCache.set(params.url, buf);
+        }
+        const { page, end, total, paged } = sliceWebPage(buf, offset, screenMaxBytes);
+        if (!paged) {
+          return text(await deps.host.screen(page));
+        }
+        const footer =
+          end < total
+            ? `[bytes ${offset}–${end} of ${total} shown; call web_fetch again with offset=${end} for the next part]`
+            : `[end of document]`;
+        if (page.length === 0 && offset >= total) {
+          return text(footer);
+        }
+        let screened: string;
+        try {
+          screened = await deps.host.screen(page);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const withheldFooter =
+            end < total
+              ? `[bytes ${offset}–${end} of ${total} withheld; call web_fetch again with offset=${end} for the next part]`
+              : `[end of document]`;
+          throw new Error(`${msg}\n${withheldFooter}`);
+        }
+        return text(`${screened}\n${footer}`);
       },
     },
     {

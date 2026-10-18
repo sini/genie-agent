@@ -408,6 +408,11 @@
                   && grep -q '^ok [0-9]* - oracle C2.3.1: --searxng-url routes web_search to stub SearXNG server and records searxng_url in result file (mutant: restored dead URL => RED)$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Oracle C2.3 (Amendment 2): recall without bank or with bank: support returns empty support results and recall_called: false; bank: memory returns fixture results and recall_called: true$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (R1): recall tool description, parameter schema, and tier1 prompt name both banks and their contents$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G10 a): a 100 KiB document comes back as 4 pages that reassemble byte-exactly into the original; each page went through the guard separately$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G10 b): one page rejected by the guard is withheld with its reason, the next page is still returned, and the rejected bytes never appear$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G10 c): the second page is served from the per-thread cache with one remote request in total$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G10 d): under the screening window, behaviour is unchanged$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (G10 part 2): tier1 prompts and web_fetch tool description carry user-linked gist and paging rules$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1

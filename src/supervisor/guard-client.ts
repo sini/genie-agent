@@ -11,6 +11,8 @@ export interface GuardClient {
   check(e: Envelope): Promise<Verdict | Unavailable>;
 }
 
+export const DEFAULT_SCREEN_MAX_BYTES = 32 * 1024;
+
 // Host.screen over guard: a web result as the model may see it, the fetched text on allow and
 // the guard's cleaned_text on rewrite. A reject, unavailable, a throw, or a reply that is not a
 // verdict withholds it.
@@ -29,6 +31,6 @@ export function webScreen(guard: GuardClient): (text: string) => Promise<string>
     const verdict = v as Verdict;
     if (verdict.verdict === "allow") return text;
     if (verdict.verdict === "rewrite") return verdict.cleaned_text;
-    throw withheld("the guard rejected it");
+    throw withheld(verdict.reason ? `the guard rejected it (${verdict.reason})` : "the guard rejected it");
   };
 }
