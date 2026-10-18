@@ -108,6 +108,7 @@
                         && grep -q '^ok [0-9]* - oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 3 (GI-2): XmsgGuardClient enforces FIFO concurrency limit over 3 parallel checks and fails closed on timeout$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 4 (GI-2): simulated matrix-xmsg forward to genie passes guard, runs fake pi, replies draft, and routes escalation to fake expert matched by inReplyTo$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 5 (GI-3): two genie-dispatcher services register concurrently on one bus and a fake-clock sweep parks an idle pane$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
                     '';

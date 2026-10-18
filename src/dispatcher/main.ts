@@ -1,10 +1,11 @@
-// The dispatcher's entrypoint (design §5.8, D1c): registers as `genie-expert` on the tier's
-// xmsg, reconciles the journal, and delivers until killed. The journal is what a kill leaves, so
-// no signal is handled. Built into the `genie-dispatcher` single executable, which is the path
-// xmsg's `--svc-exe` attests.
+// The dispatcher's entrypoint (design §5.8, D1c; GI-3): registers as `serviceName` (default
+// `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
+// journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
+// single executable, which is the path xmsg's `--svc-exe` attests.
 import process from "node:process";
-import { CliHerdr } from "./herdr.ts";
-import { Delivery, Dispatcher, SocketXmsg } from "./index.ts";
+import type { Clock } from "./clock.ts";
+import { CliHerdr, type Herdr } from "./herdr.ts";
+import { Delivery, Dispatcher, SocketXmsg, type DeliveryOptions } from "./index.ts";
 
 // Each setting is a flag, or the environment variable beside it.
 const settings = {
@@ -15,22 +16,26 @@ const settings = {
   // The single token config directory D1a's stub hands every thread. D4b's pool replaces it.
   tokenConfigDir: ["--token-config-dir", "GENIE_TOKEN_CONFIG_DIR"],
   model: ["--model", "GENIE_MODEL"],
+  serviceName: ["--service-name", "GENIE_SERVICE_NAME"],
 } as const;
 
-interface Config {
+const OPTIONAL_SETTINGS = new Set(["model", "serviceName"]);
+
+export interface Config {
   stateDir: string;
   session: string;
   basePane: string;
   cwd: string;
   tokenConfigDir: string;
   model?: string;
+  serviceName: string;
   // `$XDG_RUNTIME_DIR/xmsg`, the tier's xmsg instance.
   xmsgDir: string;
 }
 
-class ConfigError extends Error {}
+export class ConfigError extends Error {}
 
-function config(argv: string[], env: Record<string, string | undefined>): Config {
+export function config(argv: string[], env: Record<string, string | undefined>): Config {
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 2) {
     const [flag, value] = [argv[i], argv[i + 1]];
@@ -41,40 +46,66 @@ function config(argv: string[], env: Record<string, string | undefined>): Config
   const c: Record<string, string | undefined> = {};
   for (const [k, [flag, name]] of Object.entries(settings)) {
     const v = flags.get(flag) ?? env[name];
-    if (k !== "model" && !v) throw new ConfigError(`${flag} (or ${name}) is required`);
+    if (!OPTIONAL_SETTINGS.has(k) && !v) throw new ConfigError(`${flag} (or ${name}) is required`);
     c[k] = v || undefined;
   }
   if (!env.XDG_RUNTIME_DIR) throw new ConfigError("XDG_RUNTIME_DIR is required: the tier's xmsg lives under it");
-  return { ...(c as Omit<Config, "xmsgDir">), xmsgDir: `${env.XDG_RUNTIME_DIR}/xmsg` };
+  return {
+    ...(c as Omit<Config, "xmsgDir" | "serviceName">),
+    serviceName: c.serviceName ?? "genie-expert",
+    xmsgDir: `${env.XDG_RUNTIME_DIR}/xmsg`,
+  };
 }
 
-async function main(c: Config): Promise<void> {
-  const x = new SocketXmsg(c.xmsgDir, "genie-expert");
+export interface MainDeps {
+  herdr?: Herdr;
+  clock?: Clock;
+  deliveryOptions?: Omit<DeliveryOptions, "archive" | "clock">;
+}
+
+export async function startDispatcher(
+  c: Config,
+  deps: MainDeps = {},
+): Promise<{ x: SocketXmsg; d: Dispatcher; del: Delivery }> {
+  const x = new SocketXmsg(c.xmsgDir, c.serviceName);
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
   await x.register();
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
-    herdr: new CliHerdr({ session: c.session, basePane: c.basePane }),
+    herdr: deps.herdr ?? new CliHerdr({ session: c.session, basePane: c.basePane }),
     xmsg: x,
     pickToken: () => ({ id: c.tokenConfigDir, configDir: c.tokenConfigDir }),
     cwd: c.cwd,
     model: c.model,
+    now: deps.clock ? () => deps.clock!.now() : undefined,
   });
-  const del = new Delivery(d, x);
+  const del = new Delivery(d, x, {
+    archive: async () => {},
+    clock: deps.clock,
+    ...deps.deliveryOptions,
+  });
   del.start();
+  return { x, d, del };
+}
+
+export async function main(c: Config): Promise<void> {
+  const { del } = await startDispatcher(c);
   await del.run();
 }
 
-let c: Config;
-try {
-  c = config(process.argv.slice(2), process.env);
-} catch (e) {
-  if (!(e instanceof ConfigError)) throw e;
-  process.stderr.write(`genie-dispatcher: ${e.message}\n`);
-  process.exit(2);
+const isTestRunner = Boolean(process.env.NODE_TEST_CONTEXT);
+if (!isTestRunner) {
+  let c: Config;
+  try {
+    c = config(process.argv.slice(2), process.env);
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    process.stderr.write(`genie-dispatcher: ${e.message}\n`);
+    process.exit(2);
+  }
+  main(c).catch((e) => {
+    process.stderr.write(`genie-dispatcher: ${e instanceof Error ? e.stack : e}\n`);
+    process.exit(1);
+  });
 }
-main(c).catch((e) => {
-  process.stderr.write(`genie-dispatcher: ${e instanceof Error ? e.stack : e}\n`);
-  process.exit(1);
-});

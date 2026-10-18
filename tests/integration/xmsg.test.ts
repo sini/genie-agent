@@ -1039,4 +1039,209 @@ const [xmsgDir] = process.argv.slice(1);
   },
 );
 
+// -----------------------------------------------------------------------------
+// Oracle 5 (GI-3): Dispatcher local-mode readiness (src/dispatcher/main.ts)
+// - Two genie-dispatcher registrations (--service-name genie-expert-public and
+//   --service-name genie-expert-trusted) coexist concurrently on one real xmsg serve bus
+// - Default archive passed to Delivery in src/dispatcher/main.ts arms DispatcherGc so
+//   advancing a fake clock by 1h parks an idle pane
+// Mutants (verified by source edit & revert on src/dispatcher/main.ts):
+//   1. Hardcode "genie-expert" in SocketXmsg registration => RED
+//   2. Omit archive from new Delivery(d, x, ...) => RED
+// -----------------------------------------------------------------------------
+import { config as parseDispatcherConfig, startDispatcher } from "../../src/dispatcher/main.ts";
+import type { Clock as DispatcherClock } from "../../src/dispatcher/clock.ts";
+import type { Herdr as DispatcherHerdr, StartSpec as DispatcherStartSpec } from "../../src/dispatcher/herdr.ts";
+
+test(
+  "oracle 5 (GI-3): two genie-dispatcher services register concurrently on one bus and a fake-clock sweep parks an idle pane",
+  { timeout: 30_000 },
+  async () => {
+    const node = await startXmsg({
+      "genie-expert": process.execPath,
+      "genie-expert-public": process.execPath,
+      "genie-expert-trusted": process.execPath,
+    });
+
+    const binDir = join(node.dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fakeHerdrBin = join(binDir, "herdr");
+    writeFileSync(
+      fakeHerdrBin,
+      `#!/bin/sh\necho '{"id":"cli","result":{"agents":[]}}'\n`,
+      { mode: 0o755 },
+    );
+    chmodSync(fakeHerdrBin, 0o755);
+
+    const statePublic = join(node.dir, "state-public");
+    const stateTrusted = join(node.dir, "state-trusted");
+    const tokPublic = join(node.dir, "tok-public");
+    const tokTrusted = join(node.dir, "tok-trusted");
+    mkdirSync(statePublic, { recursive: true });
+    mkdirSync(stateTrusted, { recursive: true });
+    mkdirSync(tokPublic, { recursive: true });
+    mkdirSync(tokTrusted, { recursive: true });
+
+    // Verify default serviceName when --service-name / GENIE_SERVICE_NAME is omitted
+    const defaultCfg = parseDispatcherConfig(
+      [
+        "--state-dir", statePublic,
+        "--herdr-session", "genie-public",
+        "--base-pane", "%0",
+        "--cwd", node.dir,
+        "--token-config-dir", tokPublic,
+      ],
+      { XDG_RUNTIME_DIR: node.runDir },
+    );
+    assert.equal(defaultCfg.serviceName, "genie-expert");
+
+    // Spawn second dispatcher process (genie-expert-trusted) running src/dispatcher/main.ts
+    const dispatcherMain = new URL("../../src/dispatcher/main.ts", import.meta.url).pathname;
+    const childEnv: Record<string, string | undefined> = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      XDG_RUNTIME_DIR: node.runDir,
+      HOME: node.dir,
+    };
+    delete childEnv.NODE_TEST_CONTEXT;
+
+    const trustedProc = spawn(
+      process.execPath,
+      [
+        dispatcherMain,
+        "--state-dir", stateTrusted,
+        "--herdr-session", "genie-trusted",
+        "--base-pane", "%0",
+        "--cwd", node.dir,
+        "--token-config-dir", tokTrusted,
+        "--service-name", "genie-expert-trusted",
+      ],
+      {
+        env: childEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    // FakeClock for testing 1h DispatcherGc periodic sweep started by startDispatcher
+    let nowMs = 1_000_000;
+    let nextTimerId = 0;
+    const timers = new Map<number, { at: number; f: () => unknown }>();
+    const fakeClock: DispatcherClock & { advance: (ms: number) => Promise<void> } = {
+      now: () => nowMs,
+      setTimeout: (f, ms) => {
+        const id = ++nextTimerId;
+        timers.set(id, { at: nowMs + ms, f });
+        return id;
+      },
+      clearTimeout: (id) => {
+        timers.delete(id as number);
+      },
+      advance: async (ms: number) => {
+        const target = nowMs + ms;
+        while (true) {
+          const due = [...timers.entries()]
+            .filter(([, t]) => t.at <= target)
+            .sort(([, a], [, b]) => a.at - b.at)[0];
+          if (!due) break;
+          const [id, timer] = due;
+          timers.delete(id);
+          nowMs = timer.at;
+          await timer.f();
+        }
+        nowMs = target;
+      },
+    };
+
+    const closedPanes: string[] = [];
+    const panes = new Set<string>();
+    const fakeHerdr: DispatcherHerdr = {
+      start: async (_spec: DispatcherStartSpec) => {
+        const pane = "%1";
+        panes.add(pane);
+        return pane;
+      },
+      close: async (pane: string) => {
+        closedPanes.push(pane);
+        panes.delete(pane);
+      },
+      list: async () => [...panes].map((pane) => ({ pane })),
+    };
+
+    const pubCfg = parseDispatcherConfig(
+      [
+        "--state-dir", statePublic,
+        "--herdr-session", "genie-public",
+        "--base-pane", "%0",
+        "--cwd", node.dir,
+        "--token-config-dir", tokPublic,
+        "--service-name", "genie-expert-public",
+      ],
+      { XDG_RUNTIME_DIR: node.runDir },
+    );
+
+    let pubHandle: Awaited<ReturnType<typeof startDispatcher>> | null = null;
+    try {
+      pubHandle = await startDispatcher(pubCfg, {
+        herdr: fakeHerdr,
+        clock: fakeClock,
+      });
+
+      // Wait until both genie-expert-public and genie-expert-trusted are registered on the shared xmsg bus
+      let addresses: string[] = [];
+      for (let i = 0; i < 200; i++) {
+        const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+        if (res.status === 200 && Array.isArray(res.json?.recipients)) {
+          addresses = res.json.recipients.map((r: any) => r.address);
+          if (
+            addresses.some((a) => a.startsWith("genie-expert-public")) &&
+            addresses.some((a) => a.startsWith("genie-expert-trusted"))
+          ) {
+            break;
+          }
+        }
+        if (trustedProc.exitCode !== null) {
+          throw new Error(`trusted genie-dispatcher exited prematurely with code ${trustedProc.exitCode}`);
+        }
+        await sleep(25);
+      }
+      assert.ok(
+        addresses.some((a) => a.startsWith("genie-expert-public")),
+        `expected genie-expert-public on bus, got ${JSON.stringify(addresses)}`,
+      );
+      assert.ok(
+        addresses.some((a) => a.startsWith("genie-expert-trusted")),
+        `expected genie-expert-trusted on bus, got ${JSON.stringify(addresses)}`,
+      );
+
+      // Escalate a thread on genie-expert-public and mark its turn answered at T0
+      const thread = await pubHandle.d.escalate("$th-gi3");
+      thread.lastReply = fakeClock.now();
+      pubHandle.d.save();
+      assert.equal(pubHandle.d.journal.threads["$th-gi3"].state, "live");
+      assert.equal(closedPanes.length, 0);
+
+      // Advance fake clock by 1h: DispatcherGc periodic sweep timer (armed because archive was passed
+      // to Delivery in src/dispatcher/main.ts) fires and parks the idle pane
+      await fakeClock.advance(60 * 60_000);
+      assert.equal(
+        pubHandle.d.journal.threads["$th-gi3"].state,
+        "parked",
+        "idle thread must be parked after 1h fake-clock sweep",
+      );
+      assert.equal(pubHandle.d.journal.threads["$th-gi3"].pane, null);
+      assert.deepEqual(closedPanes, ["%1"]);
+    } finally {
+      if (pubHandle) {
+        pubHandle.del.stop();
+        pubHandle.x.close();
+      }
+      if (trustedProc.exitCode === null) {
+        trustedProc.kill("SIGKILL");
+      }
+      await node.stop();
+    }
+  },
+);
+
+
 
