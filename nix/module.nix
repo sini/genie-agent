@@ -97,11 +97,15 @@ let
     tier:
     let
       tierCwd = "${cfg.stateDir}/cwd-${tier}";
+      dispDir = "${cfg.stateDir}/dispatcher-${tier}";
     in
     (pkgs.formats.json { }).generate "genie-claude-${tier}-onboarding.json" {
       hasCompletedOnboarding = true;
       projects = {
         "${tierCwd}" = {
+          hasTrustDialogAccepted = true;
+        };
+        "${dispDir}" = {
           hasTrustDialogAccepted = true;
         };
       };
@@ -112,8 +116,8 @@ let
     pkgs.writeText "genie-expert-${tier}-CLAUDE.md" ''
       # Genie Expert (${tier} tier)
 
-      - **Source checkouts (`./source-repos`) are read-only sources, never a workspace.**
-      - For any escalated thread that needs repository inspection, patching, tracing, or builds, create an isolated per-thread working copy/worktree under `${cfg.stateDir}/dispatcher-${tier}/worktrees/<thread-id>` cloned from `./source-repos/<repo>`.
+      - your working copy is your cwd; never edit `./source-repos` (your working copy is your cwd; never edit ./source-repos).
+      - Source checkouts (`./source-repos`) are read-only sources, never a workspace. If your cwd is an empty per-thread directory, clone from `./source-repos/<repo>` into your cwd.
       - Never run `git push`, `gh pr`, or remote writes directly; outbound changes go only through the proposal broker (`propose`).
       - Consult `./memory/MEMORY.md` for operating context.
     '';
@@ -136,8 +140,12 @@ let
         install -m 0600 "${settingsJson}" "${claudeDir}/settings.json"
         install -m 0600 "${claudeJson}" "${claudeDir}/.claude.json"
         install -m 0644 "${claudeMd}" "${cwdDir}/CLAUDE.md"
+        install -m 0644 "${claudeMd}" "${claudeDir}/CLAUDE.md"
+        install -m 0644 "${claudeMd}" "${dispStateDir}/CLAUDE.md"
         ln -sfn "${tierCfg.reposDir}" "${cwdDir}/source-repos"
         ln -sfn "${tierCfg.memoryDir}" "${cwdDir}/memory"
+        ln -sfn "${tierCfg.reposDir}" "${dispStateDir}/source-repos"
+        ln -sfn "${tierCfg.memoryDir}" "${dispStateDir}/memory"
       '';
       bindPaths =
         lib.optional (cfg.xmsgSocket != null) (toString cfg.xmsgSocket)

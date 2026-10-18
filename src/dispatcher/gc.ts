@@ -83,11 +83,12 @@ export class DispatcherGc {
     const cur = this.d.journal.threads[id];
     if (!cur || !this.isExpired(cur)) return;
 
-    // Transcript leaves the tier's home
+    // Transcript and per-thread working copy leave the tier's home and state dir
     const transcriptFile = `${t.configDir}/transcripts/${t.session}.jsonl`;
     if (existsSync(transcriptFile)) {
       rmSync(transcriptFile, { recursive: true, force: true });
     }
+    this.d.removeWorktree(id);
     delete this.d.journal.threads[id];
     this.d.save();
   }

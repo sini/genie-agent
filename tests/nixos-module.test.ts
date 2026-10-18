@@ -107,6 +107,14 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
     assert.equal(settings.permissions.defaultMode, "bypassPermissions");
     assert.ok(settings.permissions.deny.includes("Bash(git push*)"), "must deny git push");
     assert.ok(settings.permissions.deny.includes("Bash(gh pr*)"), "must deny gh pr");
+
+    const claudeMdMatch = /install -m 0644 "(\/nix\/store\/[^"]+CLAUDE\.md)"/.exec(bootstrapContent);
+    assert.ok(claudeMdMatch, `expected CLAUDE.md install in ${dispUnit.serviceConfig.ExecStartPre}`);
+    const claudeMdContent = readFileSync(claudeMdMatch[1], "utf8");
+    assert.ok(
+      claudeMdContent.includes("your working copy is your cwd; never edit `./source-repos`"),
+      "CLAUDE.md must tell the expert its working copy is its cwd and never to edit ./source-repos",
+    );
   }
 
   // 5. Verbatim isolation disclosure in README.md (§0.3)

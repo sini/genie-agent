@@ -22,9 +22,61 @@ function packageThread(m: Inbound): string | null {
   }
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchAvailableRepos(text: string, availableRepos: string[]): string[] {
+  const matched: string[] = [];
+  for (const name of availableRepos) {
+    if (!name) continue;
+    const re = new RegExp(`(?:^|[^A-Za-z0-9._-])${escapeRegExp(name)}(?:$|[^A-Za-z0-9._-])`);
+    if (re.test(text)) matched.push(name);
+  }
+  return matched;
+}
+
+export function packageRepos(m: Inbound, availableRepos: string[] = []): string[] {
+  const explicit: string[] = [];
+  try {
+    const parsed = JSON.parse(m.text);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.repo === "string" && parsed.repo.trim() !== "") {
+        explicit.push(parsed.repo.trim());
+      }
+      if (Array.isArray(parsed.repos)) {
+        for (const r of parsed.repos) {
+          if (typeof r === "string" && r.trim() !== "") explicit.push(r.trim());
+        }
+      }
+      if (Array.isArray(parsed.eval_transcript)) {
+        for (const item of parsed.eval_transcript) {
+          const r = item?.request?.repo;
+          if (typeof r === "string" && r.trim() !== "") explicit.push(r.trim());
+        }
+      }
+      if (explicit.length > 0) return [...new Set(explicit)];
+      if (typeof parsed.cleaned_question === "string" && availableRepos.length > 0) {
+        return matchAvailableRepos(parsed.cleaned_question, availableRepos);
+      }
+      return [];
+    }
+  } catch {
+    // Non-JSON custom message format (e.g., "<thread>:<body>"): check if body names an available repo.
+    if (availableRepos.length > 0) {
+      const idx = m.text.indexOf(":");
+      const body = idx >= 0 ? m.text.slice(idx + 1) : m.text;
+      return matchAvailableRepos(body, availableRepos);
+    }
+  }
+  return [];
+}
+
 export interface DeliveryOptions {
   // The thread a supervisor message belongs to, or null to answer it unavailable.
   threadOf?: (m: Inbound) => string | null;
+  // The repository names/specs a supervisor message requests for the thread's working copy.
+  reposOf?: (m: Inbound) => string[];
   // Every bound below is configuration (defaulted, reversible).
   readyTimeoutMs?: number;
   readyPollMs?: number;
@@ -62,6 +114,7 @@ export class Delivery {
       sendAttempts: 3,
       now: () => this.clock.now(),
       threadOf: packageThread,
+      reposOf: (m) => packageRepos(m, this.d.availableSourceRepos()),
       ...o,
     };
     if (o.archive) {
@@ -156,7 +209,7 @@ export class Delivery {
     const threadId = this.o.threadOf(m);
     // Not a package: answered and acknowledged, with no thread and nothing journalled.
     if (threadId === null) return this.x.reply(m.id, UNAVAILABLE);
-    const t = this.d.thread(threadId);
+    const t = this.d.thread(threadId, this.o.reposOf(m));
     t.buffer.push({ id: m.id, body: m.text, key: `${m.id}#${++t.seq}` });
     this.d.save();
     this.kick(threadId);
@@ -182,7 +235,8 @@ export class Delivery {
 
   private async ready(t: Thread): Promise<boolean> {
     const until = this.o.now() + this.o.readyTimeoutMs;
-    while (!this.stopped) {
+    const maxPolls = Math.max(1, Math.ceil(this.o.readyTimeoutMs / Math.max(1, this.o.readyPollMs)));
+    for (let polls = 0; !this.stopped && polls <= maxPolls; polls++) {
       if ((await this.x.list()).includes(t.session)) return true;
       if (this.o.now() >= until) return false;
       await sleep(this.o.readyPollMs);

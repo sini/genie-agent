@@ -1,7 +1,9 @@
 // The dispatcher core (design §5.8, D1a): one claude session per escalated thread, launched under a
 // minted uuid, resumed under that uuid on demand, and never started fresh once known. Every change
 // is journalled before it is acted on, so a restart from the journal resumes what a kill left.
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import type { Herdr } from "./herdr.ts";
 import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.ts";
 
@@ -24,8 +26,31 @@ export interface Options {
   // The token a new thread starts on. D4b's pool replaces this stub.
   pickToken: (threadId: string) => TokenRef;
   cwd: string;
+  reposDir?: string;
   model?: string;
   now?: () => number;
+}
+
+const baseName = (p: string): string => p.replace(/\/+$/, "").split("/").pop() ?? "";
+const dirName = (p: string): string => p.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
+
+function isGitRepo(dir: string): boolean {
+  try {
+    return existsSync(`${dir}/.git`) || (existsSync(`${dir}/HEAD`) && existsSync(`${dir}/objects`));
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeRepoName(spec: string): string | null {
+  const cleaned = spec
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/, "");
+  if (!cleaned) return null;
+  const last = cleaned.split(/[/:]/).pop() ?? "";
+  if (!last || last === "." || last === ".." || /[\\/]/.test(last)) return null;
+  return last;
 }
 
 export class Dispatcher {
@@ -63,8 +88,127 @@ export class Dispatcher {
     return this.o.model ? ["--model", this.o.model] : [];
   }
 
+  worktreeDir(threadId: string): string {
+    return `${this.o.stateDir}/worktrees/${threadId}`;
+  }
+
+  private sourceRoots(): string[] {
+    const roots = [
+      this.o.reposDir,
+      `${this.o.cwd}/source-repos`,
+      `${this.o.stateDir}/source-repos`,
+      this.o.cwd,
+    ];
+    return roots.filter((r): r is string => Boolean(r));
+  }
+
+  availableSourceRepos(): string[] {
+    const names = new Set<string>();
+    for (const root of this.sourceRoots()) {
+      try {
+        if (!existsSync(root)) continue;
+        if (isGitRepo(root)) {
+          const realName = baseName(realpathSync(root));
+          if (realName && realName !== "source-repos") names.add(realName);
+          names.add(baseName(root));
+          continue;
+        }
+        for (const entry of readdirSync(root)) {
+          if (entry.startsWith(".")) continue;
+          const candidate = `${root}/${entry}`;
+          if (isGitRepo(candidate)) names.add(entry);
+        }
+      } catch {}
+    }
+    return [...names];
+  }
+
+  private resolveSourceRepo(repoSpec: string): { name: string; sourcePath: string } | null {
+    const name = normalizeRepoName(repoSpec);
+    if (!name) return null;
+    for (const root of this.sourceRoots()) {
+      try {
+        const sub = `${root}/${name}`;
+        if (isGitRepo(sub)) return { name, sourcePath: sub };
+        if (isGitRepo(root)) {
+          const realName = baseName(realpathSync(root));
+          if (baseName(root) === name || realName === name) {
+            return { name, sourcePath: root };
+          }
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  private prepareWorktree(threadId: string, t: Thread): string {
+    const baseDir = this.worktreeDir(threadId);
+    mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+    const materialized: string[] = [];
+    for (const spec of t.repos ?? []) {
+      const resolved = this.resolveSourceRepo(spec);
+      if (!resolved) continue;
+      const dest = `${baseDir}/${resolved.name}`;
+      if (!existsSync(dest)) {
+        try {
+          execFileSync("git", ["-C", resolved.sourcePath, "worktree", "add", "--quiet", "--force", "--detach", dest]);
+        } catch {
+          execFileSync("git", ["clone", "--quiet", "--no-hardlinks", resolved.sourcePath, dest]);
+        }
+      }
+      materialized.push(dest);
+    }
+    return materialized[0] ?? baseDir;
+  }
+
+  removeWorktree(threadId: string): void {
+    const baseDir = this.worktreeDir(threadId);
+    const t = this.journal.threads[threadId];
+    const repoNames = new Set<string>(
+      (t?.repos ?? []).map(normalizeRepoName).filter((n): n is string => n !== null),
+    );
+    if (existsSync(baseDir)) {
+      try {
+        for (const entry of readdirSync(baseDir)) {
+          if (!entry.startsWith(".")) repoNames.add(entry);
+        }
+      } catch {}
+    }
+    for (const name of repoNames) {
+      const dest = `${baseDir}/${name}`;
+      const sourcePaths = new Set<string>();
+      const resolved = this.resolveSourceRepo(name);
+      if (resolved) sourcePaths.add(resolved.sourcePath);
+      try {
+        const dotGit = `${dest}/.git`;
+        if (existsSync(dotGit) && statSync(dotGit).isFile()) {
+          const content = readFileSync(dotGit, "utf8");
+          const m = /^gitdir:\s*(.+)$/m.exec(content);
+          if (m) {
+            // gitdir points to <source>/.git/worktrees/<id> or <bare>/worktrees/<id>
+            const wtMetaDir = m[1].trim();
+            const gitDir = dirName(dirName(wtMetaDir));
+            sourcePaths.add(baseName(gitDir) === ".git" ? dirName(gitDir) : gitDir);
+          }
+        }
+      } catch {}
+      for (const src of sourcePaths) {
+        try {
+          execFileSync("git", ["-C", src, "worktree", "remove", "--force", dest]);
+        } catch {}
+        try {
+          execFileSync("git", ["-C", src, "worktree", "prune"]);
+        } catch {}
+      }
+    }
+    if (existsSync(baseDir)) {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
+  }
+
   // The thread's entry, created parked and unlaunched under a picked token and a minted uuid.
-  thread(threadId: string): Thread {
+  thread(threadId: string, repos?: string | string[]): Thread {
+    const requested = (typeof repos === "string" ? [repos] : repos ?? []).filter((r) => Boolean(r && r.trim()));
     let t = this.journal.threads[threadId];
     if (!t) {
       const token = this.o.pickToken(threadId);
@@ -81,25 +225,33 @@ export class Dispatcher {
         outstanding: [],
         lastReply: null,
         createdAt: this.o.now ? this.o.now() : Date.now(),
+        ...(requested.length ? { repos: [...new Set(requested)] } : {}),
         seq: 0,
       };
       this.journal.threads[threadId] = t;
       this.journal.tokens[token.id] ??= { state: "available" };
       // The address is journalled before the process exists.
       this.save();
+    } else if (requested.length) {
+      const merged = [...new Set([...(t.repos ?? []), ...requested])];
+      if (merged.length !== (t.repos?.length ?? 0)) {
+        t.repos = merged;
+        this.save();
+      }
     }
     return t;
   }
 
   // Bring the thread's session up, launching a new thread under a minted uuid and resuming a
   // parked one under the uuid it was launched with. A live thread is returned as it is.
-  async escalate(threadId: string): Promise<Thread> {
-    const t = this.thread(threadId);
+  async escalate(threadId: string, repos?: string | string[]): Promise<Thread> {
+    const t = this.thread(threadId, repos);
     if (t.state === "live") return t;
+    const paneCwd = this.prepareWorktree(threadId, t);
     const args = t.launched
       ? ["--resume", t.session, ...this.modelArgs()]
       : ["-n", t.name, "--session-id", t.session, ...this.modelArgs()];
-    t.pane = await this.o.herdr.start({ name: t.name, configDir: t.configDir, cwd: this.o.cwd, args });
+    t.pane = await this.o.herdr.start({ name: t.name, configDir: t.configDir, cwd: paneCwd, args });
     t.state = "live";
     t.launched = true;
     this.save();

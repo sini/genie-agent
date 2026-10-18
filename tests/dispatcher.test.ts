@@ -123,7 +123,7 @@ test("a pane whose session xmsg no longer lists is closed and parked on restart"
 test("the journal is replaced whole, at 0600, with no temporary left", async () => {
   const { o } = setup();
   await (await Dispatcher.open(o)).escalate("t");
-  assert.deepEqual(readdirSync(o.stateDir), ["journal.json"]);
+  assert.deepEqual(readdirSync(o.stateDir).sort(), ["journal.json", "worktrees"]);
   assert.equal(statSync(`${o.stateDir}/journal.json`).mode & 0o777, 0o600);
 });
 

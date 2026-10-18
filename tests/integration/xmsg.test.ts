@@ -7,7 +7,7 @@
 //   Mutant: in src/dispatcher/delivery.ts:132, matching any outstanding turn (|| true) => RED.
 // Run with:
 //   XMSG_BIN=<path> GENIE_GUARD_BIN=<path> node --test tests/xmsg-integration.test.ts
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -1242,6 +1242,216 @@ test(
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// Oracle 6 (GI-3.1): Dispatcher creates each thread's working copy at spawn and removes it at 96h GC
+// - Against real xmsg serve, spawning a thread creates <state-dir>/worktrees/<thread-id> and starts
+//   the pane with its cwd inside it (a git worktree of the requested repo from source-repos, or an
+//   empty working dir when no repo is named)
+// - A fake-clock GC at 96h removes the directory and the worktree's registration in the source repo
+// Mutants (verified by source edit & revert):
+//   1. Skip worktree creation at spawn => RED
+//   2. Skip worktree removal at D3 GC => RED
+// -----------------------------------------------------------------------------
+test(
+  "oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates its worktree and 96h fake-clock GC removes the dir and source worktree registration",
+  { timeout: 30_000 },
+  async () => {
+    const node = await startXmsg({
+      "genie-expert-public": process.execPath,
+    });
+
+    let pubHandle: Awaited<ReturnType<typeof startDispatcher>> | null = null;
+    try {
+      const statePublic = join(node.dir, "state-public");
+      const tierCwd = join(node.dir, "cwd-public");
+      const tokPublic = join(node.dir, "tok-public");
+      const sourceRepoDir = join(tierCwd, "source-repos", "demo-repo");
+      mkdirSync(statePublic, { recursive: true });
+      mkdirSync(sourceRepoDir, { recursive: true });
+      mkdirSync(tokPublic, { recursive: true });
+
+      const gitEnv = {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      };
+      const git = (args: string[]) =>
+        execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.org", ...args], {
+          env: gitEnv,
+          encoding: "utf8",
+        });
+      git(["init", "-q", "-b", "main", sourceRepoDir]);
+      writeFileSync(join(sourceRepoDir, "README.md"), "# demo-repo\n");
+      git(["-C", sourceRepoDir, "add", "README.md"]);
+      git(["-C", sourceRepoDir, "commit", "-q", "-m", "initial commit"]);
+
+      let nowMs = 1_000_000;
+      let nextTimerId = 0;
+      const timers = new Map<number, { at: number; f: () => unknown }>();
+      const fakeClock: DispatcherClock & { advance: (ms: number) => Promise<void> } = {
+        now: () => nowMs,
+        setTimeout: (f, ms) => {
+          const id = ++nextTimerId;
+          timers.set(id, { at: nowMs + ms, f });
+          return id;
+        },
+        clearTimeout: (id) => {
+          timers.delete(id as number);
+        },
+        advance: async (ms: number) => {
+          const target = nowMs + ms;
+          while (true) {
+            const due = [...timers.entries()]
+              .filter(([, t]) => t.at <= target)
+              .sort(([, a], [, b]) => a.at - b.at)[0];
+            if (!due) break;
+            const [id, timer] = due;
+            timers.delete(id);
+            nowMs = timer.at;
+            await timer.f();
+          }
+          nowMs = target;
+        },
+      };
+
+      const startedSpecs: DispatcherStartSpec[] = [];
+      const panes = new Set<string>();
+      let nextPane = 1;
+      const fakeHerdr: DispatcherHerdr = {
+        start: async (spec: DispatcherStartSpec) => {
+          startedSpecs.push(spec);
+          const pane = `%${nextPane++}`;
+          panes.add(pane);
+          return pane;
+        },
+        close: async (pane: string) => {
+          panes.delete(pane);
+        },
+        list: async () => [...panes].map((pane) => ({ pane })),
+      };
+
+      const pubCfg = parseDispatcherConfig(
+        [
+          "--state-dir", statePublic,
+          "--herdr-session", "genie-public",
+          "--base-pane", "%0",
+          "--cwd", tierCwd,
+          "--token-config-dir", tokPublic,
+          "--service-name", "genie-expert-public",
+        ],
+        { XDG_RUNTIME_DIR: node.runDir },
+      );
+
+      pubHandle = await startDispatcher(pubCfg, {
+        herdr: fakeHerdr,
+        clock: fakeClock,
+        deliveryOptions: {
+          readyTimeoutMs: 50,
+          readyPollMs: 10,
+        },
+      });
+
+      // Send an escalation request naming demo-repo over real xmsg serve
+      const postRepoRes = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie-expert-public",
+        from: "genie",
+        text: JSON.stringify({
+          thread_id: "$th-repo",
+          cleaned_question: "Why does demo-repo fail?",
+          draft: { answer: "draft", confidence: 0.4, gaps: ["check"], escalate_forced: true },
+          eval_transcript: [
+            {
+              request: {
+                repo: "github:sini/demo-repo",
+                rev: "HEAD",
+                attr: "packages.x86_64-linux.default",
+                trusted: "no",
+              },
+              result: { exit: 1, stdout_tail: "", stderr_tail: "err", limit_hit: "none" },
+            },
+          ],
+          gaps: ["check"],
+        }),
+      });
+      assert.equal(postRepoRes.status, 202);
+
+      // Send a second escalation request that names no repo
+      const postEmptyRes = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie-expert-public",
+        from: "genie",
+        text: JSON.stringify({
+          thread_id: "$th-empty",
+          cleaned_question: "How do I enable flakes?",
+          draft: { answer: "draft", confidence: 0.4, gaps: ["check"], escalate_forced: true },
+          eval_transcript: [],
+          gaps: ["check"],
+        }),
+      });
+      assert.equal(postEmptyRes.status, 202);
+
+      // Pump both messages from real xmsg serve and wait for both threads to spawn panes
+      assert.equal(await pubHandle.del.pump(1000), true);
+      assert.equal(await pubHandle.del.pump(1000), true);
+      await pubHandle.del.settled();
+
+      assert.equal(startedSpecs.length, 2, "both threads must have spawned panes");
+
+      const repoThreadDir = join(statePublic, "worktrees", "$th-repo");
+      const repoWorktreePath = join(repoThreadDir, "demo-repo");
+      const emptyThreadDir = join(statePublic, "worktrees", "$th-empty");
+
+      // Verify $th-repo created <state-dir>/worktrees/$th-repo/demo-repo as a git worktree and pane cwd is inside it
+      assert.equal(existsSync(repoThreadDir), true, "thread worktree dir must exist at spawn");
+      assert.equal(existsSync(join(repoWorktreePath, "README.md")), true, "worktree must contain repo checkout");
+      const repoStart = startedSpecs.find((s) => s.cwd.startsWith(repoThreadDir));
+      assert.ok(repoStart, `expected pane cwd inside ${repoThreadDir}, got ${JSON.stringify(startedSpecs.map((s) => s.cwd))}`);
+      assert.equal(repoStart.cwd, repoWorktreePath);
+
+      const wtListBefore = git(["-C", sourceRepoDir, "worktree", "list"]);
+      assert.ok(
+        wtListBefore.includes(repoWorktreePath),
+        `git worktree list in source repo must include ${repoWorktreePath}, got:\n${wtListBefore}`,
+      );
+
+      // Verify $th-empty created an empty working dir at <state-dir>/worktrees/$th-empty and pane cwd is inside it
+      assert.equal(existsSync(emptyThreadDir), true, "empty thread worktree dir must exist at spawn");
+      const emptyStart = startedSpecs.find((s) => s.cwd.startsWith(emptyThreadDir));
+      assert.ok(emptyStart, `expected pane cwd inside ${emptyThreadDir}`);
+      assert.equal(emptyStart.cwd, emptyThreadDir);
+
+      // Mark both threads idle at T0 and advance fake clock by 96h to trigger D3 GC
+      for (const id of ["$th-repo", "$th-empty"]) {
+        const th = pubHandle.d.journal.threads[id];
+        th.buffer = [];
+        th.outstanding = [];
+        th.lastReply = fakeClock.now();
+      }
+      pubHandle.d.save();
+
+      await fakeClock.advance(96 * 60 * 60_000);
+
+      assert.equal(pubHandle.d.journal.threads["$th-repo"], undefined, "$th-repo must be GC'd at 96h");
+      assert.equal(pubHandle.d.journal.threads["$th-empty"], undefined, "$th-empty must be GC'd at 96h");
+      assert.equal(existsSync(repoThreadDir), false, "$th-repo worktree dir must be removed at 96h GC");
+      assert.equal(existsSync(emptyThreadDir), false, "$th-empty worktree dir must be removed at 96h GC");
+
+      const wtListAfter = git(["-C", sourceRepoDir, "worktree", "list"]);
+      assert.ok(
+        !wtListAfter.includes(repoWorktreePath),
+        `git worktree list in source repo must no longer include ${repoWorktreePath} after 96h GC, got:\n${wtListAfter}`,
+      );
+    } finally {
+      if (pubHandle) {
+        pubHandle.del.stop();
+        pubHandle.x.close();
+      }
+      await node.stop();
+    }
+  },
+);
+
 
 
 

@@ -48,6 +48,8 @@ export interface Thread {
   lastReply: number | null;
   // Epoch ms when the thread was created/first journalled.
   createdAt?: number;
+  // Optional repository names/specs requested for this thread's working copy.
+  repos?: string[];
   // The count of messages journalled for the thread, the idempotency key's sequence number.
   seq: number;
 }
