@@ -54,16 +54,20 @@ function line(raw: string): Line {
   return { sender: o.sender, sender_id: o.sender_id, tier: o.tier as Tier };
 }
 
-// matrix-xmsg's envelope (src/context.rs, build_envelope_with_rewrite): a `[matrix]` header, the
-// trigger's line in `<request>`, then `<context role="background|thread" context="bootstrap|delta">`
-// blocks of one JSON line each. Every line is JSON-escaped and its `<request`/`<context` tags
-// escaped, so message text cannot open or close a block. The header's `(tier)` is not read.
+// matrix-xmsg's envelope (src/context.rs:487, build_envelope_with_screening): a `[matrix]` header
+// `[matrix] room=<room> thread=<thread> user=<mapped> (<tier>)`, the trigger's line in `<request>`
+// (or `<request screened="false" note="…">` under fail-open, src/context.rs:373), then
+// `<context role="background|thread" context="bootstrap|delta">` blocks of one JSON line each.
+// Every line is JSON-escaped and its `<request`/`<context` tags escaped, so message text cannot
+// open or close a block. The trigger's tier is read verbatim from the bot's header `(<tier>)`,
+// never from any line's message text.
 export function parseEnvelope(raw: string): Envelope {
   const req: Line[] = [];
   const env = { bootstrap: false, thread: [] as Line[], background: [] as Line[] };
   let into: Line[] | undefined;
+  let headerTier: Tier | undefined;
   for (const l of raw.split("\n")) {
-    if (l === "<request>") into = req;
+    if (l === "<request>" || /^<request\s+screened="false"(?:\s+note="[^"]*")?>$/.test(l)) into = req;
     else if (l.startsWith("<context ")) {
       const role = / role="([a-z]+)"/.exec(l)?.[1];
       if (role !== "thread" && role !== "background") throw new Error(`thread tier: unknown context role in ${l}`);
@@ -71,10 +75,15 @@ export function parseEnvelope(raw: string): Envelope {
       into = env[role];
     } else if (l === "</request>" || l === "</context>") into = undefined;
     else if (into && l) into.push(line(l));
-    else if (l && !l.startsWith("[matrix] ")) throw new Error(`thread tier: unexpected envelope line: ${l}`);
+    else if (!into && l.startsWith("[matrix] ")) {
+      const hm = /^\[matrix\]\s+room=\S+\s+thread=\S+\s+user=.+\s+\((trusted|public)\)$/.exec(l);
+      if (!hm) throw new Error(`thread tier: invalid [matrix] header: ${l}`);
+      headerTier = hm[1] as Tier;
+    } else if (l) throw new Error(`thread tier: unexpected envelope line: ${l}`);
   }
   if (req.length !== 1) throw new Error(`thread tier: envelope with ${req.length} request lines`);
-  return { ...env, request: req[0] };
+  const request = headerTier ? { ...req[0], tier: headerTier } : req[0];
+  return { ...env, request };
 }
 
 // The tier after one envelope or control. prev is undefined for a thread's first envelope.

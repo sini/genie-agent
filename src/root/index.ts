@@ -42,11 +42,12 @@ export interface ApproveControl {
 }
 
 // One inbound item from matrix-xmsg or xmsg, on the thread it belongs to: the raw envelope exactly as
-// matrix-xmsg sends it, `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, an approve control (C10),
+// matrix-xmsg sends it (carrying `screened: false` when matrix-xmsg forwarded under fail-open, M26),
+// `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, an approve control (C10),
 // or an expert reply.
 export type Inbound =
   | ({ thread: string } & (
-      | { envelope: string }
+      | { envelope: string; screened?: false }
       | TrustControl
       | { control: "accept" | "deeper" }
       | { expert: string }
@@ -116,14 +117,16 @@ export const approvalNotice = (action: string, params: unknown): PostEnvelope & 
 export const approvalRequest = approvalNotice;
 
 // guard-in on an inbound envelope (design §4 step 1): the trigger's line is the content and every
-// context line its history, in envelope order, each with its authenticated tier. The text tier 1 may
-// see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
+// context line its history, in envelope order, each with its authenticated tier. Runs on every
+// inbound envelope, including fail-open forwards (`<request screened="false" note="…">`). The text
+// tier 1 may see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
 async function guardIn(guard: GuardClient, raw: string): Promise<string> {
   const history: Line[] = [];
   let content: Line | undefined;
   let inRequest = false;
   for (const l of raw.split("\n")) {
-    if (l === "<request>" || l === "</request>") inRequest = l === "<request>";
+    if (l === "<request>" || /^<request\s+screened="false"(?:\s+note="[^"]*")?>$/.test(l)) inRequest = true;
+    else if (l === "</request>") inRequest = false;
     else if (l.startsWith("{")) {
       const { sender, tier, text } = JSON.parse(l);
       if (typeof text !== "string") throw new Error("guard-in: an envelope line without text");

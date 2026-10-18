@@ -157,20 +157,38 @@ export function parseGuardVerdictReply(raw: string): Verdict | Unavailable {
   return parsed as Verdict;
 }
 
+import type { Tier } from "../state/index.ts";
+
+const REQUEST_OPEN_RE = /^<request(?:\s+screened="false"(?:\s+note="[^"]*")?)?>$/;
+
 // Parse a matrix-xmsg forward or control payload into a composition-root Inbound item, returning
-// also the thread id (when known) so XmsgIo can record the forward message id for replies.
-export function parseMatrixForward(text: string): { item: Inbound; thread?: string } | null {
+// also the thread id and header tier (when known) so XmsgIo can record the forward message id for replies.
+export function parseMatrixForward(
+  text: string,
+): { item: Inbound; thread?: string; tier?: Tier; screened?: boolean } | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  // 1. Matrix envelope (`[matrix] room=<room> thread=<thread> ...` with `<request>`)
-  if (trimmed.startsWith("[matrix] ") && trimmed.includes("\n<request>\n")) {
-    const firstNl = trimmed.indexOf("\n");
-    const header = firstNl === -1 ? trimmed : trimmed.slice(0, firstNl);
-    const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=/.exec(header);
-    const thread = m?.[1];
-    if (!thread) return null;
-    return { item: { thread, envelope: trimmed }, thread };
+  // 1. Matrix envelope (matrix-xmsg src/context.rs:487, build_envelope_with_screening):
+  //    Header: `[matrix] room=<room> thread=<thread> user=<mapped> (<tier>)`
+  //    Blank line, `<request>` or `<request screened="false" note="…">` (context.rs:373),
+  //    JSON line, `</request>`, blank line, `<context ...>` blocks.
+  //    The sender tier is read strictly from the header's `(<tier>)`, never from the body.
+  if (trimmed.startsWith("[matrix] ")) {
+    const lines = trimmed.split("\n");
+    const header = lines[0];
+    const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=.+\s+\((trusted|public)\)$/.exec(header);
+    if (!m) return null;
+    const thread = m[1];
+    const tier = m[2] as Tier;
+    const reqOpenIdx = lines.findIndex((l, idx) => idx > 0 && REQUEST_OPEN_RE.test(l));
+    const reqCloseIdx = lines.indexOf("</request>", reqOpenIdx + 1);
+    if (reqOpenIdx === -1 || reqCloseIdx === -1) return null;
+    const unscreened = lines[reqOpenIdx].includes('screened="false"');
+    const item: Inbound = unscreened
+      ? { thread, envelope: trimmed, screened: false }
+      : { thread, envelope: trimmed };
+    return { item, thread, tier, screened: !unscreened };
   }
 
   // 2. JSON control payloads forwarded by matrix-xmsg (`!trust`, `!deeper`, reactions ✅/🔍/🔓, `!approve`)
@@ -203,6 +221,7 @@ export function parseMatrixForward(text: string): { item: Inbound; thread?: stri
       }
       return {
         thread,
+        tier: obj.tier,
         item: {
           thread,
           control: "trust",
@@ -248,7 +267,6 @@ export interface XmsgIoOptions {
   service?: string;
   pollWaitMs?: number;
   guard?: XmsgGuardClientOptions;
-  matchByInReplyTo?: boolean;
 }
 
 // Real Io adapter over SocketXmsg: registers as `service` (default `"genie"`), polls the service
@@ -262,7 +280,6 @@ export class XmsgIo implements Io {
   readonly xmsg: XmsgSend;
 
   private readonly pollWaitMs: number;
-  private readonly matchByInReplyTo: boolean;
   private readonly latestForwardByThread = new Map<string, string>();
   private readonly escalationThreadByMsgId = new Map<string, string>();
   private readonly solicitedThreadByRequestId = new Map<string, string>();
@@ -279,7 +296,6 @@ export class XmsgIo implements Io {
     const service = opts.service ?? "genie";
     this.client = client ?? new SocketXmsg(dir, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
-    this.matchByInReplyTo = opts.matchByInReplyTo ?? true;
     this.guard = new XmsgGuardClient(this.client, opts.guard);
 
     this.xmsg = {
@@ -397,9 +413,7 @@ export class XmsgIo implements Io {
       }
 
       // 2. Pushed expert reply to an escalation send
-      const escThread = this.matchByInReplyTo
-        ? this.escalationThreadByMsgId.get(m.inReplyTo)
-        : this.escalationThreadByMsgId.values().next().value;
+      const escThread = this.escalationThreadByMsgId.get(m.inReplyTo);
       if (escThread) {
         this.buffered.push({ thread: escThread, expert: m.text });
         this.wakeIntake();
