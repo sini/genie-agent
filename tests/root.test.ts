@@ -16,7 +16,8 @@ import { EXPERTS } from "../src/escalation/route.ts";
 import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
 import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } from "../src/lifecycle/index.ts";
-import { DEADLINE_NOTICE, type Inbound, main, REFUSAL, WITHHELD } from "../src/root/index.ts";
+import { DEADLINE_NOTICE, type Inbound, main, parseMatrixForward, REFUSAL, WITHHELD, XmsgIo } from "../src/root/index.ts";
+import { parseArgs } from "../src/root/main.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
 import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
@@ -1368,6 +1369,96 @@ test("oracle: close and gc.sweep() succeed with s3: null, and propose with no to
   }
 });
 
+test("oracle (GI-2): parseMatrixForward, XmsgIo solicited/control routing, and main.ts --config parsing", async () => {
+  // 1. CLI --config parsing
+  const validCfg = `${tmp}/config.json`;
+  assert.deepEqual(parseArgs(["--config", validCfg], { XDG_RUNTIME_DIR: "/run/user/1000" }), {
+    configPath: validCfg,
+    xmsgDir: "/run/user/1000/xmsg",
+  });
+  assert.deepEqual(parseArgs([`--config=${validCfg}`], {}), {
+    configPath: validCfg,
+    xmsgDir: "/run/xmsg",
+  });
+  assert.throws(() => parseArgs([], {}), /--config \(or GENIE_CONFIG\) is required/);
 
+  // 2. parseMatrixForward for <request> envelope, !trust, accept, deeper, approve
+  const reqRaw = `[matrix] room=#support:example.org thread=$t1 user=bob (public)\n\n<request>\n{"sender":"bob","sender_id":"@bob:example.org","tier":"public","text":"hello"}\n</request>`;
+  const parsedReq = parseMatrixForward(reqRaw);
+  assert.deepEqual(parsedReq, { thread: "$t1", item: { thread: "$t1", envelope: reqRaw } });
 
+  const trustRaw = JSON.stringify({
+    control: "trust",
+    thread: "$t1",
+    sender: "alice",
+    sender_id: "@alice:example.org",
+    tier: "trusted",
+    event_id: "$ev_trust",
+  });
+  assert.deepEqual(parseMatrixForward(trustRaw), {
+    thread: "$t1",
+    item: {
+      thread: "$t1",
+      control: "trust",
+      sender: "alice",
+      sender_id: "@alice:example.org",
+      tier: "trusted",
+      event_id: "$ev_trust",
+    },
+  });
 
+  assert.deepEqual(parseMatrixForward(JSON.stringify({ control: "accept", thread_id: "$t1" })), {
+    thread: "$t1",
+    item: { thread: "$t1", control: "accept" },
+  });
+  assert.deepEqual(parseMatrixForward(JSON.stringify({ control: "deeper", thread: "$t1" })), {
+    thread: "$t1",
+    item: { thread: "$t1", control: "deeper" },
+  });
+  assert.deepEqual(
+    parseMatrixForward(JSON.stringify({ control: "approve", thread: "$t1", sender: "alice", sender_id: "@alice:example.org", tier: "trusted", target: "$act1" })),
+    {
+      thread: "$t1",
+      item: {
+        thread: "$t1",
+        control: "approve",
+        sender: "alice",
+        sender_id: "@alice:example.org",
+        tier: "trusted",
+        target: "$act1",
+      },
+    },
+  );
+
+  // 3. Solicited thread line routed via bindSolicitedRequest on XmsgIo
+  const rawQueue: { id: string; from: string; text: string; inReplyTo?: string }[] = [];
+  const repliesSent: { id: string; text: string }[] = [];
+  const fakeClient = {
+    register: async () => ({}),
+    close: () => {},
+    list: async () => [],
+    send: async () => "m1",
+    reply: async (id: string, text: string) => {
+      repliesSent.push({ id, text });
+    },
+    ack: async () => {},
+    replies: async () => [],
+    poll: async () => {
+      while (rawQueue.length === 0) await new Promise((r) => setTimeout(r, 10));
+      return rawQueue.shift()!;
+    },
+  };
+  const xio = new XmsgIo({ pollWaitMs: 20 }, fakeClient);
+  await xio.register();
+  try {
+    xio.bindSolicitedRequest("req_open_1", "$sol_thread");
+    const solEnv = `[matrix] room=#support:example.org thread=$sol_thread user=bob (public)\n\n<request>\n{"sender":"bob","sender_id":"@bob:example.org","tier":"public","text":"solicited reply"}\n</request>`;
+    rawQueue.push({ id: "fwd_sol_1", from: "matrix-xmsg", text: solEnv, inReplyTo: "req_open_1" });
+    const nextBatch = await xio.intake.next();
+    assert.deepEqual(nextBatch, [{ thread: "$sol_thread", envelope: solEnv }]);
+    await xio.post.post("$sol_thread", { text: "thanks" });
+    assert.deepEqual(repliesSent, [{ id: "fwd_sol_1", text: JSON.stringify({ text: "thanks" }) }]);
+  } finally {
+    xio.close();
+  }
+});

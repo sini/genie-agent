@@ -75,16 +75,22 @@
                         pkgs.nodejs
                         xmsgNoCheck
                         genie-agent.packages.${system}.genie-guard
+                        genie-agent.packages.${system}.genie-root
                       ];
                       passthru = {
                         inherit xmsgNoCheck xmsgCargoArtifacts;
                         genieGuard = genie-agent.packages.${system}.genie-guard;
+                        genieRoot = genie-agent.packages.${system}.genie-root;
                       };
                       src = nixpkgs.lib.fileset.toSource {
                         root = ../.;
                         fileset = nixpkgs.lib.fileset.unions [
                           ../package.json
-                          ../src/dispatcher
+                          ../src
+                          ../schemas
+                          ../skills
+                          ../prompts
+                          ../tests/fixtures/supervisor
                           ../tests/integration/xmsg.test.ts
                         ];
                       };
@@ -93,10 +99,17 @@
                       cd $src
                       export XMSG_BIN="${xmsgNoCheck}/bin/xmsg"
                       export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
+                      export GENIE_ROOT_BIN="${genie-agent.packages.${system}.genie-root}/bin/genie-root"
                       rc=0
                       node --test --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
                       cat $TMPDIR/tap
-                      [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 1: guard round trip relays verdict and refuses svc: prefix$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                      [ "$rc" -eq 0 ] \
+                        && grep -q '^ok [0-9]* - oracle 1: guard round trip relays verdict and refuses svc: prefix$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 2: two outstanding dispatcher sends matched by inReplyTo in reverse arrival order$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 3 (GI-2): XmsgGuardClient enforces FIFO concurrency limit over 3 parallel checks and fails closed on timeout$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 4 (GI-2): simulated matrix-xmsg forward to genie passes guard, runs fake pi, replies draft, and routes escalation to fake expert matched by inReplyTo$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - mutant (GI-2): dropping inReplyTo matching or removing concurrency limit goes RED$' $TMPDIR/tap \
+                        && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
                     '';
               };

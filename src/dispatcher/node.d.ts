@@ -53,6 +53,7 @@ declare module "node:process" {
     argv: string[];
     env: Record<string, string | undefined>;
     stderr: { write(data: string): boolean };
+    once(event: string, listener: () => void): void;
     exit(code: number): never;
   };
   export default process;

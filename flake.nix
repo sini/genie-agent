@@ -87,6 +87,59 @@
         ];
         description = "genie-agent's guard-in, as a Node single executable";
       };
+      # Tier 1's composition root (`genie-root`, GI-2): wraps `node` running `src/root/main.ts`
+      # with `pi-coding-agent`, `bubblewrap`, `nix`, and `git` on PATH, plus `NIX_SSL_CERT_FILE`.
+      genieRoot =
+        pkgs:
+        let
+          rootSrc = pkgs.stdenvNoCC.mkDerivation {
+            pname = "genie-root-src";
+            version = "0.1.0";
+            src = nixpkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = nixpkgs.lib.fileset.unions [
+                ./package.json
+                ./tsconfig.json
+                ./src
+                ./schemas
+                ./skills
+                ./prompts
+              ];
+            };
+            dontBuild = true;
+            installPhase = ''
+              mkdir -p $out/lib/genie-agent
+              cp -r package.json tsconfig.json src schemas skills prompts $out/lib/genie-agent/
+            '';
+          };
+          runtimePath = nixpkgs.lib.makeBinPath [
+            pkgs.pi-coding-agent
+            pkgs.bubblewrap
+            pkgs.nix
+            pkgs.git
+            pkgs.coreutils
+          ];
+        in
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "genie-root";
+          version = "0.1.0";
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          installPhase = ''
+            mkdir -p $out/bin
+            makeWrapper ${pkgs.lib.getExe pkgs.nodejs} $out/bin/genie-root \
+              --add-flags "${rootSrc}/lib/genie-agent/src/root/main.ts" \
+              --prefix PATH : "${runtimePath}" \
+              --set-default NIX_SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
+              --set-default SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+          '';
+          meta = {
+            description = "genie-agent's tier-1 composition root service";
+            license = nixpkgs.lib.licenses.mit;
+            mainProgram = "genie-root";
+            platforms = nixpkgs.lib.platforms.linux;
+          };
+        };
       guardImage =
         pkgs:
         pkgs.dockerTools.buildLayeredImage {
@@ -215,6 +268,7 @@
         // onLinux pkgs {
           genie-dispatcher = genieDispatcher pkgs;
           genie-guard = genieGuard pkgs;
+          genie-root = genieRoot pkgs;
           image = guardImage pkgs;
         }
       );

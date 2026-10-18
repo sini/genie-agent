@@ -543,3 +543,527 @@ process.stdin.on("data", (chunk) => {
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// Oracle 3 (GI-2): XmsgGuardClient over real SocketXmsg and real xmsg serve
+// - Enforces FIFO concurrency limit (maxConcurrency: 1) over 3 parallel checks
+// - Fails closed to { unavailable } when timeout elapses
+// -----------------------------------------------------------------------------
+import { chmodSync } from "node:fs";
+import { main as rootMain, XmsgGuardClient, XmsgIo } from "../../src/root/index.ts";
+import { BRIDGE } from "../../src/supervisor/index.ts";
+import type { Envelope } from "../../src/guard/verdict.ts";
+
+test(
+  "oracle 3 (GI-2): XmsgGuardClient enforces FIFO concurrency limit over 3 parallel checks and fails closed on timeout",
+  { timeout: 30_000 },
+  async () => {
+    const node = await startXmsg({
+      "genie": process.execPath,
+      "genie-guard": process.execPath,
+    });
+
+    const callerXmsg = new SocketXmsg(node.xmsgDir, "genie");
+    const guardCode = `
+const { SocketXmsg } = require(${JSON.stringify(new URL("../../src/dispatcher/xmsg.ts", import.meta.url).pathname)});
+const [xmsgDir] = process.argv.slice(1);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+(async () => {
+  const x = new SocketXmsg(xmsgDir, "genie-guard");
+  await x.register();
+  let inFlight = 0;
+  let peak = 0;
+  const order = [];
+  process.stdout.write("READY\\n");
+  for (let i = 0; i < 3; i++) {
+    const m = await x.poll(10000);
+    if (!m) break;
+    inFlight++;
+    if (inFlight > peak) peak = inFlight;
+    const env = JSON.parse(m.text);
+    order.push(env.content.text);
+    await sleep(60);
+    inFlight--;
+    await x.reply(m.id, JSON.stringify({ verdict: "allow", reason: "ok:" + env.content.text, cleaned_text: "" }));
+    await x.ack(m.id);
+  }
+  process.stdout.write("STATS " + JSON.stringify({ peak, order }) + "\\n");
+  // Fourth check (timeout test): poll it and hold without replying
+  await x.poll(10000).catch(() => {});
+})();
+`;
+    const guardChild = spawn(process.execPath, ["-e", guardCode, node.xmsgDir], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const guardLines: string[] = [];
+    guardChild.stdout.setEncoding("utf8");
+    guardChild.stdout.on("data", (c: string) => {
+      for (const l of c.split("\n").filter(Boolean)) guardLines.push(l.trim());
+    });
+    const waitGuardLine = async (prefix: string) => {
+      for (let i = 0; i < 200; i++) {
+        const found = guardLines.find((l) => l.startsWith(prefix));
+        if (found) return found;
+        await sleep(25);
+      }
+      throw new Error(`timed out waiting for guard line ${prefix}; got: ${JSON.stringify(guardLines)}`);
+    };
+
+    try {
+      await callerXmsg.register();
+      await waitGuardLine("READY");
+
+      const guardClient = new XmsgGuardClient(callerXmsg, {
+        target: "genie-guard",
+        maxConcurrency: 1,
+        timeoutMs: 5_000,
+      });
+
+      let pumpRunning = true;
+      const pumpCallerPromise = (async () => {
+        while (pumpRunning) {
+          const m = await callerXmsg.poll(1_000).catch(() => null);
+          if (!m) continue;
+          if (m.inReplyTo) guardClient.routeReply(m.inReplyTo, m.text);
+          await callerXmsg.ack(m.id).catch(() => {});
+        }
+      })();
+
+      const makeEnv = (text: string): Envelope => ({
+        source: "message",
+        history: [],
+        content: { sender: "@u:example.org", tier: "public", text },
+      });
+
+      const [v1, v2, v3] = await Promise.all([
+        guardClient.check(makeEnv("q1")),
+        guardClient.check(makeEnv("q2")),
+        guardClient.check(makeEnv("q3")),
+      ]);
+      const statsLine = await waitGuardLine("STATS ");
+      const stats = JSON.parse(statsLine.slice("STATS ".length));
+
+      assert.equal(guardClient.peakConcurrency, 1, "XmsgGuardClient peak active concurrency must be 1");
+      assert.equal(stats.peak, 1, "genie-guard must never observe >1 concurrent request");
+      assert.deepEqual(stats.order, ["q1", "q2", "q3"], "FIFO order must be preserved across 3 parallel checks");
+      assert.deepEqual(v1, { verdict: "allow", reason: "ok:q1", cleaned_text: "" });
+      assert.deepEqual(v2, { verdict: "allow", reason: "ok:q2", cleaned_text: "" });
+      assert.deepEqual(v3, { verdict: "allow", reason: "ok:q3", cleaned_text: "" });
+
+      // Timeout fails closed to { unavailable } when guard does not reply
+      const fastTimeoutClient = new XmsgGuardClient(callerXmsg, {
+        target: "genie-guard",
+        maxConcurrency: 1,
+        timeoutMs: 80,
+      });
+      const timedOut = await fastTimeoutClient.check(makeEnv("q-timeout"));
+      assert.ok("unavailable" in timedOut, `expected { unavailable } on timeout, got ${JSON.stringify(timedOut)}`);
+      assert.match(timedOut.unavailable, /timed out/);
+
+      pumpRunning = false;
+      callerXmsg.close();
+      await pumpCallerPromise;
+    } finally {
+      callerXmsg.close();
+      if (guardChild.exitCode === null) guardChild.kill("SIGKILL");
+      await node.stop();
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
+// Oracle 4 (GI-2): Full composition root over XmsgIo and real xmsg serve
+// - Simulated matrix-xmsg forward to `genie` passes XmsgGuardClient (with 3 parallel guard checks
+//   verifying concurrency limit = 1)
+// - Runs fake `pi`, posts draft as an xmsg reply to the forward
+// - Routes an escalation to a fake expert (`genie-expert`), whose reply is matched by `inReplyTo`
+//   and posted back as an xmsg reply to the thread's forward
+// - Also verifies `genie-root` package wrapper exposes `pi`, `bwrap`, `nix`, `git`, and
+//   `NIX_SSL_CERT_FILE`.
+// -----------------------------------------------------------------------------
+test(
+  "oracle 4 (GI-2): simulated matrix-xmsg forward to genie passes guard, runs fake pi, replies draft, and routes escalation to fake expert matched by inReplyTo",
+  { timeout: 30_000 },
+  async () => {
+    const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
+    if (GENIE_ROOT_BIN) {
+      assert.ok(existsSync(GENIE_ROOT_BIN), `GENIE_ROOT_BIN must exist: ${GENIE_ROOT_BIN}`);
+      const wrapperText = readFileSync(GENIE_ROOT_BIN, "utf8");
+      for (const tool of ["pi-coding-agent", "bubblewrap", "nix", "git"]) {
+        assert.match(wrapperText, new RegExp(tool), `genie-root wrapper PATH must include ${tool}`);
+      }
+      assert.match(wrapperText, /NIX_SSL_CERT_FILE/, "genie-root wrapper must set NIX_SSL_CERT_FILE");
+    }
+
+    const node = await startXmsg({
+      "genie": process.execPath,
+      "genie-guard": GENIE_GUARD_BIN,
+      "genie-expert": process.execPath,
+    });
+
+    const io = new XmsgIo({
+      xmsgDir: node.xmsgDir,
+      service: "genie",
+      pollWaitMs: 500,
+      guard: { target: "genie-guard", maxConcurrency: 1, timeoutMs: 10_000 },
+    });
+
+    let ninferServer: ReturnType<typeof createHttpServer> | null = null;
+    let guardProc: ChildProcess | null = null;
+    let expertProc: ChildProcess | null = null;
+    let root: ReturnType<typeof rootMain> | null = null;
+
+    try {
+      // Stub ninfer server serving both genie-guard (guard-in) and root (guard-out), tracking guard-in concurrency
+      let activeGuardIn = 0;
+      let peakGuardIn = 0;
+      let totalGuardIn = 0;
+      ninferServer = createHttpServer((req, res) => {
+        let reqBody = "";
+        req.on("data", (c) => (reqBody += c));
+        req.on("end", async () => {
+          if (req.url === "/v1/models") {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ data: [{ id: "m" }] }));
+          }
+          if (req.url === "/v1/chat/completions") {
+            const isGuardOut = reqBody.includes("answer_under_review");
+            if (isGuardOut) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              return res.end(
+                JSON.stringify({
+                  choices: [
+                    {
+                      finish_reason: "stop",
+                      message: { content: JSON.stringify({ verdict: "pass", reason: "clean" }) },
+                    },
+                  ],
+                }),
+              );
+            }
+            activeGuardIn++;
+            totalGuardIn++;
+            if (activeGuardIn > peakGuardIn) peakGuardIn = activeGuardIn;
+            await sleep(40);
+            activeGuardIn--;
+            let cleaned_text = "";
+            try {
+              const parsed = JSON.parse(reqBody);
+              const userContent = JSON.parse(parsed.messages?.at(-1)?.content ?? "{}");
+              if (userContent.source !== "message" && typeof userContent.content?.text === "string") {
+                cleaned_text = userContent.content.text;
+              }
+            } catch {}
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(
+              JSON.stringify({
+                choices: [
+                  {
+                    finish_reason: "stop",
+                    message: {
+                      content: JSON.stringify({
+                        verdict: "allow",
+                        reason: "clean",
+                        cleaned_text,
+                      }),
+                    },
+                  },
+                ],
+              }),
+            );
+          }
+          res.writeHead(404).end();
+        });
+      });
+      await new Promise<void>((r) => ninferServer!.listen(0, "127.0.0.1", r));
+      const ninferPort = (ninferServer.address() as any).port;
+      const ninferUrl = `http://127.0.0.1:${ninferPort}/v1`;
+
+      // Spawn real genie-guard process in its own PID
+      guardProc = spawn(GENIE_GUARD_BIN, ["--ninfer-url", ninferUrl], {
+        env: { ...process.env, XDG_RUNTIME_DIR: node.runDir },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      // Spawn fake genie-expert service in its own PID that polls 2 escalations and replies in reverse order
+      const expertCode = `
+const { SocketXmsg } = require(${JSON.stringify(new URL("../../src/dispatcher/xmsg.ts", import.meta.url).pathname)});
+const [xmsgDir] = process.argv.slice(1);
+(async () => {
+  const x = new SocketXmsg(xmsgDir, "genie-expert");
+  await x.register();
+  process.stdout.write("EXPERT_READY\\n");
+  const esc1 = await x.poll(15000);
+  if (!esc1) process.exit(1);
+  await x.ack(esc1.id);
+  const esc2 = await x.poll(15000);
+  if (!esc2) process.exit(1);
+  await x.ack(esc2.id);
+  const t1 = JSON.parse(esc1.text).thread_id;
+  const t2 = JSON.parse(esc2.text).thread_id;
+  // Reply in reverse order (esc2 first, then esc1)
+  await x.reply(esc2.id, "Expert answer for " + t2);
+  await x.reply(esc1.id, "Expert answer for " + t1);
+  process.stdout.write("EXPERT_DONE " + t1 + " " + t2 + "\\n");
+})();
+`;
+      expertProc = spawn(process.execPath, ["-e", expertCode, node.xmsgDir], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const expertLines: string[] = [];
+      expertProc.stdout?.setEncoding("utf8");
+      expertProc.stdout?.on("data", (c: string) => {
+        for (const l of c.split("\n").filter(Boolean)) expertLines.push(l.trim());
+      });
+
+      // Wait until genie-guard and genie-expert are registered
+      for (let i = 0; i < 200; i++) {
+        const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+        const addrs: string[] = (res.json?.recipients ?? []).map((r: any) => r.address);
+        if (
+          addrs.some((a) => a.startsWith("genie-guard")) &&
+          addrs.some((a) => a.startsWith("genie-expert"))
+        ) {
+          break;
+        }
+        await sleep(25);
+      }
+
+      await io.register();
+
+      // Setup fake pi executable that records prompts and accepts bridge commands
+      const piDir = join(node.dir, "pi-record");
+      mkdirSync(piDir, { recursive: true });
+      process.env.PI_RECORD = piDir;
+      const fakePiScript = new URL("../fixtures/supervisor/fake-pi.ts", import.meta.url).pathname;
+      const piBin = join(node.dir, "fake-pi");
+      writeFileSync(
+        piBin,
+        `#!/bin/sh\nexport PI_RECORD="${piDir}"\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${fakePiScript}" "$@"\n`,
+      );
+      chmodSync(piBin, 0o755);
+
+      const modelKey = join(node.dir, "model-key");
+      writeFileSync(modelKey, "stub-key\n");
+
+      const cfgPath = join(node.dir, "config.json");
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          stateRoot: join(node.dir, "state"),
+          storeRoot: join(node.dir, "store"),
+          mirror: { mirrorRoot: join(node.dir, "mirrors"), worktreeRoot: join(node.dir, "worktrees") },
+          pi: piBin,
+          model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: modelKey },
+          tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+          s3: null,
+          experts: {
+            public: "genie-expert",
+            trusted: "genie-expert",
+          },
+          broker: {
+            guardOut: { base: ninferUrl, model: "m" },
+          },
+        }),
+      );
+
+      root = rootMain(cfgPath, io, async () => ({
+        exit: 0,
+        stdout_tail: "42",
+        stderr_tail: "",
+        limit_hit: "none",
+      }));
+      const runLoop = root.run();
+
+      // Verify 3 parallel checks through io.guard respect maxConcurrency = 1
+      const [g1, g2, g3] = await Promise.all([
+        io.guard.check({ source: "message", history: [], content: { sender: "@u:x", tier: "public", text: "p1" } }),
+        io.guard.check({ source: "message", history: [], content: { sender: "@u:x", tier: "public", text: "p2" } }),
+        io.guard.check({ source: "message", history: [], content: { sender: "@u:x", tier: "public", text: "p3" } }),
+      ]);
+      assert.equal((g1 as any).verdict, "allow");
+      assert.equal((g2 as any).verdict, "allow");
+      assert.equal((g3 as any).verdict, "allow");
+      assert.equal(io.guard.peakConcurrency, 1, "io.guard peakConcurrency over 3 parallel checks must be 1");
+      assert.equal(peakGuardIn, 1, "genie-guard ninfer peak concurrent checks must be 1");
+
+      // Send two simulated matrix-xmsg forwards to `genie` for threads $th1 and $th2
+      const makeMatrixForward = (thread: string, text: string) =>
+        `[matrix] room=#support:example.org thread=${thread} user=bob (public)\n\n<request>\n${JSON.stringify({
+          sender: "bob",
+          sender_id: "@bob:example.org",
+          tier: "public",
+          text,
+        })}\n</request>`;
+
+      const fwd1Res = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie",
+        from: "matrix-xmsg",
+        text: makeMatrixForward("$th1", "how do I enable flakes in thread 1?"),
+      });
+      assert.equal(fwd1Res.status, 202);
+      const fwd1Id = fwd1Res.json?.message_id;
+      assert.ok(fwd1Id);
+
+      const fwd2Res = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie",
+        from: "matrix-xmsg",
+        text: makeMatrixForward("$th2", "how do I enable flakes in thread 2?"),
+      });
+      assert.equal(fwd2Res.status, 202);
+      const fwd2Id = fwd2Res.json?.message_id;
+      assert.ok(fwd2Id);
+
+      // Wait until both fake pi processes are spawned by the supervisor
+      for (let i = 0; i < 200; i++) {
+        if (root.supervisor.pid("$th1") !== undefined && root.supervisor.pid("$th2") !== undefined) break;
+        await sleep(25);
+      }
+      assert.ok(root.supervisor.pid("$th1") !== undefined, "fake pi for $th1 must be running");
+      assert.ok(root.supervisor.pid("$th2") !== undefined, "fake pi for $th2 must be running");
+
+      // Both threads call Host.reply with escalate_forced: true so both post drafts and escalate to genie-expert
+      const draft1 = {
+        answer: "draft answer for thread 1",
+        confidence: 0.5,
+        gaps: ["need expert check 1"],
+        escalate_forced: true,
+      };
+      const draft2 = {
+        answer: "draft answer for thread 2",
+        confidence: 0.5,
+        gaps: ["need expert check 2"],
+        escalate_forced: true,
+      };
+
+      const reply1Cmd = await root.supervisor.command("$th1", {
+        type: "host",
+        title: BRIDGE,
+        placeholder: JSON.stringify({ method: "reply", arg: draft1 }),
+      });
+      const reply1Val = JSON.parse((reply1Cmd.data as any).value);
+      assert.equal(reply1Val.ok.posted, true);
+      assert.ok(reply1Val.ok.escalated, "thread 1 must escalate to genie-expert");
+
+      const reply2Cmd = await root.supervisor.command("$th2", {
+        type: "host",
+        title: BRIDGE,
+        placeholder: JSON.stringify({ method: "reply", arg: draft2 }),
+      });
+      const reply2Val = JSON.parse((reply2Cmd.data as any).value);
+      assert.equal(reply2Val.ok.posted, true);
+      assert.ok(reply2Val.ok.escalated, "thread 2 must escalate to genie-expert");
+
+      // Wait for both expert replies (sent in reverse order by expertProc) to be posted back to fwd1 and fwd2
+      let fwd1All: any[] = [];
+      let fwd2All: any[] = [];
+      for (let i = 0; i < 200; i++) {
+        const r1 = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(fwd1Id)}/replies`);
+        const r2 = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(fwd2Id)}/replies`);
+        fwd1All = r1.json ?? [];
+        fwd2All = r2.json ?? [];
+        if (fwd1All.length >= 2 && fwd2All.length >= 2) break;
+        await sleep(25);
+      }
+
+      assert.equal(fwd1All.length, 2, "fwd1 must have draft reply + expert reply");
+      assert.equal(fwd2All.length, 2, "fwd2 must have draft reply + expert reply");
+      assert.deepEqual(JSON.parse(fwd1All[0].text), { text: JSON.stringify(draft1) });
+      assert.deepEqual(JSON.parse(fwd2All[0].text), { text: JSON.stringify(draft2) });
+      assert.deepEqual(JSON.parse(fwd1All[1].text), { text: "Expert answer for $th1" });
+      assert.deepEqual(JSON.parse(fwd2All[1].text), { text: "Expert answer for $th2" });
+      assert.ok(totalGuardIn >= 11, `expected >= 11 guard-in checks (3 parallel + 2 guardIn + 6 escalationGuard), got ${totalGuardIn}`);
+
+      io.close();
+      await runLoop;
+    } finally {
+      io.close();
+      if (guardProc && guardProc.exitCode === null) guardProc.kill("SIGKILL");
+      if (expertProc && expertProc.exitCode === null) expertProc.kill("SIGKILL");
+      if (root) await root.stop();
+      if (ninferServer) {
+        ninferServer.close();
+        ninferServer.closeAllConnections();
+      }
+      await node.stop();
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
+// Mutant check (GI-2):
+// - Mutant 1: inReplyTo matching dropped (matchByInReplyTo: false) => expert reply for thread 2
+//   arriving first is misrouted to thread 1 => RED
+// - Mutant 2: concurrency limit removed (maxConcurrency: Infinity) => 3 parallel checks overlap
+//   with peakConcurrency > 1 => RED
+// -----------------------------------------------------------------------------
+test(
+  "mutant (GI-2): dropping inReplyTo matching or removing concurrency limit goes RED",
+  async () => {
+    // Mutant 1: matchByInReplyTo: false misroutes reverse-order expert replies
+    const posted: [string, string][] = [];
+    const sentIds: string[] = [];
+    const pollQueue: { id: string; text: string; inReplyTo?: string }[] = [];
+    const fakeClient = {
+      register: async () => ({ address: "genie@node", node: "node" }),
+      close: () => {},
+      poll: async () => pollQueue.shift() ?? null,
+      ack: async () => {},
+      send: async (_to: string, _text: string, _key: string) => {
+        const id = `esc-${sentIds.length + 1}`;
+        sentIds.push(id);
+        return id;
+      },
+      reply: async (id: string, text: string) => {
+        posted.push([id, text]);
+      },
+      list: async () => [],
+      replies: async () => [],
+    };
+
+    const mutantIo = new XmsgIo({ matchByInReplyTo: false, pollWaitMs: 10 }, fakeClient);
+    await mutantIo.xmsg.send("genie-expert", JSON.stringify({ thread_id: "$th1" }), "$th1#1");
+    await mutantIo.xmsg.send("genie-expert", JSON.stringify({ thread_id: "$th2" }), "$th2#1");
+
+    // Push expert reply for esc-2 ($th2) first
+    pollQueue.push({ id: "rep-2", inReplyTo: "esc-2", text: "Expert answer for thread 2" });
+    await mutantIo.register();
+    const batch = await mutantIo.intake.next();
+    mutantIo.close();
+
+    assert.ok(batch && batch.length === 1);
+    assert.throws(
+      () => {
+        assert.deepEqual(batch[0], { thread: "$th2", expert: "Expert answer for thread 2" });
+      },
+      /AssertionError/,
+      "Mutant 1 (dropping inReplyTo matching) must fail RED when expert replies arrive out of order",
+    );
+
+    // Mutant 2: removing concurrency limit (maxConcurrency: 3 instead of 1) causes peakConcurrency > 1
+    let unthrottledSeq = 0;
+    const unthrottledClient = new XmsgGuardClient(
+      {
+        send: async () => {
+          await sleep(30);
+          const id = `m-${++unthrottledSeq}`;
+          setTimeout(() => {
+            unthrottledClient.routeReply(id, JSON.stringify({ verdict: "allow", reason: "ok", cleaned_text: "" }));
+          }, 10);
+          return id;
+        },
+      },
+      { maxConcurrency: 3, timeoutMs: 1_000 },
+    );
+    const e: Envelope = { source: "message", history: [], content: { sender: "@u:x", tier: "public", text: "hi" } };
+    await Promise.all([unthrottledClient.check(e), unthrottledClient.check(e), unthrottledClient.check(e)]);
+    assert.throws(
+      () => {
+        assert.equal(unthrottledClient.peakConcurrency, 1, "concurrency limit must cap peakConcurrency at 1");
+      },
+      /AssertionError/,
+      "Mutant 2 (concurrency limit removed) must fail RED with peakConcurrency > 1",
+    );
+  },
+);
+

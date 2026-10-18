@@ -96,7 +96,11 @@ export interface Config {
   // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
   eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax">;
   experts?: Record<Tier, string>;
+  xmsg?: XmsgIoOptions;
 }
+
+import type { XmsgIoOptions } from "./io.ts";
+export { parseGuardVerdictReply, parseMatrixForward, XmsgGuardClient, type XmsgGuardClientOptions, XmsgIo, type XmsgIoOptions } from "./io.ts";
 
 const repo = new URL("../../", import.meta.url);
 const secret = (file: string) => readFileSync(file, "utf8").trim();
