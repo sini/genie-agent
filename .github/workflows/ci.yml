@@ -37,6 +37,7 @@ env:
     guard
     lifecycle
     mirror
+    nixos-module
     pr
     redactor
     state
