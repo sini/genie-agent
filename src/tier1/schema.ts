@@ -3,7 +3,7 @@
 // strict tool-call parser then drops the call to text); its arguments are mapped back and
 // validated against the repo's schema itself before any effect.
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type Schema = { [k: string]: any };
 
@@ -14,7 +14,11 @@ const known = new Set([
   "items", "enum", "const", "minLength", "minimum", "maximum", "minProperties", "$ref", "if", "then",
 ]);
 
-const dir = new URL("../../schemas/", import.meta.url);
+const dir = process.env.GENIE_REPO_ROOT
+  ? pathToFileURL(`${process.env.GENIE_REPO_ROOT}/schemas/`)
+  : import.meta.url
+    ? new URL("../../schemas/", import.meta.url)
+    : pathToFileURL(`${process.cwd()}/schemas/`);
 
 export function load(name: string): Schema {
   const s = JSON.parse(readFileSync(fileURLToPath(new URL(`${name}.json`, dir)), "utf8"));

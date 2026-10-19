@@ -686,11 +686,9 @@ test(
     const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
     if (GENIE_ROOT_BIN) {
       assert.ok(existsSync(GENIE_ROOT_BIN), `GENIE_ROOT_BIN must exist: ${GENIE_ROOT_BIN}`);
-      const wrapperText = readFileSync(GENIE_ROOT_BIN, "utf8");
-      for (const tool of ["pi-coding-agent", "bubblewrap", "nix", "git"]) {
-        assert.match(wrapperText, new RegExp(tool), `genie-root wrapper PATH must include ${tool}`);
-      }
-      assert.match(wrapperText, /NIX_SSL_CERT_FILE/, "genie-root wrapper must set NIX_SSL_CERT_FILE");
+      const head = readFileSync(GENIE_ROOT_BIN).subarray(0, 4);
+      assert.notEqual(head.subarray(0, 2).toString("utf8"), "#!", "GENIE_ROOT_BIN must be a SEA binary, not a #! script");
+      assert.equal(head[0], 0x7f, "GENIE_ROOT_BIN must be an ELF executable");
     }
 
     const node = await startXmsg({
@@ -1696,4 +1694,108 @@ const [xmsgDir, controlFile, logFile, fwdText] = process.argv.slice(1);
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// Oracle 10 (GI-9): genie-root as its own Node SEA binary attested by svcExe.genie
+// - Against real xmsg serve with svcExe.genie set to GENIE_ROOT_BIN (lib.getExe packages.genie-root):
+//   1. A plain `node` process trying to register `genie` while `genie` is unregistered is refused by
+//      xmsg's /proc/<pid>/exe attestation.
+//   2. The `genie-root` SEA binary registers as `genie`.
+// - Mutant: pointing svcExe.genie at shared nodejs (`process.execPath`) => the plain `node`
+//   registration succeeds => RED.
+// -----------------------------------------------------------------------------
+test(
+  "oracle 10 (GI-9): with svcExe.genie set to genie-root SEA binary, genie-root registers as genie and a plain node process is refused",
+  { timeout: 30_000 },
+  async () => {
+    const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
+    assert.ok(
+      GENIE_ROOT_BIN && existsSync(GENIE_ROOT_BIN),
+      `GENIE_ROOT_BIN environment variable is required and must exist (got: ${GENIE_ROOT_BIN})`,
+    );
+
+    const svcExeGenie = GENIE_ROOT_BIN;
+    const node = await startXmsg({
+      genie: svcExeGenie,
+    });
+
+    let rootProc: ChildProcess | null = null;
+    try {
+      // 1. Before genie-root even starts, a plain `node` process (`process.execPath`) trying to
+      //    register as `genie` is refused because `/proc/<pid>/exe` is nodejs, not genie-root.
+      const impostor = new SocketXmsg(node.xmsgDir, "genie");
+      let impostorErr: Error | null = null;
+      try {
+        await impostor.register();
+      } catch (e) {
+        impostorErr = e as Error;
+      } finally {
+        impostor.close();
+      }
+      assert.ok(
+        impostorErr !== null,
+        `plain node process (${process.execPath}) must be refused when registering as genie against svcExe.genie=${svcExeGenie}`,
+      );
+
+      // 2. Spawn the real `genie-root` SEA binary and verify it registers as `genie` on xmsg serve.
+      const piBin = join(node.dir, "fake-pi");
+      writeFileSync(piBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const modelKey = join(node.dir, "model-key");
+      writeFileSync(modelKey, "k\n");
+      const cfgPath = join(node.dir, "root-config.json");
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          stateRoot: join(node.dir, "state"),
+          storeRoot: join(node.dir, "store"),
+          mirror: { mirrorRoot: join(node.dir, "mirrors"), worktreeRoot: join(node.dir, "worktrees") },
+          pi: piBin,
+          model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: modelKey },
+          tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+          guard: { enable: false },
+          broker: { guardOut: { enable: false } },
+        }),
+      );
+
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        XDG_RUNTIME_DIR: node.runDir,
+        HOME: node.dir,
+        GENIE_REPO_ROOT: process.cwd(),
+      };
+      delete childEnv.NODE_TEST_CONTEXT;
+
+      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath], {
+        env: childEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let rootStderr = "";
+      rootProc.stderr?.setEncoding("utf8");
+      rootProc.stderr?.on("data", (c: string) => {
+        rootStderr += c;
+      });
+
+      let registered = false;
+      for (let i = 0; i < 200; i++) {
+        const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+        const addrs: string[] = (res.json?.recipients ?? []).map((r: any) => r.address);
+        if (addrs.some((a) => a === "genie" || a.startsWith("genie@"))) {
+          registered = true;
+          break;
+        }
+        if (rootProc.exitCode !== null) {
+          throw new Error(`genie-root exited prematurely with code ${rootProc.exitCode}: ${rootStderr}`);
+        }
+        await sleep(25);
+      }
+      assert.equal(registered, true, `genie-root SEA binary must register as genie on xmsg serve (stderr: ${rootStderr})`);
+    } finally {
+      if (rootProc && rootProc.exitCode === null) {
+        rootProc.kill("SIGTERM");
+      }
+      await node.stop();
+    }
+  },
+);
+
 

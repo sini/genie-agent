@@ -298,10 +298,22 @@ in
         description = "genie-agent Tier-1 composition root service";
         after = [ "network.target" ] ++ lib.optional cfg.guard.enable "genie-guard.service";
         wantedBy = [ "multi-user.target" ];
+        path = [
+          cfg.piPackage
+          pkgs.bubblewrap
+          pkgs.nix
+          pkgs.git
+          pkgs.coreutils
+        ];
 
         environment = {
           HOME = toString cfg.stateDir;
           XDG_RUNTIME_DIR = runtimeDir;
+          NIX_SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+        }
+        // lib.optionalAttrs (cfg.package ? rootSrc) {
+          GENIE_REPO_ROOT = "${cfg.package.rootSrc}/lib/genie-agent";
         };
 
         serviceConfig =

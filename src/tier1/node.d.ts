@@ -50,4 +50,5 @@ declare module "node:path" {
 }
 declare module "node:url" {
   export function fileURLToPath(url: URL): string;
+  export function pathToFileURL(path: string): URL;
 }

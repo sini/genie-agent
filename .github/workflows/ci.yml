@@ -48,6 +48,7 @@ env:
     genie-guard-sea
     image
     root
+    root-sea
     tier1
     tier1-bridge
     xmsg-integration
@@ -118,6 +119,7 @@ jobs:
           nix build -L --no-link --print-out-paths \
             .#packages.x86_64-linux.genie-dispatcher \
             .#packages.x86_64-linux.genie-guard \
+            .#packages.x86_64-linux.genie-root \
             ./ci#checks.x86_64-linux.xmsg-integration.xmsgCargoArtifacts \
             ./ci#checks.x86_64-linux.xmsg-integration.xmsgNoCheck \
             | tee -a /tmp/attic-paths

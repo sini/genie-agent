@@ -10,7 +10,13 @@ import { type Config, memoryPrompt } from "./index.ts";
 
 export { memoryPrompt };
 
-const repo = new URL("../../", import.meta.url);
+import { pathToFileURL } from "node:url";
+
+const repo = process.env.GENIE_REPO_ROOT
+  ? pathToFileURL(`${process.env.GENIE_REPO_ROOT}/`)
+  : import.meta.url
+    ? new URL("../../", import.meta.url)
+    : pathToFileURL(`${process.cwd()}/`);
 
 // Write pi's models.json into agentDir so production and eval share identical provider/model defaults.
 export function writePiModelsJson(

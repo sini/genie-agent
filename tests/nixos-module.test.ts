@@ -50,6 +50,17 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
   assert.equal(rootUnit.serviceConfig.Delegate, true, "Delegate must be true when eval.memoryMax is set");
   assert.equal(rootUnit.serviceConfig.ProtectControlGroups, false, "ProtectControlGroups must be false when Delegate is true");
   assert.equal(rootUnit.environment.XDG_RUNTIME_DIR, "/run/user/1000");
+  assert.ok(
+    typeof rootUnit.environment.GENIE_REPO_ROOT === "string" &&
+      rootUnit.environment.GENIE_REPO_ROOT.endsWith("/lib/genie-agent"),
+    `expected GENIE_REPO_ROOT ending with /lib/genie-agent, got ${rootUnit.environment.GENIE_REPO_ROOT}`,
+  );
+  assert.ok(
+    typeof rootUnit.environment.NIX_SSL_CERT_FILE === "string" &&
+      rootUnit.environment.NIX_SSL_CERT_FILE.endsWith("/etc/ssl/certs/ca-bundle.crt"),
+    `expected NIX_SSL_CERT_FILE ending with /etc/ssl/certs/ca-bundle.crt, got ${rootUnit.environment.NIX_SSL_CERT_FILE}`,
+  );
+  assert.match(rootUnit.serviceConfig.ExecStart, /\/bin\/genie-root --config /);
   assert.deepEqual(rootUnit.serviceConfig.BindPaths, ["/run/user/1000/xmsg"]);
   assert.ok(
     rootUnit.serviceConfig.BindReadOnlyPaths.some((p: string) => p.endsWith(":/memory")),

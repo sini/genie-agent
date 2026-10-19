@@ -23,6 +23,7 @@
           main,
           fileset,
           description,
+          esbuildFlags ? "",
         }:
         pkgs:
         pkgs.stdenvNoCC.mkDerivation {
@@ -43,7 +44,7 @@
             hash = "sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==";
           };
           buildPhase = ''
-            esbuild ${main} --bundle --platform=node --format=cjs --loader:.md=text --outfile=main.cjs
+            esbuild ${main} --bundle --platform=node --format=cjs --loader:.md=text ${esbuildFlags} --outfile=main.cjs
             echo '{"main": "main.cjs", "output": "blob", "disableExperimentalSEAWarning": true, "execArgvExtension": "none"}' > sea.json
             node --experimental-sea-config sea.json
             tar xzf $postject
@@ -87,8 +88,8 @@
         ];
         description = "genie-agent's guard-in, as a Node single executable";
       };
-      # Tier 1's composition root (`genie-root`, GI-2): wraps `node` running `src/root/main.ts`
-      # with `pi-coding-agent`, `bubblewrap`, `nix`, and `git` on PATH, plus `NIX_SSL_CERT_FILE`.
+      # Tier 1's composition root (`genie-root`, GI-2 / GI-9): a Node single executable over
+      # `src/root/main.ts` so xmsg's `--svc-exe` attests its own store binary rather than shared nodejs.
       genieRoot =
         pkgs:
         let
@@ -119,27 +120,25 @@
             pkgs.git
             pkgs.coreutils
           ];
+          seaPkg = sea {
+            name = "genie-root";
+            main = "src/root/main.ts";
+            fileset = nixpkgs.lib.fileset.unions [
+              ./src
+              ./schemas
+              ./skills
+              ./prompts
+            ];
+            esbuildFlags = ''--banner:js="process.env.GENIE_REPO_ROOT ??= \"${rootSrc}/lib/genie-agent\";"'';
+            description = "genie-agent's tier-1 composition root, as a Node single executable";
+          } pkgs;
         in
-        pkgs.stdenvNoCC.mkDerivation {
-          pname = "genie-root";
-          version = "0.1.0";
-          dontUnpack = true;
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          installPhase = ''
-            mkdir -p $out/bin
-            makeWrapper ${pkgs.lib.getExe pkgs.nodejs} $out/bin/genie-root \
-              --add-flags "${rootSrc}/lib/genie-agent/src/root/main.ts" \
-              --prefix PATH : "${runtimePath}" \
-              --set-default NIX_SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
-              --set-default SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          '';
-          meta = {
-            description = "genie-agent's tier-1 composition root service";
-            license = nixpkgs.lib.licenses.mit;
-            mainProgram = "genie-root";
-            platforms = nixpkgs.lib.platforms.linux;
+        seaPkg.overrideAttrs (_: {
+          passthru = {
+            inherit rootSrc runtimePath;
+            caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           };
-        };
+        });
       guardImage =
         pkgs:
         pkgs.dockerTools.buildLayeredImage {
@@ -162,10 +161,25 @@
         };
       # Each single executable runs its own main and nothing else: a payload offered through
       # NODE_OPTIONS, a node flag or a script argument never runs, and the binary's own config
-      # refusal (exit 2) is the positive control that its main did.
+      # refusal (exit 2) is the positive control that its main did. Also asserts the executable
+      # is neither a script (no `#!`) nor a symlink to nodejs.
       seaCheck =
         name: pkg: pkgs:
         pkgs.runCommand "genie-agent-${name}-sea" { nativeBuildInputs = [ pkg ]; } ''
+          exe="${nixpkgs.lib.getExe pkg}"
+          if [ -L "$exe" ]; then
+            echo "$exe is a symlink" >&2
+            exit 1
+          fi
+          magic=$(head -c 2 "$exe")
+          if [ "$magic" = "#!" ]; then
+            echo "$exe starts with #! (script wrapper)" >&2
+            exit 1
+          fi
+          if [ "$(realpath "$exe")" = "$(realpath "${pkgs.lib.getExe pkgs.nodejs}")" ]; then
+            echo "$exe resolves to shared nodejs" >&2
+            exit 1
+          fi
           payload=$TMPDIR/payload.cjs
           echo 'require("fs").writeFileSync(process.env.MARK, "ran"); console.log("PAYLOAD RAN")' > $payload
           export MARK=$TMPDIR/mark
@@ -1136,6 +1150,7 @@
         // onLinux pkgs {
           dispatcher-sea = seaCheck "genie-dispatcher" (genieDispatcher pkgs) pkgs;
           genie-guard-sea = seaCheck "genie-guard" (genieGuard pkgs) pkgs;
+          root-sea = seaCheck "genie-root" (genieRoot pkgs) pkgs;
           nixos-module = import ./nix/test-module.nix {
             inherit pkgs nixpkgs;
             self = {

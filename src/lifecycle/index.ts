@@ -35,10 +35,18 @@ export const CLOSE_MS = 24 * 60 * 60 * 1000;
 export const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
 export const CHECKIN_MS = 5 * 60 * 1000;
 
+import { pathToFileURL } from "node:url";
+
+const repo = process.env.GENIE_REPO_ROOT
+  ? pathToFileURL(`${process.env.GENIE_REPO_ROOT}/`)
+  : import.meta.url
+    ? new URL("../../", import.meta.url)
+    : pathToFileURL(`${process.cwd()}/`);
+
 let cachedCheckinPrompt: string | undefined;
 export function defaultCheckinPrompt(): string {
   if (cachedCheckinPrompt === undefined) {
-    cachedCheckinPrompt = readFileSync(new URL("../../prompts/tier1-checkin.md", import.meta.url).pathname, "utf8").trim();
+    cachedCheckinPrompt = readFileSync(new URL("prompts/tier1-checkin.md", repo).pathname, "utf8").trim();
   }
   return cachedCheckinPrompt;
 }

@@ -112,7 +112,13 @@ import type { GuardOutConfig } from "../broker/index.ts";
 import type { XmsgIoOptions } from "./io.ts";
 export { parseGuardVerdictReply, parseMatrixForward, XmsgGuardClient, type XmsgGuardClientOptions, XmsgIo, type XmsgIoOptions } from "./io.ts";
 
-const repo = new URL("../../", import.meta.url);
+import { pathToFileURL } from "node:url";
+
+const repo = process.env.GENIE_REPO_ROOT
+  ? pathToFileURL(`${process.env.GENIE_REPO_ROOT}/`)
+  : import.meta.url
+    ? new URL("../../", import.meta.url)
+    : pathToFileURL(`${process.cwd()}/`);
 const secret = (file: string) => readFileSync(file, "utf8").trim();
 
 // Fixed notices, posted without guard-out: no thread text is in them.

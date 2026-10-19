@@ -61,7 +61,8 @@ async function run(opts: CliOptions): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+const isTestRunner = Boolean(process.env.NODE_TEST_CONTEXT);
+if (!isTestRunner) {
   let opts: CliOptions;
   try {
     opts = parseArgs(process.argv.slice(2), process.env);

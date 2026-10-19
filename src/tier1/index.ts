@@ -276,6 +276,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       limit: {
         type: "integer",
         minimum: 1,
+        maximum: 20,
         description: 'For scope "room": maximum number of messages to return (1-20, default: 10).',
       },
       sender: {

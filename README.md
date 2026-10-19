@@ -68,6 +68,12 @@ Note: The boundary only holds if the live Hindsight API requires the write token
 
 `flake.nix` exports `nixosModules.default` (aliased as `nixosModules.genie-agent`), backed by the shared option surface in `nix/options.nix` (shared with the Kubernetes manifest renderer `I12`). It configures `genie-agent.service` (Tier 1 composition root on `pi`), optional `genie-guard.service`, and optional `genie-herdr@<tier>.service` + `genie-dispatcher@<tier>.service` (`public` and `trusted` expert tiers).
 
+Each service is built as a standalone Node single executable (`sea { … }` in `flake.nix`), so `xmsg`'s `/proc/<pid>/exe` attestation (`programs.xmsg.server.svcExe`) pins each service's own store binary rather than shared `nodejs`:
+
+- `svcExe.genie = lib.getExe genie-agent.packages.${system}.genie-root` (or `lib.getExe config.services.genie-agent.package`)
+- `svcExe.genie-guard = lib.getExe genie-agent.packages.${system}.genie-guard` (or `lib.getExe config.services.genie-agent.guard.package`)
+- `svcExe.genie-expert-public = lib.getExe genie-agent.packages.${system}.genie-dispatcher` (and `svcExe.genie-expert-trusted = lib.getExe genie-agent.packages.${system}.genie-dispatcher`)
+
 > **Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus and Claude credentials. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel, network, or credential isolation between `@public` and `@trusted` expert sessions.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).
 
 ### Optional Guard Switches (`guard.enable` and `broker.guardOut.enable`)
