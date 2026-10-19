@@ -34,7 +34,7 @@ export interface XmsgClient extends XmsgSessions {
   send(session: string, text: string, key: string): Promise<string>;
   // The text of each reply to a message, waiting up to waitMs for the first.
   replies(id: string, waitMs: number): Promise<string[]>;
-  reply(id: string, text: string): Promise<void>;
+  reply(id: string, text: string): Promise<string | void>;
 }
 
 const secs = (ms: number) => Math.min(60, Math.ceil(ms / 1000));
@@ -144,8 +144,9 @@ export class SocketXmsg implements XmsgClient {
     return r.message_id;
   }
 
-  async reply(id: string, text: string): Promise<void> {
-    await this.registered({ action: "reply", messageId: id, text });
+  async reply(id: string, text: string): Promise<string | void> {
+    const r = await this.registered({ action: "reply", messageId: id, text });
+    return typeof r?.messageId === "string" ? r.messageId : undefined;
   }
 
   private http(path: string): Promise<any> {

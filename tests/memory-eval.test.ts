@@ -172,6 +172,7 @@ test("Oracle 3: recall selector routes support to genie, memory to genie-memory,
     propose: async () => ({}),
     clone: async () => ({ path: "/root", rev: "x" }),
     screen: async () => ({ verdict: "allow" } as any),
+    room_context: async () => "",
   };
 
   tier1(

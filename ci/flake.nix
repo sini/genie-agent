@@ -102,7 +102,7 @@
                       export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
                       export GENIE_ROOT_BIN="${genie-agent.packages.${system}.genie-root}/bin/genie-root"
                       rc=0
-                      node --test --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
+                      node --test --test-force-exit --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
                       cat $TMPDIR/tap
                       [ "$rc" -eq 0 ] \
                         && grep -q '^ok [0-9]* - oracle 1: guard round trip relays verdict and refuses svc: prefix$' $TMPDIR/tap \
@@ -111,6 +111,7 @@
                         && grep -q '^ok [0-9]* - oracle 4 (GI-2): simulated matrix-xmsg forward to genie passes guard, runs fake pi, replies draft, and routes escalation to fake expert matched by inReplyTo$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 5 (GI-3): two genie-dispatcher services register concurrently on one bus and a fake-clock sweep parks an idle pane$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates an isolated clone (source worktree list, refs, and objects unchanged after commit/branch move) and 96h fake-clock GC removes the dir$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 9 (GI-8): room_context round-trip by scope as xmsg reply to thread forward, error/throttle handling, guard-in screening, and multi-page resync over real xmsg serve$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
                     '';

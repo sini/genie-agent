@@ -824,6 +824,12 @@ async function executePiArm(opts: PiArmOptions): Promise<{
         if (opts.hostOverrides?.screen) return opts.hostOverrides.screen(text);
         return text;
       },
+      room_context: async (req) => {
+        const ctx = slotContexts.get(t);
+        if (ctx && !ctx.calls.includes("room_context")) ctx.calls.push("room_context");
+        if (opts.hostOverrides?.room_context) return opts.hostOverrides.room_context(req);
+        throw new Error("room_context is unavailable in this evaluation");
+      },
     }),
   );
 

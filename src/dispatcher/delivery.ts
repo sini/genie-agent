@@ -208,7 +208,10 @@ export class Delivery {
     if (known) return;
     const threadId = this.o.threadOf(m);
     // Not a package: answered and acknowledged, with no thread and nothing journalled.
-    if (threadId === null) return this.x.reply(m.id, UNAVAILABLE);
+    if (threadId === null) {
+      await this.x.reply(m.id, UNAVAILABLE);
+      return;
+    }
     const t = this.d.thread(threadId, this.o.reposOf(m));
     t.buffer.push({ id: m.id, body: m.text, key: `${m.id}#${++t.seq}` });
     this.d.save();

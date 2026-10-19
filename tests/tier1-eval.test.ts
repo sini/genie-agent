@@ -673,6 +673,7 @@ test("oracle C2.3 (Cell 1): eval tool set and system prompt equal production tie
         propose: async () => ({}),
         clone: async () => ({ path: "", rev: "x" }),
         screen: async (x) => x,
+        room_context: async () => "",
       }),
     );
     try {

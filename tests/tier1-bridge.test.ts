@@ -34,7 +34,7 @@ const recording = (thread: string): Host => {
     calls.push(`${thread}:${method}:${JSON.stringify(arg)}`);
     return { answered_for: thread };
   };
-  return { eval: rec("eval"), recall: rec("recall"), escalate: rec("escalate"), reply: rec("reply"), propose: rec("propose"), clone: rec("clone") as any, screen: rec("screen") as any };
+  return { eval: rec("eval"), recall: rec("recall"), escalate: rec("escalate"), reply: rec("reply"), propose: rec("propose"), clone: rec("clone") as any, screen: rec("screen") as any, room_context: rec("room_context") as any };
 };
 
 const settled = (events: [string, Record][], thread: string) =>

@@ -14,7 +14,7 @@ export type Launch = (thread: string) => { command: string; args: string[]; env?
 // The title of the RPC `input` dialog that carries a Host call from tier 1's extension
 // (src/tier1/extension.ts); the supervisor answers no other dialog.
 export const BRIDGE = "genie-host";
-export const METHODS = ["eval", "recall", "escalate", "reply", "propose", "clone", "screen"] as const;
+export const METHODS = ["eval", "recall", "escalate", "reply", "propose", "clone", "screen", "room_context"] as const;
 
 // A pi RPC record on stdout: a `response` to a command, or a session event.
 export type Record = { type: string; id?: string; [key: string]: unknown };

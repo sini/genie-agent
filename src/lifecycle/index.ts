@@ -180,10 +180,12 @@ export interface LifecycleOptions {
   checkinPrompt?: string;
   onDeadline?: (thread: string) => Promise<unknown> | unknown;
   replayResume?: (thread: string) => Promise<unknown>;
+  resync?: (thread: string) => Promise<string | void>;
 }
 
 export class Lifecycle {
   private timers = new Map<string, unknown>();
+  private seenThreads = new Set<string>();
   private turns: TurnController;
   private o: LifecycleOptions;
   private clock: Clock;
@@ -213,7 +215,10 @@ export class Lifecycle {
   // Arm every open thread from its stored state, on supervisor start.
   start(): void {
     if (!existsSync(this.o.store.stateRoot)) return;
-    for (const thread of readdirSync(this.o.store.stateRoot)) this.arm(thread);
+    for (const thread of readdirSync(this.o.store.stateRoot)) {
+      this.seenThreads.add(thread);
+      this.arm(thread);
+    }
   }
 
   stop(): void {
@@ -232,7 +237,8 @@ export class Lifecycle {
 
   // A user message in the thread. A parked thread is resumed: pi starts on its session and is sent
   // the messages it never answered before this one. An expired thread with a tombstone is replayed from the archive first.
-  async message(thread: string, text: string): Promise<void> {
+  // When a thread restarts with missing or corrupted local session state, resyncs from matrix-xmsg first (GI-8, §5.3).
+  async message(thread: string, text: string, opts?: { isDelta?: boolean; hadState?: boolean }): Promise<void> {
     const { store, supervisor } = this.o;
     const tombstone = store.tombstone?.(thread);
     if (tombstone && supervisor.pid(thread) === undefined) {
@@ -241,17 +247,50 @@ export class Lifecycle {
       if (!res) throw new Error(`thread ${thread}: tombstoned but archive not found`);
       store.clearTombstone?.(thread);
     }
+    const isRunning = supervisor.pid(thread) !== undefined;
+    const sessionFile = `${store.stateRoot}/${thread}/session/thread.jsonl`;
+    const stateFile = `${store.stateRoot}/${thread}/state.json`;
+    const hadState = opts?.hadState ?? existsSync(stateFile);
+    const isRestart = !isRunning && (hadState || this.seenThreads.has(thread) || Boolean(opts?.isDelta));
+    let hasState = false;
+    if (existsSync(sessionFile) && existsSync(stateFile)) {
+      try {
+        const rawSession = readFileSync(sessionFile, "utf8").trim();
+        if (rawSession.length > 0) {
+          for (const line of rawSession.split("\n")) {
+            JSON.parse(line);
+          }
+          JSON.parse(readFileSync(stateFile, "utf8"));
+          hasState = true;
+        }
+      } catch {
+        hasState = false;
+      }
+    }
+    this.seenThreads.add(thread);
+
     let st = store.read(thread);
     if (st?.status === "closed") throw new Error(`thread ${thread}: closed`);
+
+    let resyncedText: string | undefined;
+    if (isRestart && !hasState && this.o.resync) {
+      const r = await this.o.resync(thread);
+      if (typeof r === "string" && r.length > 0) {
+        resyncedText = r;
+      }
+      store.setPending(thread, []);
+    }
+
     const now = new Date(this.clock.now()).toISOString();
     // A new thread enters at the public tier; C7 owns raising it.
     store.write({ thread_id: thread, status: "active", created: now, sender_tier: "public", ...st, last_active: now });
-    const replay = supervisor.pid(thread) === undefined ? store.pending(thread) : [];
-    store.setPending(thread, [...store.pending(thread), text]);
+    const replay = !isRunning ? store.pending(thread) : [];
+    const toSend = [...(resyncedText !== undefined ? [resyncedText] : replay), text];
+    store.setPending(thread, [...store.pending(thread), ...(resyncedText !== undefined ? [resyncedText] : []), text]);
     this.turns.begin(thread);
     try {
       // followUp: pi queues a prompt sent while a turn runs instead of refusing it.
-      for (const message of [...replay, text]) await supervisor.command(thread, { type: "prompt", message, streamingBehavior: "followUp" });
+      for (const message of toSend) await supervisor.command(thread, { type: "prompt", message, streamingBehavior: "followUp" });
     } finally {
       this.arm(thread);
     }

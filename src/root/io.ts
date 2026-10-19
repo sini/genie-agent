@@ -272,25 +272,36 @@ export interface XmsgIoOptions {
   xmsgDir?: string;
   service?: string;
   pollWaitMs?: number;
+  requestTimeoutMs?: number;
   guard?: XmsgGuardClientOptions | null;
   guardEnable?: boolean;
 }
 
+interface PendingRequest {
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 // Real Io adapter over SocketXmsg: registers as `service` (default `"genie"`), polls the service
 // inbox, routes guard verdicts and expert replies by `inReplyTo`, parses matrix-xmsg forwards into
-// `Inbound`, and replies to the thread's latest forward on `post()`. When `guardEnable` is false
-// (G11), no `XmsgGuardClient` is constructed.
+// `Inbound`, and replies to the thread's latest forward on `post()` and `request()`. When `guardEnable`
+// is false (G11), no `XmsgGuardClient` is constructed.
 export class XmsgIo implements Io {
   readonly client: XmsgClient & { register(): Promise<unknown>; close(): void };
   readonly guard?: XmsgGuardClient;
   readonly intake: Intake;
   readonly post: Post;
   readonly xmsg: XmsgSend;
+  readonly request: (thread: string, payload: unknown) => Promise<string>;
 
   private readonly pollWaitMs: number;
+  private readonly requestTimeoutMs: number;
   private readonly latestForwardByThread = new Map<string, string>();
   private readonly escalationThreadByMsgId = new Map<string, string>();
   private readonly solicitedThreadByRequestId = new Map<string, string>();
+  private readonly pendingRequests = new Map<string, PendingRequest>();
+  private readonly earlyRequestReplies = new Map<string, string>();
   private readonly buffered: Inbound[] = [];
   private closed = false;
   private pumping: Promise<void> | null = null;
@@ -308,6 +319,7 @@ export class XmsgIo implements Io {
     }
     this.client = client ?? new SocketXmsg(dir, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
     this.guard = guardEnable ? new XmsgGuardClient(this.client, opts.guard ?? undefined) : undefined;
 
     this.xmsg = {
@@ -343,6 +355,28 @@ export class XmsgIo implements Io {
       },
     };
 
+    this.request = async (thread: string, payload: unknown): Promise<string> => {
+      const fwdId = this.latestForwardByThread.get(thread);
+      if (!fwdId) {
+        throw new Error(`xmsg request: no forward message id recorded for thread ${thread}`);
+      }
+      this.startPump();
+      const reqMsgId = await this.client.reply(fwdId, JSON.stringify(payload));
+      const corrId = typeof reqMsgId === "string" && reqMsgId ? reqMsgId : fwdId;
+      const early = this.earlyRequestReplies.get(corrId);
+      if (early !== undefined) {
+        this.earlyRequestReplies.delete(corrId);
+        return early;
+      }
+      return new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pendingRequests.delete(corrId);
+          reject(new Error(`xmsg request timed out after ${this.requestTimeoutMs}ms (${corrId})`));
+        }, this.requestTimeoutMs);
+        this.pendingRequests.set(corrId, { resolve, reject, timer });
+      });
+    };
+
     this.intake = {
       next: async (): Promise<Inbound[] | null> => {
         while (!this.closed) {
@@ -371,6 +405,12 @@ export class XmsgIo implements Io {
   close(): void {
     this.closed = true;
     this.guard?.close();
+    for (const p of this.pendingRequests.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("xmsg io closed"));
+    }
+    this.pendingRequests.clear();
+    this.earlyRequestReplies.clear();
     this.wakeIntake();
     this.client.close();
   }
@@ -432,7 +472,25 @@ export class XmsgIo implements Io {
         return;
       }
 
-      // 3. Solicited thread line relayed by matrix-xmsg as a reply to open_thread's request_message_id
+      // 3. Pushed matrix-xmsg reply to a context/resync request
+      const reqWaiter = this.pendingRequests.get(m.inReplyTo);
+      if (reqWaiter) {
+        this.pendingRequests.delete(m.inReplyTo);
+        clearTimeout(reqWaiter.timer);
+        reqWaiter.resolve(m.text);
+        return;
+      }
+      const trimmedReply = m.text.trimStart();
+      if (
+        trimmedReply.startsWith("<context") ||
+        trimmedReply.startsWith('{"context"') ||
+        trimmedReply.startsWith('{"resync"')
+      ) {
+        this.earlyRequestReplies.set(m.inReplyTo, m.text);
+        return;
+      }
+
+      // 4. Solicited thread line relayed by matrix-xmsg as a reply to open_thread's request_message_id
       const parsedSolicited = parseMatrixForward(m.text);
       const solThread = parsedSolicited?.thread ?? this.solicitedThreadByRequestId.get(m.inReplyTo);
       if (parsedSolicited && solThread) {

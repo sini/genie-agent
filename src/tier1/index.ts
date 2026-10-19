@@ -1,7 +1,7 @@
-// Tier 1's tool surface (plan C1, design rows 25 and 26), as a pi extension: exactly the twelve
-// tools below. The C1 five act through the supervisor's Host; read, grep, find and ls are pi's
-// built-ins, confined to the thread's worktrees; clone asks the mirror fetcher (P1) for a
-// worktree; the web tools reach only public addresses, and guard-in screens what they return
+// Tier 1's tool surface (plan C1, design rows 25 and 26), as a pi extension: exactly the thirteen
+// tools below. The C1 five and room_context act through the supervisor's Host; read, grep, find
+// and ls are pi's built-ins, confined to the thread's worktrees; clone asks the mirror fetcher (P1)
+// for a worktree; the web tools reach only public addresses, and guard-in screens what they return
 // through the Host, so tier 1 holds no guard client.
 // Nothing else runs: every other tool call is blocked, and so is pi's RPC `bash` command.
 import { readFileSync, realpathSync } from "node:fs";
@@ -39,6 +39,7 @@ export const TOOLS = [
   "clone",
   "web_fetch",
   "web_search",
+  "room_context",
 ] as const;
 
 // The supervisor's side of each tool's effect (C3 implements it). Arguments arrive validated.
@@ -54,6 +55,9 @@ export interface Host {
   // A web result as the model may see it, screened by guard-in (C3.2's webScreen): the text, the
   // guard's rewrite of it, or a throw that withholds it.
   screen(text: string): Promise<string>;
+  // On-demand Matrix room/event/thread context from matrix-xmsg (GI-8, matrix-context-design.md §5.2),
+  // sent as a reply to the thread's latest forward and screened by guard-in before returning.
+  room_context(request: unknown): Promise<string>;
 }
 
 export const QUESTION_TIMEOUT_MS = 600_000;
@@ -252,8 +256,55 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     },
   };
 
+  const roomContextSchema: Schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["scope"],
+    properties: {
+      scope: {
+        type: "string",
+        enum: ["room", "event", "thread"],
+        description:
+          'Query scope: "room" for recent room messages, "event" for a specific event by id, or "thread" for messages in a specific thread.',
+      },
+      before: {
+        type: "string",
+        minLength: 1,
+        description:
+          'For scope "room": event id cursor to list messages before (default: the triggering message).',
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        description: 'For scope "room": maximum number of messages to return (1-20, default: 10).',
+      },
+      sender: {
+        type: "string",
+        minLength: 1,
+        description:
+          'For scope "room": filter messages by sender display name or Matrix user id.',
+      },
+      event: {
+        type: "string",
+        minLength: 1,
+        description: 'For scope "event": the event id to fetch.',
+      },
+      thread: {
+        type: "string",
+        minLength: 1,
+        description: 'For scope "thread": the thread root event id to fetch.',
+      },
+      offset: {
+        type: "integer",
+        minimum: 0,
+        description:
+          'For scope "thread": message offset for paging a truncated thread (default: 0).',
+      },
+    },
+  };
+
   // A C1 tool: the repo's schema validates the arguments, then the Host acts.
-  const c1 = (name: keyof Omit<Host, "clone" | "screen">, description: string, schema: Schema, arg: (v: any) => unknown) => ({
+  const c1 = (name: keyof Omit<Host, "clone" | "screen" | "room_context">, description: string, schema: Schema, arg: (v: any) => unknown) => ({
     name,
     label: name,
     description,
@@ -353,6 +404,20 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       async execute(_id: string, params: { query: string }) {
         const found = await search(cfg.searxngUrl, params.query, cfg.searchResults ?? 5, fetchOptions.timeoutMs);
         return text(await deps.host.screen(found));
+      },
+    },
+    {
+      name: "room_context",
+      label: "room_context",
+      description:
+        "Fetch additional context from the current Matrix room: recent room messages (scope: \"room\", optional before/limit/sender), a specific event by id (scope: \"event\", event), or messages in a thread (scope: \"thread\", thread, optional offset). The room is always bound by the bot from the current conversation.",
+      parameters: forModel(roomContextSchema),
+      async execute(_id: string, rawParams: unknown) {
+        const value = fromModel(roomContextSchema, rawParams);
+        const bad = errors(roomContextSchema, value);
+        if (bad.length) throw new Error(`invalid room_context arguments: ${bad.join("; ")}`);
+        const res = await deps.host.room_context({ context: value });
+        return text(typeof res === "string" ? res : JSON.stringify(res));
       },
     },
   ];

@@ -77,6 +77,7 @@ export interface Io {
   post: Post;
   guard?: GuardClient;
   xmsg: XmsgSend;
+  request?: (thread: string, payload: unknown) => Promise<string>;
 }
 
 // Every secret is a file path, read at start or at use, never argv or the environment.
@@ -172,6 +173,62 @@ export function validateRootConfig(c: Config): { guardEnable: boolean; guardOutE
     }
   }
   return { guardEnable, guardOutEnable };
+}
+
+// Resync a thread's history from matrix-xmsg in paged 4 KiB chunks (GI-8, matrix-context-design.md §5.3),
+// starting at `{"resync": {"offset": 0}}` and following `truncated="true" next_offset="<N>"` /
+// `call {"resync": {"offset": <N>}}` until complete. Each page is screened through `screen` before
+// its inner body is appended.
+export async function resyncThread(
+  thread: string,
+  request: (thread: string, payload: unknown) => Promise<string>,
+  screen: (text: string) => Promise<string>,
+): Promise<string> {
+  const parts: string[] = [];
+  let offset = 0;
+  for (let step = 0; step < 10_000; step++) {
+    const rawPage = await request(thread, { resync: { offset } });
+    const trimmed = rawPage.trim();
+    if (trimmed.startsWith("{")) {
+      let parsedErr: Record<string, unknown> | undefined;
+      try {
+        const obj = JSON.parse(trimmed);
+        if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
+          parsedErr = obj as Record<string, unknown>;
+        }
+      } catch {
+        // not a JSON error object
+      }
+      if (parsedErr && ("resync" in parsedErr || "error" in parsedErr)) {
+        const kind = String(parsedErr.resync ?? parsedErr.error);
+        const detail = typeof parsedErr.reason === "string" ? `: ${parsedErr.reason}` : "";
+        throw new Error(`resync ${kind}${detail}`);
+      }
+    }
+    const screenedPage = await screen(rawPage);
+    const bodyMatch = /^<context\b[^>]*>\n([\s\S]*?)\n<\/context>\s*$/.exec(screenedPage);
+    const body = bodyMatch ? bodyMatch[1] : screenedPage;
+    const rawBodyMatch = /^<context\b[^>]*>\n([\s\S]*?)\n<\/context>\s*$/.exec(rawPage);
+    const rawBody = rawBodyMatch ? rawBodyMatch[1] : rawPage;
+
+    const nextAttr = /\btruncated="true"\s+next_offset="(\d+)"/.exec(rawPage);
+    const nextNote = /call\s+\{"resync":\s*\{"offset":\s*(\d+)\}\}/.exec(rawPage);
+    const nextStr = nextAttr?.[1] ?? nextNote?.[1];
+    if (!nextStr) {
+      parts.push(body);
+      break;
+    }
+    const nextOffset = Number.parseInt(nextStr, 10);
+    if (!Number.isFinite(nextOffset) || nextOffset <= offset) {
+      parts.push(body);
+      break;
+    }
+    const rawLen = new TextEncoder().encode(rawBody).byteLength;
+    const sep = nextOffset - offset === rawLen ? "" : "\n".repeat(Math.max(1, nextOffset - offset - rawLen));
+    parts.push(`${body}${sep}`);
+    offset = nextOffset;
+  }
+  return parts.join("");
 }
 
 export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
@@ -326,6 +383,44 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       },
       clone: (url) => worktreeFor(c.mirror, url, t),
       screen,
+      room_context: async (request) => {
+        if (!io.request) {
+          throw new Error("room_context is not configured on this Io adapter");
+        }
+        if (typeof request !== "object" || request === null || Array.isArray(request)) {
+          throw new Error("invalid room_context request");
+        }
+        const reqObj =
+          "context" in request && typeof (request as { context?: unknown }).context === "object" && (request as { context?: unknown }).context !== null
+            ? (request as { context: Record<string, unknown> })
+            : { context: request as Record<string, unknown> };
+        if ("room" in reqObj.context || "room" in (request as Record<string, unknown>)) {
+          throw new Error("room_context: room parameter is not permitted; the room is bound by the bot");
+        }
+        const reply = await io.request(t, reqObj);
+        const trimmed = reply.trim();
+        if (trimmed.startsWith("{")) {
+          let parsedErr: Record<string, unknown> | undefined;
+          try {
+            const obj = JSON.parse(trimmed);
+            if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
+              parsedErr = obj as Record<string, unknown>;
+            }
+          } catch {
+            // not a JSON object
+          }
+          if (parsedErr && ("context" in parsedErr || "error" in parsedErr)) {
+            const kind = String(parsedErr.context ?? parsedErr.error);
+            const reason = typeof parsedErr.reason === "string" ? `: ${parsedErr.reason}` : "";
+            const retry =
+              typeof parsedErr.retry_after_ms === "number"
+                ? ` (retry_after_ms=${parsedErr.retry_after_ms})`
+                : "";
+            throw new Error(`room_context ${kind}${reason}${retry}`);
+          }
+        }
+        return screen(reply);
+      },
     }),
   );
 
@@ -358,6 +453,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
     replayResume: c.s3
       ? (t) => replayResume({ supervisor, thread: t, s3: c.s3!, guard, store, tier: store.tombstone(t)?.tier })
       : undefined,
+    resync: io.request ? (t) => resyncThread(t, io.request!, screen) : undefined,
   });
   const gc = new Gc({ store, mirror: c.mirror, archive });
 
@@ -366,6 +462,8 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
   // context and transcript, posting WITHHELD and recorded with a tier label only for the archive (P4).
   const handle = async (i: Inbound): Promise<void> => {
     if ("envelope" in i) {
+      const hadState = existsSync(`${store.stateRoot}/${i.thread}/state.json`);
+      const isDelta = /<context\b[^>]*\bcontext="delta"/.test(i.envelope);
       let text: string;
       try {
         observe(store, i.thread, parseEnvelope(i.envelope));
@@ -376,7 +474,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         return;
       }
       setContext(i.thread, { cleaned_question: text });
-      await lifecycle.message(i.thread, text);
+      await lifecycle.message(i.thread, text, { hadState, isDelta });
     } else if ("expert" in i) {
       const q = context(i.thread).cleaned_question;
       const out = await outbound(q, (scrub) => scrub(i.expert), guardOut);
