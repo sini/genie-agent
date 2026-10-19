@@ -3,11 +3,19 @@
 // The service (genie-solicit-design.md, G1) answers each xmsg message holding an Envelope with
 // the parsed verdict, or with `{"error": …}` when it could not review the message at all: an
 // error is never a verdict, so a caller holds the line and retries rather than reading it as one.
-import type { Inbound, XmsgClient } from "../dispatcher/xmsg.ts";
+import {
+  awaitRegister,
+  backoff,
+  isConnectionError as isXmsgConnectionError,
+  type Inbound,
+  type XmsgClient,
+} from "../dispatcher/xmsg.ts";
 import process from "node:process";
 import { type Config, ConfigError } from "./config.ts";
 import { CLEANED_SLACK, type Envelope, parseVerdict, REASON_MAX, type Verdict } from "./verdict.ts";
 import { parseVerdictOut, type VerdictOut } from "./verdict-out.ts";
+
+export { awaitRegister, backoff };
 
 // Guard requests disable model thinking (`chat_template_kwargs: { enable_thinking: false }`, 0
 // reasoning tokens and 0 verdict regressions across 468 evaluations on qwen3.8-27b).
@@ -73,51 +81,10 @@ export async function firstModel(base: string, apiKey?: string): Promise<string>
   return id;
 }
 
-// Waits with exponential backoff: starts at `startMs`, doubles up to `maxMs`.
-export async function backoff<T>(
-  action: () => Promise<T>,
-  opts: {
-    startMs: number;
-    maxMs: number;
-    shouldRetry: (e: unknown) => boolean;
-    onWait: (e: unknown) => void;
-    sleep?: (ms: number) => Promise<void>;
-    signal?: AbortSignal;
-  },
-): Promise<T> {
-  const defaultSleep = (ms: number) =>
-    new Promise<void>((resolve, reject) => {
-      if (opts.signal?.aborted) return reject(new Error("aborted"));
-      const timer = setTimeout(resolve, ms);
-      opts.signal?.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          reject(new Error("aborted"));
-        },
-        { once: true },
-      );
-    });
-  const sleep = opts.sleep ?? defaultSleep;
-  for (let wait = opts.startMs; ; wait = Math.min(wait * 2, opts.maxMs)) {
-    if (opts.signal?.aborted) throw new Error("aborted");
-    try {
-      return await action();
-    } catch (e) {
-      if (opts.signal?.aborted || !opts.shouldRetry(e)) throw e;
-      opts.onWait(e);
-      await sleep(wait);
-    }
-  }
-}
-
 // Whether an error is an xmsg connection failure (absent, refused, or closed): waiting may fix it.
 export function isConnectionError(e: unknown): boolean {
-  if (!(e instanceof Error)) return false;
   if (e instanceof Unauthorized || e instanceof ConfigError) return false;
-  const code = (e as any).code;
-  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE") return true;
-  return e.message.includes("connection closed");
+  return isXmsgConnectionError(e);
 }
 
 // The model to review with, once ninfer lists one: a model that compiles at start (HyperQwen, ~15
@@ -142,30 +109,6 @@ export async function awaitModel(
       maxMs: 60_000,
       shouldRetry: (e) => e instanceof Unavailable && !(e instanceof Unauthorized),
       onWait: (e) => l(`genie-guard: waiting for the model: ${e instanceof Error ? e.message : e}`),
-      sleep,
-      signal,
-    },
-  );
-}
-
-// Registers with xmsg, retrying on connection errors (absent socket, refused, or closed).
-// Backoff 1 s doubling to 30 s.
-export async function awaitRegister(
-  x: { register(): Promise<unknown> },
-  sleep?: (ms: number) => Promise<void>,
-  log?: (line: string) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
-  await backoff(
-    async () => {
-      await x.register();
-    },
-    {
-      startMs: 1_000,
-      maxMs: 30_000,
-      shouldRetry: isConnectionError,
-      onWait: (e) => l(`genie-guard: waiting for xmsg: ${e instanceof Error ? e.message : e}`),
       sleep,
       signal,
     },

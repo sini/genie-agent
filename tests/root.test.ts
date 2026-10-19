@@ -2040,3 +2040,78 @@ test("oracle (GI-8 d): resync paging loops offset over a > 4 KiB multi-page tran
   await root.supervisor.teardown(thread);
 });
 
+test("oracle (GI-10): XmsgIo re-registers with exponential backoff when poll drops connection, logs one line on drop and one on re-registration, and resumes intake", async () => {
+  const waits: number[] = [];
+  const logs: string[] = [];
+  let regAttempts = 0;
+  let pollCalls = 0;
+  let deliveredAfterReconnect = false;
+  const fwdAfterReconnect =
+    `[matrix] room=#support:example.org thread=$t_gi10 user=${ALICE} (trusted)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "after reconnect" })}\n` +
+    `</request>`;
+
+  const fakeClient = {
+    register: async () => {
+      regAttempts++;
+      // Initial registration (attempt 1) succeeds; reconnect attempts 2 & 3 fail with ECONNREFUSED, attempt 4 succeeds
+      if (regAttempts === 2 || regAttempts === 3) {
+        const err = new Error("connect ECONNREFUSED /run/xmsg/register.sock") as Error & { code?: string };
+        err.code = "ECONNREFUSED";
+        throw err;
+      }
+      return { address: "genie@node", node: "node" };
+    },
+    close: () => {},
+    list: async () => [],
+    send: async () => "m1",
+    reply: async () => {},
+    ack: async () => {},
+    replies: async () => [],
+    poll: async () => {
+      pollCalls++;
+      if (pollCalls === 1) {
+        throw new Error("/run/xmsg/register.sock: connection closed");
+      }
+      if (!deliveredAfterReconnect) {
+        deliveredAfterReconnect = true;
+        return { id: "fwd_gi10_1", text: fwdAfterReconnect };
+      }
+      await new Promise((r) => setTimeout(r, 10));
+      return null;
+    },
+  };
+
+  const xio = new XmsgIo(
+    {
+      service: "genie",
+      pollWaitMs: 20,
+      guardEnable: false,
+      guard: null,
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+      log: (line) => {
+        logs.push(line);
+      },
+    },
+    fakeClient,
+  );
+
+  await xio.register();
+  try {
+    const batch = await xio.intake.next();
+    assert.deepEqual(batch, [{ thread: "$t_gi10", envelope: fwdAfterReconnect }]);
+    assert.equal(regAttempts, 4, "must have registered initially (1) and retried 3 times on drop (2, 3, 4)");
+    assert.deepEqual(waits, [1000, 2000], "exponential backoff must double from 1000ms to 2000ms");
+    assert.deepEqual(logs, [
+      "genie: xmsg connection lost: /run/xmsg/register.sock: connection closed",
+      "genie: re-registered on xmsg",
+    ]);
+  } finally {
+    xio.close();
+  }
+});
+
+

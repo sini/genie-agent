@@ -6,7 +6,14 @@
 //   Inbound, matches expert replies and guard verdicts by inReplyTo, and formats drafts and notices
 //   back as an xmsg reply to the latest forward for the thread.
 import { randomUUID } from "node:crypto";
-import { SocketXmsg, type Inbound as RawXmsgInbound, type XmsgClient } from "../dispatcher/xmsg.ts";
+import process from "node:process";
+import {
+  awaitRegister,
+  isConnectionError,
+  SocketXmsg,
+  type Inbound as RawXmsgInbound,
+  type XmsgClient,
+} from "../dispatcher/xmsg.ts";
 import type { XmsgSend } from "../escalation/index.ts";
 import { type Envelope, type Verdict, verdictErrors } from "../guard/verdict.ts";
 import type { GuardClient, Unavailable } from "../supervisor/guard-client.ts";
@@ -275,6 +282,9 @@ export interface XmsgIoOptions {
   requestTimeoutMs?: number;
   guard?: XmsgGuardClientOptions | null;
   guardEnable?: boolean;
+  wait?: (ms: number) => Promise<void>;
+  log?: (line: string) => void;
+  reconnectStartMs?: number;
 }
 
 interface PendingRequest {
@@ -295,8 +305,13 @@ export class XmsgIo implements Io {
   readonly xmsg: XmsgSend;
   readonly request: (thread: string, payload: unknown) => Promise<string>;
 
+  private readonly service: string;
   private readonly pollWaitMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly wait?: (ms: number) => Promise<void>;
+  private readonly log: (line: string) => void;
+  private readonly reconnectStartMs: number;
+  private readonly closeAbort = new AbortController();
   private readonly latestForwardByThread = new Map<string, string>();
   private readonly escalationThreadByMsgId = new Map<string, string>();
   private readonly solicitedThreadByRequestId = new Map<string, string>();
@@ -317,9 +332,13 @@ export class XmsgIo implements Io {
     if (guardEnable && opts.guard !== undefined && (opts.guard === null || ("target" in opts.guard && !opts.guard.target))) {
       throw new Error("xmsg.guard.target is required when guard.enable is true");
     }
+    this.service = service;
     this.client = client ?? new SocketXmsg(dir, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+    this.wait = opts.wait;
+    this.log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    this.reconnectStartMs = opts.reconnectStartMs ?? 1_000;
     this.guard = guardEnable ? new XmsgGuardClient(this.client, opts.guard ?? undefined) : undefined;
 
     this.xmsg = {
@@ -394,7 +413,10 @@ export class XmsgIo implements Io {
   }
 
   async register(): Promise<void> {
-    await this.client.register();
+    await awaitRegister(this.client, this.wait, this.log, this.closeAbort.signal, {
+      service: this.service,
+      startMs: this.reconnectStartMs,
+    });
     this.startPump();
   }
 
@@ -404,6 +426,7 @@ export class XmsgIo implements Io {
 
   close(): void {
     this.closed = true;
+    this.closeAbort.abort();
     this.guard?.close();
     for (const p of this.pendingRequests.values()) {
       clearTimeout(p.timer);
@@ -436,13 +459,30 @@ export class XmsgIo implements Io {
     });
   }
 
+  private async reconnect(e: unknown): Promise<void> {
+    this.log(`${this.service}: xmsg connection lost: ${e instanceof Error ? e.message : e}`);
+    await awaitRegister(this.client, this.wait, () => {}, this.closeAbort.signal, {
+      service: this.service,
+      startMs: this.reconnectStartMs,
+    });
+    this.log(`${this.service}: re-registered on xmsg`);
+  }
+
   private async pumpLoop(): Promise<void> {
     while (!this.closed) {
       let msg: RawXmsgInbound | null = null;
       try {
         msg = await this.client.poll(this.pollWaitMs);
-      } catch {
+      } catch (e) {
         if (this.closed) break;
+        if (isConnectionError(e)) {
+          try {
+            await this.reconnect(e);
+          } catch {
+            if (this.closed) break;
+          }
+          continue;
+        }
         await new Promise((r) => setTimeout(r, 50));
         continue;
       }
@@ -450,8 +490,15 @@ export class XmsgIo implements Io {
       await this.handleRaw(msg);
       try {
         await this.client.ack(msg.id);
-      } catch {
+      } catch (e) {
         if (this.closed) break;
+        if (isConnectionError(e)) {
+          try {
+            await this.reconnect(e);
+          } catch {
+            if (this.closed) break;
+          }
+        }
       }
     }
     this.wakeIntake();

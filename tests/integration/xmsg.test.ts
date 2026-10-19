@@ -48,6 +48,8 @@ interface XmsgNode {
   httpSock: string;
   agentSock: string;
   registerSock: string;
+  killServer: () => Promise<void>;
+  spawnServer: () => Promise<void>;
   stop: () => Promise<void>;
 }
 
@@ -81,18 +83,49 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
     args.push("--svc-exe", `${name}=${exe}`);
   }
 
-  const child = spawn(XMSG_BIN, args, {
-    env: { ...process.env, XDG_RUNTIME_DIR: runDir, HOME: dir },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let currentChild: ChildProcess | null = null;
+
+  const killServer = async () => {
+    const c = currentChild;
+    if (c && c.exitCode === null) {
+      c.kill("SIGKILL");
+      await new Promise<void>((r) => {
+        c.on("exit", () => r());
+        setTimeout(() => r(), 3000);
+      });
+    }
+    rmSync(httpSock, { force: true });
+    rmSync(agentSock, { force: true });
+    rmSync(registerSock, { force: true });
+  };
+
+  const spawnServer = async () => {
+    const c = spawn(XMSG_BIN!, args, {
+      env: { ...process.env, XDG_RUNTIME_DIR: runDir, HOME: dir },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    currentChild = c;
+    node.child = c;
+    for (let i = 0; i < 200; i++) {
+      if (existsSync(httpSock) && existsSync(agentSock) && existsSync(registerSock)) {
+        return;
+      }
+      if (c.exitCode !== null) {
+        throw new Error(`xmsg serve exited prematurely with code ${c.exitCode}`);
+      }
+      await sleep(25);
+    }
+    throw new Error("timed out waiting for xmsg sockets to appear");
+  };
 
   const stop = async () => {
-    if (child.exitCode === null) {
-      child.kill("SIGTERM");
+    const c = currentChild;
+    if (c && c.exitCode === null) {
+      c.kill("SIGTERM");
       await new Promise<void>((r) => {
-        child.on("exit", () => r());
+        c.on("exit", () => r());
         setTimeout(() => {
-          if (child.exitCode === null) child.kill("SIGKILL");
+          if (c.exitCode === null) c.kill("SIGKILL");
           r();
         }, 3000);
       });
@@ -100,19 +133,27 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
     rmSync(dir, { recursive: true, force: true });
   };
 
-  for (let i = 0; i < 200; i++) {
-    if (existsSync(httpSock) && existsSync(agentSock) && existsSync(registerSock)) {
-      return { child, dir, runDir, xmsgDir, sessionsDir, httpSock, agentSock, registerSock, stop };
-    }
-    if (child.exitCode !== null) {
-      await stop();
-      throw new Error(`xmsg serve exited prematurely with code ${child.exitCode}`);
-    }
-    await sleep(25);
-  }
+  const node: XmsgNode = {
+    child: null as any,
+    dir,
+    runDir,
+    xmsgDir,
+    sessionsDir,
+    httpSock,
+    agentSock,
+    registerSock,
+    killServer,
+    spawnServer,
+    stop,
+  };
 
-  await stop();
-  throw new Error("timed out waiting for xmsg sockets to appear");
+  try {
+    await spawnServer();
+    return node;
+  } catch (e) {
+    await stop();
+    throw e;
+  }
 }
 
 function unixHttp(
@@ -1797,5 +1838,215 @@ test(
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// Oracle 11 (GI-10): tier 1 re-registers when its xmsg bus restarts
+// - Start genie-root and confirm `genie` is registered on xmsg serve
+// - Kill and restart xmsg serve on the same socket dir
+// - The root re-registers within the backoff bound, without its own process restarting
+// - A message sent to `genie` after the restart reaches it and receives a reply
+// - The root logs one line on the drop and one on re-registration
+// - Mutant: no re-register in XmsgIo.pumpLoop() => RED.
+// -----------------------------------------------------------------------------
+test(
+  "oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart",
+  { timeout: 30_000 },
+  async () => {
+    const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
+    assert.ok(
+      GENIE_ROOT_BIN && existsSync(GENIE_ROOT_BIN),
+      `GENIE_ROOT_BIN environment variable is required and must exist (got: ${GENIE_ROOT_BIN})`,
+    );
+
+    const node = await startXmsg({
+      genie: GENIE_ROOT_BIN,
+    });
+
+    let rootProc: ChildProcess | null = null;
+    try {
+      const promptLogFile = join(node.dir, "prompts.jsonl");
+      writeFileSync(promptLogFile, "");
+      const piScript = join(node.dir, "fake-pi.js");
+      writeFileSync(
+        piScript,
+        `
+const { appendFileSync } = require("node:fs");
+const logFile = ${JSON.stringify(promptLogFile)};
+let buf = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buf += chunk;
+  let nl;
+  while ((nl = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) continue;
+    const cmd = JSON.parse(line);
+    if (cmd.type === "prompt") {
+      appendFileSync(logFile, JSON.stringify({ prompt: cmd.message }) + "\\n");
+      process.stdout.write(JSON.stringify({ type: "response", id: cmd.id, command: "prompt", success: true, data: { disposition: "started" } }) + "\\n");
+      process.stdout.write(JSON.stringify({
+        type: "extension_ui_request",
+        id: "ui0",
+        method: "input",
+        title: "genie-host",
+        placeholder: JSON.stringify({
+          method: "reply",
+          arg: { answer: "pong after restart", confidence: 0.95, gaps: [], escalate_forced: false },
+        }),
+      }) + "\\n");
+    } else if (cmd.type === "extension_ui_response") {
+      process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n");
+    } else {
+      process.stdout.write(JSON.stringify({ type: "response", id: cmd.id, command: cmd.type, success: true }) + "\\n");
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+`,
+      );
+      const piBin = join(node.dir, "fake-pi");
+      writeFileSync(piBin, `#!/bin/sh\nexec "${process.execPath}" "${piScript}" "$@"\n`, { mode: 0o755 });
+
+      const modelKey = join(node.dir, "model-key");
+      writeFileSync(modelKey, "k\n");
+      const cfgPath = join(node.dir, "root-config.json");
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          stateRoot: join(node.dir, "state"),
+          storeRoot: join(node.dir, "store"),
+          mirror: { mirrorRoot: join(node.dir, "mirrors"), worktreeRoot: join(node.dir, "worktrees") },
+          pi: piBin,
+          model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: modelKey },
+          tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+          xmsg: { service: "genie", pollWaitMs: 300 },
+          guard: { enable: false },
+          broker: { guardOut: { enable: false } },
+        }),
+      );
+
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        XDG_RUNTIME_DIR: node.runDir,
+        HOME: node.dir,
+        GENIE_REPO_ROOT: process.cwd(),
+      };
+      delete childEnv.NODE_TEST_CONTEXT;
+
+      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath], {
+        env: childEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let rootStderr = "";
+      rootProc.stderr?.setEncoding("utf8");
+      rootProc.stderr?.on("data", (c: string) => {
+        rootStderr += c;
+      });
+
+      const isGenieRegistered = async (): Promise<boolean> => {
+        try {
+          const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+          const addrs: string[] = (res.json?.recipients ?? []).map((r: any) => r.address);
+          return addrs.some((a) => a === "genie" || a.startsWith("genie@"));
+        } catch {
+          return false;
+        }
+      };
+
+      // 1. Confirm `genie` is registered initially
+      let registeredBefore = false;
+      for (let i = 0; i < 200; i++) {
+        if (await isGenieRegistered()) {
+          registeredBefore = true;
+          break;
+        }
+        if (rootProc.exitCode !== null) {
+          throw new Error(`genie-root exited prematurely with code ${rootProc.exitCode}: ${rootStderr}`);
+        }
+        await sleep(25);
+      }
+      assert.equal(registeredBefore, true, `genie must register initially (stderr: ${rootStderr})`);
+
+      const rootPidBefore = rootProc.pid!;
+      const rootStartBefore = getProcStart(rootPidBefore);
+      const xmsgPidBefore = node.child.pid!;
+
+      // 2. Kill and restart xmsg serve on the same socket dir
+      await node.killServer();
+      await sleep(150);
+      await node.spawnServer();
+      const xmsgPidAfter = node.child.pid!;
+      assert.notEqual(xmsgPidAfter, xmsgPidBefore, "restarted xmsg serve must have a new PID");
+
+      // 3. Confirm `genie` re-registers within the backoff bound without restarting its own process
+      let reRegistered = false;
+      for (let i = 0; i < 200; i++) {
+        if (await isGenieRegistered()) {
+          reRegistered = true;
+          break;
+        }
+        if (rootProc.exitCode !== null) {
+          throw new Error(`genie-root exited after xmsg drop with code ${rootProc.exitCode}: ${rootStderr}`);
+        }
+        await sleep(25);
+      }
+      assert.equal(
+        reRegistered,
+        true,
+        `genie-root must re-register within backoff bound after xmsg serve restarts (stderr: ${rootStderr})`,
+      );
+      assert.equal(rootProc.exitCode, null, "genie-root process must still be running");
+      assert.equal(rootProc.pid, rootPidBefore, "genie-root PID must be unchanged");
+      assert.equal(getProcStart(rootProc.pid!), rootStartBefore, "genie-root process start time must be unchanged");
+
+      // 4. Send a message to `genie` after the restart and verify it reaches `genie` and receives a reply
+      const fwdText =
+        `[matrix] room=#support:example.org thread=$gi10_after_restart user=alice (trusted)\n\n` +
+        `<request>\n` +
+        `${JSON.stringify({ sender: "alice", sender_id: "@alice:example.org", tier: "trusted", text: "hello after xmsg restart" })}\n` +
+        `</request>`;
+      const sendRes = await unixHttp(node.httpSock, "POST", "/v1/messages", {
+        to: "genie",
+        from: "matrix-xmsg",
+        text: fwdText,
+      });
+      assert.equal(sendRes.status, 202, `POST /v1/messages after restart must return 202: ${sendRes.body}`);
+      const msgId = sendRes.json?.message_id;
+      assert.ok(msgId, "POST /v1/messages must return message_id");
+
+      const replyRes = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(msgId)}/replies?wait=5`);
+      assert.equal(replyRes.status, 200, `GET replies after restart must return 200: ${replyRes.body}`);
+      assert.ok(Array.isArray(replyRes.json) && replyRes.json.length > 0, `expected reply from genie after restart, got: ${replyRes.body}`);
+      const replyPayload = JSON.parse(replyRes.json[0].text);
+      assert.match(replyPayload.text, /pong after restart/);
+
+      const promptsRecorded = readFileSync(promptLogFile, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l).prompt);
+      assert.ok(
+        promptsRecorded.includes("hello after xmsg restart"),
+        `message sent after xmsg restart must reach genie-root's pi prompt, got: ${JSON.stringify(promptsRecorded)}`,
+      );
+
+      // 5. The root logs one line on the drop and one on re-registration
+      const stderrLines = rootStderr
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const dropLines = stderrLines.filter((l) => l.startsWith("genie: xmsg connection lost:"));
+      const reRegLines = stderrLines.filter((l) => l === "genie: re-registered on xmsg");
+      assert.equal(dropLines.length, 1, `expected exactly 1 drop log line, got: ${JSON.stringify(stderrLines)}`);
+      assert.equal(reRegLines.length, 1, `expected exactly 1 re-registration log line, got: ${JSON.stringify(stderrLines)}`);
+    } finally {
+      if (rootProc && rootProc.exitCode === null) {
+        rootProc.kill("SIGTERM");
+      }
+      await node.stop();
+    }
+  },
+);
+
 
 

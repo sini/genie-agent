@@ -3,6 +3,7 @@
 // keys are scoped to its own session (X10), and reads recipients on http.sock (X8).
 import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
+import process from "node:process";
 
 // The live Claude sessions on the tier's xmsg instance, by sessionId.
 export interface XmsgSessions {
@@ -184,3 +185,77 @@ export class SocketXmsg implements XmsgClient {
     return r.map((x: { text: string }) => x.text);
   }
 }
+
+// Waits with exponential backoff: starts at `startMs`, doubles up to `maxMs`.
+export async function backoff<T>(
+  action: () => Promise<T>,
+  opts: {
+    startMs: number;
+    maxMs: number;
+    shouldRetry: (e: unknown) => boolean;
+    onWait: (e: unknown) => void;
+    sleep?: (ms: number) => Promise<void>;
+    signal?: AbortSignal;
+  },
+): Promise<T> {
+  const defaultSleep = (ms: number) =>
+    new Promise<void>((resolve, reject) => {
+      if (opts.signal?.aborted) return reject(new Error("aborted"));
+      const timer = setTimeout(resolve, ms);
+      opts.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  const sleep = opts.sleep ?? defaultSleep;
+  for (let wait = opts.startMs; ; wait = Math.min(wait * 2, opts.maxMs)) {
+    if (opts.signal?.aborted) throw new Error("aborted");
+    try {
+      return await action();
+    } catch (e) {
+      if (opts.signal?.aborted || !opts.shouldRetry(e)) throw e;
+      opts.onWait(e);
+      await sleep(wait);
+    }
+  }
+}
+
+// Whether an error is an xmsg connection failure (absent, refused, or closed): waiting may fix it.
+export function isConnectionError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e instanceof XmsgError) return false;
+  const code = (e as any).code;
+  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE") return true;
+  return e.message.includes("connection closed") || e.message === "xmsg: poll before register";
+}
+
+// Registers with xmsg, retrying on connection errors (absent socket, refused, or closed).
+// Backoff `startMs` (default 1 s) doubling to `maxMs` (default 30 s).
+export async function awaitRegister(
+  x: { register(): Promise<unknown> },
+  sleep?: (ms: number) => Promise<void>,
+  log?: (line: string) => void,
+  signal?: AbortSignal,
+  opts?: { service?: string; startMs?: number; maxMs?: number },
+): Promise<void> {
+  const service = opts?.service ?? "genie-guard";
+  const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  await backoff(
+    async () => {
+      await x.register();
+    },
+    {
+      startMs: opts?.startMs ?? 1_000,
+      maxMs: opts?.maxMs ?? 30_000,
+      shouldRetry: isConnectionError,
+      onWait: (e) => l(`${service}: waiting for xmsg: ${e instanceof Error ? e.message : e}`),
+      sleep,
+      signal,
+    },
+  );
+}
+

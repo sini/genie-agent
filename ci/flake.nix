@@ -113,6 +113,7 @@
                         && grep -q '^ok [0-9]* - oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates an isolated clone (source worktree list, refs, and objects unchanged after commit/branch move) and 96h fake-clock GC removes the dir$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 9 (GI-8): room_context round-trip by scope as xmsg reply to thread forward, error/throttle handling, guard-in screening, and multi-page resync over real xmsg serve$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 10 (GI-9): with svcExe.genie set to genie-root SEA binary, genie-root registers as genie and a plain node process is refused$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
                     '';

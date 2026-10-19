@@ -11,7 +11,16 @@ export type { Herdr } from "./herdr.ts";
 export { loadJournal, saveJournal, type Buffered, type Journal, type Outstanding, type Thread } from "./journal.ts";
 export { Delivery, UNAVAILABLE, type DeliveryOptions } from "./delivery.ts";
 export { DispatcherGc, type DispatcherGcOptions } from "./gc.ts";
-export { SocketXmsg, XmsgError, type Inbound, type XmsgClient, type XmsgSessions } from "./xmsg.ts";
+export {
+  awaitRegister,
+  backoff,
+  isConnectionError,
+  SocketXmsg,
+  XmsgError,
+  type Inbound,
+  type XmsgClient,
+  type XmsgSessions,
+} from "./xmsg.ts";
 import type { XmsgSessions } from "./xmsg.ts";
 
 export interface TokenRef {
