@@ -39,6 +39,11 @@ reading as clean success:
   change sent with an unknown second flag exited rc 2 and the status never changed, while the agent
   reported its claim released. Make one change per write and read the state back. A relation-wiring
   write with its two arguments swapped is silent too; read the edge back from both ends.
+- A chain that ends in `; echo rc=$?` exits 0 whatever happened before it, so a background task's
+  "completed (exit code 0)" says nothing. About 15 backgrounded "commit, pull --rebase, push; echo rc"
+  chains all reported exit 0 while `pull --rebase` refused every time (peers had unstaged edits in the
+  shared tree) and local main drifted 90 commits ahead and 16 behind. Read the outcome, not the task
+  status: for a push chain, `git status -sb` ahead/behind.
 - Keep stderr visible on any measurement; the error text is part of the measurement.
 - The tell is the control: a broken pipeline zeroes the live control too. Read the control's value,
   not just its presence.

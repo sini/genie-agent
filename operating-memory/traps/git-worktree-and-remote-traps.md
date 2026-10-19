@@ -22,6 +22,7 @@ verified: 2026-10-15; git 2.55.0
 - Before deleting a tree with a broken pointer, diff the filesystem against the pinned revision. Git cannot tell you about uncommitted work there.
 - Read the archived flag without mutating: `gh api repos/<owner>/<repo> --jq .archived`.
 - Before a fast-forward landing, `git branch --show-current` must print `main`. After the push, the output must show an `old..new main -> main` range.
+- Before `git reset --keep <target>` in a shared checkout, run `git cherry <target> HEAD`. Every `+` line is a commit the reset drops. `--keep` protects uncommitted edits, not unpushed commits: one spec commit made after the last push vanished from main without a word and came back only by cherry-picking it from the reflog.
 - After a fetch-style transfer, check ancestry with `git merge-base --is-ancestor`, then `git merge --ff-only refs/remotes/<peer>/main`.
 - In a shared repo, prefer `git clone` into a scratch directory over `git worktree add`.
 

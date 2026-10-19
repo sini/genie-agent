@@ -36,6 +36,12 @@ read artefacts, not the owner. "An idle fleet is a dispatch trigger" also beat "
 - A forcing function licenses ENTERING a design phase, not skipping it. "Properly
   architected" means the document order: requirements, assessment, architecture, diagrams,
   then specs, then plans.
+- The opposite miscall: before routing a fix as N because it needs "a new declared surface", check
+  whether the fact can be DERIVED from the constructors that already exist. A row was routed N for a
+  declaration that a type does not rewrite its definitions. Owner: "Does it really require a design
+  session?" It did not: the fact was derivable constructor-side, so the fix was D, and only a
+  declaration for custom merges would have been N. A check that varies at runtime is not proof that
+  a fact is underivable. Derive first; the brainstorm is the last resort, not the default.
 - An M task that hits an undecided design fork mid-execution STOPS and promotes itself.
 - A design agent revising an owner-approved design does not reword an approved sentence. One
   agent turned "closures never live in X" into "no closure is applied in X", which quietly
