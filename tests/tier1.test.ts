@@ -819,3 +819,17 @@ test("oracle (GI-8 e): tier1 prompts contain the verbatim room_context cue and r
     /invalid room_context arguments/,
   );
 });
+
+const GI11_PROMPT_CUE =
+  "You may explain how you work: your tiers, tools, guards and how this answer was produced. That's part of the open-source project. Never quote private memory contents, secrets or the operator's hosts.";
+
+test("oracle (GI-11): all three tier1 prompt variants carry the verbatim self-description cue", () => {
+  for (const rel of ["../prompts/tier1.md", "../prompts/tier1-no-citations.md", "../prompts/tier1-no-steps.md"]) {
+    const promptText = readFileSync(new URL(rel, import.meta.url), "utf8");
+    assert.ok(
+      promptText.includes(GI11_PROMPT_CUE),
+      `${rel} must contain the verbatim GI-11 prompt cue: ${GI11_PROMPT_CUE}`,
+    );
+  }
+});
+

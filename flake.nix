@@ -484,6 +484,7 @@
                   && grep -q '^ok [0-9]* - oracle (G10 part 2): tier1 prompts and web_fetch tool description carry user-linked gist and paging rules$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (G11): parameterized web_fetch (including G10 100 KiB paging) and web_search over webScreen enabled true and false: off mode makes 0 guard calls and matches on-mode allow$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (GI-8 e): tier1 prompts contain the verbatim room_context cue and room_context tool registration has no room parameter, boolean, or \$ref$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (GI-11): all three tier1 prompt variants carry the verbatim self-description cue$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
@@ -1056,6 +1057,7 @@
                 grep -q '^ok [0-9]* - oracle (GI-8 b): room_context error/refused/throttled replies return tool errors to the model without crashing the process and the thread stays answerable$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GI-8 c): room_context screens returned <context> block through guard-in when guard.enable is true (withholding on reject) and makes 0 guard calls under unscreened prompt framing when guard.enable is false$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GI-8 d): resync paging loops offset over a > 4 KiB multi-page transcript when local state is missing and is not called when local state is intact$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle (GI-11): a guard-out that blocks the first draft and passes the second posts only the second with no WITHHELD; blocking every draft until the turn settles posts WITHHELD once$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover

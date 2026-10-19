@@ -123,7 +123,7 @@ const secret = (file: string) => readFileSync(file, "utf8").trim();
 
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
-export const WITHHELD = "I drafted an answer, but my output check withheld it. Please rephrase your question.";
+export const WITHHELD = "I drafted an answer, but my output check held it back. I've flagged this for review.";
 export const DEADLINE_NOTICE = readFileSync(new URL("prompts/tier1-deadline.md", repo).pathname, "utf8").trim();
 export const approvalNotice = (action: string, params: unknown): PostEnvelope & { approval: true } => ({
   approval: true,
@@ -303,13 +303,23 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
     const payload: PostEnvelope = approval ? { text, approval: true } : { text };
     return io.post.post(thread, payload);
   };
+  const withheldInTurn = new Set<string>();
 
   const supervisor: Supervisor = new Supervisor(
     (t) => {
       const l = launch(t);
       return { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
     },
-    (t, r) => lifecycle.event(t, r),
+    async (t, r) => {
+      if (r.type === "agent_settled" && withheldInTurn.delete(t)) {
+        const st = store.read(t);
+        if (st && st.status !== "closed") {
+          await postEnvelope(t, WITHHELD);
+          await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+        }
+      }
+      await lifecycle.event(t, r);
+    },
     (t) => ({
       // The tier is the thread's, from P2's state, never the request's (E4's effectiveTier clamps it).
       // When the thread's tier refuses a capability (e.g. trusted eval on a public thread), tier 1's
@@ -359,20 +369,23 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         return { ...(res.entities !== undefined ? { entities: res.entities } : {}), results };
       },
       escalate: (pkg) => {
+        withheldInTurn.delete(t);
         lifecycle.disarm(t);
         return escalation.escalate(t, pkg as Package);
       },
       // The draft leaves only as redacted and passed by guard-out. A withheld draft is neither posted
-      // nor escalated: guard-out judged it unfit to leave the pod, and xmsg is a way out too.
+      // nor escalated on the spot: tier 1 receives {posted: false, reason} so it can retry, and WITHHELD
+      // is posted only if the turn settles without any posted reply (GI-11).
       reply: async (raw) => {
         lifecycle.disarm(t);
         const d = raw as Draft;
         const out = await outbound(context(t).cleaned_question, (scrub): Draft => ({ ...d, answer: scrub(d.answer), gaps: d.gaps.map(scrub) }), guardOut);
         if (!("value" in out)) {
           console.error(`thread ${t}: reply withheld: ${out.reason}`);
-          await postEnvelope(t, WITHHELD);
+          withheldInTurn.add(t);
           return { posted: false, reason: out.reason };
         }
+        withheldInTurn.delete(t);
         await postEnvelope(t, out.value);
         return { posted: true, escalated: await escalation.reply(t, out.value) };
       },
@@ -479,6 +492,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         await postEnvelope(i.thread, REFUSAL);
         return;
       }
+      withheldInTurn.delete(i.thread);
       setContext(i.thread, { cleaned_question: text });
       await lifecycle.message(i.thread, text, { hadState, isDelta });
     } else if ("expert" in i) {

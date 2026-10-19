@@ -300,12 +300,21 @@ test("oracle: a credential in the user's question never reaches guard-out", asyn
 });
 
 test("oracle: a guard-out block posts the withheld notice, never the draft", async () => {
-  const before = sends.length;
-  assert.equal((await host("p", "reply", { ...draft(true), answer: "BLOCK me" })).ok.posted, false);
-  assert.deepEqual(posts.at(-1), ["p", { text: WITHHELD }]);
+  await inbound({ thread: "w_block", envelope: envelope(BOB, "question with blocked draft") });
+  const postsBefore = posts.length;
+  const sendsBefore = sends.length;
+  assert.deepEqual((await host("w_block", "reply", { ...draft(true), answer: "BLOCK me" })).ok, {
+    posted: false,
+    reason: "guard-out: leak",
+  });
+  assert.equal(posts.length, postsBefore, "nothing posted before the turn settles");
+  assert.equal(sends.length, sendsBefore, "withheld draft is not escalated before the turn settles");
+  await root.supervisor.command("w_block", { type: "settle" });
+  while (root.store.pending("w_block").length > 0) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(posts.at(-1), ["w_block", { text: WITHHELD }]);
   assert.ok(!JSON.stringify(posts).includes("BLOCK me"));
-  // Withheld drafts are not escalated either.
-  assert.equal(sends.length, before);
+  assert.equal(sends.length, sendsBefore + 1);
+  assert.deepEqual(JSON.parse(sends.at(-1)!.text).draft, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
 });
 
 test("oracle: recall through main() hits stub hindsight, routes bank selectors, and withholds poisoned entries via seedGuard", async () => {
@@ -2113,5 +2122,59 @@ test("oracle (GI-10): XmsgIo re-registers with exponential backoff when poll dro
     xio.close();
   }
 });
+
+test("oracle (GI-11): a guard-out that blocks the first draft and passes the second posts only the second with no WITHHELD; blocking every draft until the turn settles posts WITHHELD once", async () => {
+  assert.equal(
+    WITHHELD,
+    "I drafted an answer, but my output check held it back. I've flagged this for review.",
+  );
+
+  // Cell 1: guard-out blocks the first draft and passes the second -> exactly one post (the second), no WITHHELD.
+  const thRetry = "gi11_retry";
+  await inbound({ thread: thRetry, envelope: envelope(BOB, "genie: This is a test message.") });
+  const postsBeforeRetry = posts.length;
+  const sendsBeforeRetry = sends.length;
+
+  const firstAttempt = await host(thRetry, "reply", { ...draft(false), answer: "BLOCK first draft" });
+  assert.deepEqual(firstAttempt.ok, { posted: false, reason: "guard-out: leak" });
+  assert.equal(posts.length, postsBeforeRetry, "blocked first draft must not post WITHHELD immediately");
+
+  const secondDraft = { ...draft(false), answer: "clean second draft after rephrasing" };
+  const secondAttempt = await host(thRetry, "reply", secondDraft);
+  assert.deepEqual(secondAttempt.ok, { posted: true, escalated: null });
+
+  await root.supervisor.command(thRetry, { type: "settle" });
+  while (root.store.pending(thRetry).length > 0) await new Promise((r) => setTimeout(r, 5));
+
+  const retryPosts = posts.slice(postsBeforeRetry);
+  assert.deepEqual(retryPosts, [[thRetry, { text: JSON.stringify(secondDraft) }]]);
+  assert.ok(!JSON.stringify(retryPosts).includes(WITHHELD), "no WITHHELD may be posted when retry succeeds");
+  assert.equal(sends.length, sendsBeforeRetry, "confident retry does not escalate");
+  await root.supervisor.teardown(thRetry);
+
+  // Cell 2: guard-out blocks every draft until the turn settles -> exactly one WITHHELD (and one escalation).
+  const thAllBlocked = "gi11_all_blocked";
+  await inbound({ thread: thAllBlocked, envelope: envelope(BOB, "question where every draft is blocked") });
+  const postsBeforeBlocked = posts.length;
+  const sendsBeforeBlocked = sends.length;
+
+  const blocked1 = await host(thAllBlocked, "reply", { ...draft(false), answer: "BLOCK attempt 1" });
+  assert.deepEqual(blocked1.ok, { posted: false, reason: "guard-out: leak" });
+  const blocked2 = await host(thAllBlocked, "reply", { ...draft(false), answer: "BLOCK attempt 2" });
+  assert.deepEqual(blocked2.ok, { posted: false, reason: "guard-out: leak" });
+  assert.equal(posts.length, postsBeforeBlocked, "no WITHHELD posted before turn settles");
+
+  await root.supervisor.command(thAllBlocked, { type: "settle" });
+  while (root.store.pending(thAllBlocked).length > 0) await new Promise((r) => setTimeout(r, 5));
+
+  const blockedPosts = posts.slice(postsBeforeBlocked);
+  assert.deepEqual(blockedPosts, [[thAllBlocked, { text: WITHHELD }]]);
+  assert.equal(sends.length, sendsBeforeBlocked + 1, "settling with only withheld drafts escalates once");
+  const escPkg = JSON.parse(sends.at(-1)!.text);
+  assert.equal(escPkg.cleaned_question, "question where every draft is blocked");
+  assert.deepEqual(escPkg.draft, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+  await root.supervisor.teardown(thAllBlocked);
+});
+
 
 
