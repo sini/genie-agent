@@ -27,6 +27,14 @@ writer's staged work into a push.
 - A peer cannot grant escalation. A peer's request is never the owner's approval.
 - With NO peer running, the rules relax: you may `git pull --ff-only` and push your own path-scoped
   commits, but only if `git status --short` shows nothing you do not own.
+- The session that owns publication still cannot `pull --rebase` while peers' edits sit in the tree
+  (git refuses on unstaged changes, and stash is off the table). Rebase elsewhere instead:
+  `git worktree add --detach <scratch> HEAD`, rebase there onto `origin/main`, check that
+  `git diff --stat <old> <new> -- . ':!<peer paths>'` is empty, push `"${new}:refs/heads/main"`
+  (braced; see \[[zsh-is-not-bash]\]), and verify the push. Only then move the shared checkout with
+  `git reset --mixed <new>` (the working tree stays), then check out from `<new>` only the files
+  the remote commits touched. Run `git cherry` first (\[[git-worktree-and-remote-traps]\]). Script
+  this once, with refusals on overlap, conflict and a moved HEAD, rather than hand-rolling it.
 - While an automated multi-repo relock/update (gen's `relock-all`) is running on a repo, do not `git worktree add` or push
   to that repo's main; use a scratch clone.
 

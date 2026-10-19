@@ -31,6 +31,12 @@ loud.
 - After an orchestrator restart, find ids on disk: `~/.claude/projects/<project-slug>/<session>/ subagents/agent-<id>.meta.json`; `<id>` is the address.
 - Tell every resumed agent: report to this session, write the report file first (it is the deliverable
   of record), and do not retry a failed send elsewhere.
+- After a restart, do not wait on a resumed agent's message. On one day 3 of 4 resumed agents
+  finished and went idle without their message reaching the orchestrator. Verify the work directly:
+  the target remote branch, its CI run by `headSha`, the report file, and the agent's last transcript
+  entries. A "message queued, agent already running" reply is not evidence it will act.
+- If the resume itself is refused, follow \[[quote-a-refusal-before-substituting]\] before
+  dispatching a fresh agent.
 - A resume re-enters the agent's original model tier without passing through any dispatch-time check.
   Count it against the concurrency budget before sending.
 

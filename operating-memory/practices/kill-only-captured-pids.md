@@ -37,6 +37,17 @@ already notifies. Subagents poll their own background runs; they do not idle wai
 - Every dispatch prompt carries, verbatim: "never use pkill/killall or kill pgrep -f output; run long
   jobs in the foreground (bounded timeout) or poll your own background run on its output marker; never
   wait for a notification."
+- Put the bound INSIDE the loop, never in the tool's timeout:
+  `for i in $(seq 1 18); do [ -e out/ALL-DONE ] && break; sleep 30; done`. The harness moves a
+  foreground command that hits its tool timeout into the background, where it keeps running. One
+  agent told to "poll in the foreground" wrote an unbounded `until … sleep 60`, and each call leaked a
+  background shell every 10 minutes; ten were live when the owner asked why.
+- End the old waiter before starting a new one, and when a rebase or restart kills the run it waits
+  on. The same agent started a fresh waiter on every wake: six waited on a marker from a run it had
+  itself killed. Say both sentences in every build brief that may rebase.
+- A mid-turn agent reads no message until its current call returns. To stop a stranded wait
+  promptly, kill that wait's PID (which returns the call), after the transcript shows it is the
+  agent's live call.
 - Auditing waiters: read each waiter's predicate against its target before killing, and kill by PID.
 - Treat a pattern-kill in any agent report as a near miss to record.
 - After killing an agent, check `git status --short` and `git diff` before dispatching a replacement

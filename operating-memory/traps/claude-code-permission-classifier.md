@@ -19,6 +19,7 @@ verified: unverified
 - For a landing wave, ask the owner up front for a permission rule, or for the owner to run each push themselves.
 - Only when the owner has installed an allow rule for a literal command, issue exactly that literal command. If it is refused, do not reword it and do not retry it from another agent; hand the owner the exact command.
 - Brief build agents to push a branch, and to stage everything and write the exact push commands when refused.
+- The orchestrator lands the branch from the shared checkout, on `main` and clean: `git merge --ff-only <sha>`, then a bare `git push origin main` as its own tool call, never inside an `&&` compound. In one session a compound push was refused even after an in-session owner grant; once auto mode was exited, the plain form went through at once.
 - Route agent-to-agent sends through a narrowly allowed tool, not ad-hoc Bash that carries tokens.
 - When reviewing a messaging or identity system, check where every claimed identity comes from, not just that a check exists.
 

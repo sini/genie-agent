@@ -32,6 +32,11 @@ authorise any particular fix.
   only on the next reply.
 - An offer the reply does not address is DEAD. Re-raise it or drop it; do not fold it into the next
   action. Touching a published or frozen artefact needs a directive naming that artefact.
+- A hedge ("I don't know", "maybe", "it seems") or a critique of one arm is not a ruling, even when
+  it implies a simpler rule. The orchestrator proposed a guard exemption; the owner answered "I don't
+  know, … we may as well also screen" the other case. The orchestrator read the counter-point as the
+  decision and sent a plan to an external agent. Owner: "Why did you send a plan … in response to me
+  saying 'I don't know' without discussing the decision with me?" Lay out the arms and ask.
 - Relaying a ruling to a builder: scope it to what was said. If the only sound fix changes a published
   surface, the builder stops and writes an impact section: what the pin protects, every reader, which
   law it touches, the saving. The owner then chooses.

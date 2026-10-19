@@ -38,5 +38,7 @@ kill working agents.
 - Name every agent `<task>-<role>` so the owner can track the fleet and you can address it.
 - While the owner is present in a live decision session, keep it to 2-3 concurrent agents
   (\[[presenting-a-decision]\]).
+- The agent cap is not the only bound: heavy units are also sized to the host's heavy-run lock
+  (\[[size-heavy-work-to-the-lock]\]).
 
-Related: \[[resume-failed-agents]\] \[[one-writer-per-checkout]\] \[[presenting-a-decision]\]
+Related: \[[resume-failed-agents]\] \[[one-writer-per-checkout]\] \[[presenting-a-decision]\] \[[size-heavy-work-to-the-lock]\]

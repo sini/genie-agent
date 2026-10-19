@@ -17,6 +17,10 @@ session removes the owner's last checkpoint. The split keeps both: work flows, d
 
 - Author and commit under the repo's normal conventions (linear history, module conventions). The
   report names the change for approval and says "deployment owed by the owner".
+- The owner may grant a session the deploy for one named coordination (for example "deploy these
+  two services once the other agents are ready"). Scope the grant to exactly that. Readiness may come
+  from the coordinating session, but the authority is the owner's grant, never a relay; outside that
+  coordination the rule above holds.
 - Secrets: always use the repo's declared generators (for example `agenix generate` with
   agenix-rekey). Hand-encrypt only values issued externally, and document the provisioning procedure
   next to the declaration. Hand-rolled values fork provenance from the generators.
