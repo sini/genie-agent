@@ -23,6 +23,19 @@ if (!XMSG_BIN || !existsSync(XMSG_BIN)) {
   throw new Error(`XMSG_BIN environment variable is required and must point to a valid executable (got: ${XMSG_BIN})`);
 }
 
+// Stops a child and resolves only once it has exited, so a caller that then removes the child's working
+// directory never races its last writes. SIGTERM first, SIGKILL after `graceMs`, and either way it waits for `exit`.
+async function stopChild(c: ChildProcess | null | undefined, graceMs = 3000): Promise<void> {
+  if (!c || c.exitCode !== null || c.signalCode !== null) return;
+  const exited = new Promise<void>((r) => c.once("exit", () => r()));
+  c.kill("SIGTERM");
+  const timer = setTimeout(() => {
+    if (c.exitCode === null && c.signalCode === null) c.kill("SIGKILL");
+  }, graceMs);
+  await exited;
+  clearTimeout(timer);
+}
+
 const GENIE_GUARD_BIN = process.env.GENIE_GUARD_BIN;
 if (!GENIE_GUARD_BIN || !existsSync(GENIE_GUARD_BIN)) {
   throw new Error(
@@ -119,17 +132,7 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
   };
 
   const stop = async () => {
-    const c = currentChild;
-    if (c && c.exitCode === null) {
-      c.kill("SIGTERM");
-      await new Promise<void>((r) => {
-        c.on("exit", () => r());
-        setTimeout(() => {
-          if (c.exitCode === null) c.kill("SIGKILL");
-          r();
-        }, 3000);
-      });
-    }
+    await stopChild(currentChild);
     rmSync(dir, { recursive: true, force: true });
   };
 
@@ -294,11 +297,7 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
     assert.equal(reply.cleaned_text, "");
     assert.ok(receivedPrompt.length > 0, "ninfer chat completion should have received a request");
   } finally {
-    if (guardProc && guardProc.exitCode === null) {
-      guardProc.kill("SIGTERM");
-      await sleep(50);
-      if (guardProc.exitCode === null) guardProc.kill("SIGKILL");
-    }
+    await stopChild(guardProc);
     if (ninferServer) {
       ninferServer.close();
       ninferServer.closeAllConnections();
@@ -440,11 +439,7 @@ process.stdin.on("data", (chunk) => {
       };
 
       const stop = async () => {
-        if (child.exitCode === null) {
-          child.kill("SIGTERM");
-          await sleep(50);
-          if (child.exitCode === null) child.kill("SIGKILL");
-        }
+        await stopChild(child);
         try {
           rmSync(inboxSock, { force: true });
         } catch {
@@ -1831,9 +1826,7 @@ test(
       }
       assert.equal(registered, true, `genie-root SEA binary must register as genie on xmsg serve (stderr: ${rootStderr})`);
     } finally {
-      if (rootProc && rootProc.exitCode === null) {
-        rootProc.kill("SIGTERM");
-      }
+      await stopChild(rootProc);
       await node.stop();
     }
   },
@@ -2040,9 +2033,7 @@ process.stdin.on("end", () => process.exit(0));
       assert.equal(dropLines.length, 1, `expected exactly 1 drop log line, got: ${JSON.stringify(stderrLines)}`);
       assert.equal(reRegLines.length, 1, `expected exactly 1 re-registration log line, got: ${JSON.stringify(stderrLines)}`);
     } finally {
-      if (rootProc && rootProc.exitCode === null) {
-        rootProc.kill("SIGTERM");
-      }
+      await stopChild(rootProc);
       await node.stop();
     }
   },
