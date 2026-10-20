@@ -358,6 +358,11 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/guard
+                    ./src/root/io.ts
+                    ./src/root/index.ts
+                    ./src/escalation/index.ts
+                    ./src/state/index.ts
+                    ./src/tier/index.ts
                     ./src/supervisor/guard-client.ts
                     ./src/supervisor/seed.ts
                     ./schemas/fixtures/verdict
@@ -383,9 +388,11 @@
                   && grep -q '^ok [0-9]* - unparseable output fails closed to reject$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle 1 (G9): an allow reply with empty cleaned_text is accepted, and the forwarded text is the original$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle 2 (G9): an allow reply with a slightly different cleaned_text is still accepted, and the original is forwarded$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (GI-12 b): a reject without a valid class is logged and treated as allow$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle 3 (G9): in-repo corpus has no verdict regressions across saved runs and empty-cleaned_text allows$' $TMPDIR/tap \
                   && grep -q "^ok [0-9]* - oracle 4 (G9): a 4 KB envelope's allow reply fits without truncation$" $TMPDIR/tap \
                   && grep -q "^ok [0-9]* - oracle 5b (G9.1): review and reviewOut log loudly when reasoning_tokens > 0 or finish_reason === 'length', while preserving fail-closed behaviour$" $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (GI-12 c): genie-guard logs one line per verdict (message id, verdict, class, latency ms) and every error$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1

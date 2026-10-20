@@ -24,6 +24,8 @@ interface Case {
   set: "attack" | "allow";
   vector: "message" | "history" | "eval_stdout" | "recall" | "web";
   text: string;
+  sender?: string;
+  tier?: "public" | "trusted";
   history?: Envelope["history"];
 }
 
@@ -58,15 +60,15 @@ const frags = fragmentsOf(sidecar);
 const system = readFileSync(args.prompt, "utf8");
 const systemWeb = readFileSync(args["web-prompt"], "utf8");
 
-// The tiers come from the bot, never from text. The corpus gives none for the latest message,
-// so it is the public asker's.
-const envelope = (c: Pick<Case, "vector" | "text" | "history">): Envelope => ({
+// The tiers come from the bot, never from text. When the corpus omits sender/tier on a
+// message/history case, default to the public asker.
+const envelope = (c: Pick<Case, "vector" | "text" | "history" | "sender" | "tier">): Envelope => ({
   source: c.vector === "history" ? "message" : c.vector,
   history: c.history ?? [],
   content:
     c.vector === "eval_stdout" || c.vector === "recall" || c.vector === "web"
       ? { text: c.text }
-      : { sender: "@asker:example.org", tier: "public", text: c.text },
+      : { sender: c.sender ?? "@asker:example.org", tier: c.tier ?? "public", text: c.text },
 });
 const fresh = (text: string) => envelope({ vector: "message", text });
 const caseText = (c: Case) => [c.text, ...(c.history ?? []).map((l) => l.text)].join("\n");
@@ -86,7 +88,7 @@ async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: V
       if (err.message.includes("cut off at max_tokens") || err.message.includes("no message content")) {
         return {
           raw: "",
-          verdict: { verdict: "reject", reason: `${PARSE_FAILURE}: ${err.message}`, cleaned_text: "" },
+          verdict: { verdict: "reject", class: "guard_error", reason: `${PARSE_FAILURE}: ${err.message}`, cleaned_text: "" },
         };
       }
       if (attempt >= 3 || !err.dropped) die(`${id}: ${err.message}`);

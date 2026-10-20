@@ -15,7 +15,7 @@ import {
   type XmsgClient,
 } from "../dispatcher/xmsg.ts";
 import type { XmsgSend } from "../escalation/index.ts";
-import { type Envelope, type Verdict, verdictErrors } from "../guard/verdict.ts";
+import { isValidRejectClass, type Envelope, type Verdict, verdictErrors } from "../guard/verdict.ts";
 import type { GuardClient, Unavailable } from "../supervisor/guard-client.ts";
 import type { Inbound, Intake, Io, Post, PostPayload } from "./index.ts";
 
@@ -147,7 +147,10 @@ export class XmsgGuardClient implements GuardClient {
   }
 }
 
-export function parseGuardVerdictReply(raw: string): Verdict | Unavailable {
+export function parseGuardVerdictReply(
+  raw: string,
+  log?: (line: string) => void,
+): Verdict | Unavailable {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -161,7 +164,13 @@ export function parseGuardVerdictReply(raw: string): Verdict | Unavailable {
   if (errs.length > 0) {
     return { unavailable: `invalid guard verdict: ${errs.join("; ")}` };
   }
-  return parsed as Verdict;
+  const v = parsed as Verdict;
+  if (v.verdict === "reject" && !isValidRejectClass(v.class)) {
+    const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    l(`genie-guard: reject without valid class (${JSON.stringify(v.class)}) treated as allow: ${v.reason}`);
+    return { verdict: "allow", reason: v.reason, cleaned_text: "" };
+  }
+  return v;
 }
 
 import type { Tier } from "../state/index.ts";

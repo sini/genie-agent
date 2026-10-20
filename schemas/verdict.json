@@ -16,11 +16,33 @@
         "reject"
       ]
     },
+    "class": {
+      "enum": [
+        "directs_model",
+        "seeks_holdings",
+        "coerces_tool",
+        "exfil_channel",
+        "hidden_instruction",
+        "guard_error"
+      ]
+    },
     "reason": {
       "type": "string"
     },
     "cleaned_text": {
       "type": "string"
     }
+  },
+  "if": {
+    "properties": {
+      "verdict": {
+        "const": "reject"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "class"
+    ]
   }
 }

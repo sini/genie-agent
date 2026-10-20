@@ -34,8 +34,8 @@ if is_outbound:
 else:
     SETS = {"attack": 40, "allow": 30}
     VECTORS = {"message", "history", "eval_stdout", "recall", "web"}
-    KEYS = {"id", "set", "vector", "text", "history", "note"}
-    REQUIRED = KEYS - {"history"}
+    KEYS = {"id", "set", "vector", "text", "history", "sender", "tier", "note"}
+    REQUIRED = KEYS - {"history", "sender", "tier"}
 
 errors = []
 ids = set()
@@ -79,6 +79,10 @@ for n, line in enumerate(lines, 1):
     else:
         if "vector" in c and c["vector"] not in VECTORS:
             errors.append(f"line {n}: vector {c['vector']!r} not in {sorted(VECTORS)}")
+        if "tier" in c and c["tier"] not in ("trusted", "public"):
+            errors.append(f"line {n}: tier {c['tier']!r} not in ('trusted', 'public')")
+        if "sender" in c and not (isinstance(c["sender"], str) and c["sender"].strip()):
+            errors.append(f"line {n}: sender is not a non-empty string")
         hist = c.get("history")
         if c.get("vector") == "history" and hist is None:
             errors.append(f"line {n}: vector history without a history field")

@@ -166,7 +166,7 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
     if (parsed !== undefined) checkModelRegression(parsed, choice, n.log);
     const raw: unknown = choice?.message?.content;
     if (choice?.finish_reason !== "length" && typeof raw === "string" && raw.trim().length > 0)
-      return { raw, verdict: parseVerdict(raw, e) };
+      return { raw, verdict: parseVerdict(raw, e, n.log) };
     if (attempt >= 2)
       throw new Unavailable(
         choice?.finish_reason === "length" ? "the reply was cut off at max_tokens" : "no message content in the reply",
@@ -276,22 +276,41 @@ export function envelopeErrors(value: unknown): string[] {
   return errors;
 }
 
+const defaultLog = (line: string) => process.stderr.write(`${line}\n`);
+
 // The reply to one message's text: the verdict, or `{"error": …}` when there is none.
-export async function handle(text: string, n: Ninfer): Promise<string> {
+export async function handle(text: string, n: Ninfer, id = "-"): Promise<string> {
+  const l = n.log ?? defaultLog;
+  const t0 = Date.now();
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    return JSON.stringify({ error: "not an envelope: unparseable" });
+    const err = "not an envelope: unparseable";
+    l(`genie-guard: error id=${id} latency_ms=${Date.now() - t0}: ${err}`);
+    return JSON.stringify({ error: err });
   }
   const errors = envelopeErrors(value);
-  if (errors.length) return JSON.stringify({ error: `not an envelope: ${errors.join("; ")}` });
+  if (errors.length) {
+    const err = `not an envelope: ${errors.join("; ")}`;
+    l(`genie-guard: error id=${id} latency_ms=${Date.now() - t0}: ${err}`);
+    return JSON.stringify({ error: err });
+  }
   try {
-    const { verdict, reason, cleaned_text } = (await review(value as Envelope, n)).verdict;
-    return JSON.stringify({ verdict, reason, cleaned_text });
+    const v = (await review(value as Envelope, n)).verdict;
+    const latencyMs = Date.now() - t0;
+    const cls = v.class ?? "-";
+    l(`genie-guard: verdict id=${id} verdict=${v.verdict} class=${cls} latency_ms=${latencyMs}`);
+    return JSON.stringify(
+      v.class !== undefined
+        ? { verdict: v.verdict, class: v.class, reason: v.reason, cleaned_text: v.cleaned_text }
+        : { verdict: v.verdict, reason: v.reason, cleaned_text: v.cleaned_text },
+    );
   } catch (e) {
     if (!(e instanceof Unavailable)) throw e;
-    return JSON.stringify({ error: `guard-in unavailable: ${e.message}` });
+    const err = `guard-in unavailable: ${e.message}`;
+    l(`genie-guard: error id=${id} latency_ms=${Date.now() - t0}: ${err}`);
+    return JSON.stringify({ error: err });
   }
 }
 
@@ -304,7 +323,7 @@ export async function step(
 ): Promise<Inbound | null> {
   const m = await x.poll(waitMs);
   if (!m) return null;
-  await x.reply(m.id, await handle(m.text, n));
+  await x.reply(m.id, await handle(m.text, n, m.id));
   await x.ack(m.id);
   return m;
 }

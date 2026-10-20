@@ -7,8 +7,31 @@
 // forwards and archives the parsed verdict, never `raw`.
 
 // schemas/verdict.json
+export type ModelRejectClass =
+  | "directs_model"
+  | "seeks_holdings"
+  | "coerces_tool"
+  | "exfil_channel"
+  | "hidden_instruction";
+
+export type RejectClass = ModelRejectClass | "guard_error";
+
+export const MODEL_REJECT_CLASSES: readonly ModelRejectClass[] = [
+  "directs_model",
+  "seeks_holdings",
+  "coerces_tool",
+  "exfil_channel",
+  "hidden_instruction",
+];
+
+export const REJECT_CLASSES: readonly RejectClass[] = [
+  ...MODEL_REJECT_CLASSES,
+  "guard_error",
+];
+
 export interface Verdict {
   verdict: "allow" | "rewrite" | "reject";
+  class?: RejectClass;
   reason: string;
   cleaned_text: string;
 }
@@ -32,19 +55,32 @@ export const REASON_MAX = 300;
 export const CLEANED_SLACK = 200;
 
 const verdicts = ["allow", "rewrite", "reject"];
-const keys = ["verdict", "reason", "cleaned_text"];
+const requiredKeys = ["verdict", "reason", "cleaned_text"];
+const allowedKeys = ["verdict", "class", "reason", "cleaned_text"];
+
+export function isModelRejectClass(c: unknown): c is ModelRejectClass {
+  return typeof c === "string" && (MODEL_REJECT_CLASSES as readonly string[]).includes(c);
+}
+
+export function isValidRejectClass(c: unknown): c is RejectClass {
+  return typeof c === "string" && (REJECT_CLASSES as readonly string[]).includes(c);
+}
 
 // The schema's violations by `value`, empty when it validates.
+// Note: `parseVerdict` handles a `reject` lacking a valid `class` separately by logging and
+// coercing to `allow` (GI-12(b)); `verdictErrors` validates the post-coercion Verdict shape too.
 export function verdictErrors(value: unknown): string[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return ["not an object"];
   const v = value as Record<string, unknown>;
   const errors = Object.keys(v)
-    .filter((k) => !keys.includes(k))
+    .filter((k) => !allowedKeys.includes(k))
     .map((k) => `unknown key ${k}`);
-  for (const k of keys) {
+  for (const k of requiredKeys) {
     if (!(k in v)) errors.push(`missing ${k}`);
     else if (typeof v[k] !== "string") errors.push(`${k} is not a string`);
   }
+  if ("class" in v && v.class !== undefined && typeof v.class !== "string")
+    errors.push("class is not a string");
   if (typeof v.verdict === "string" && !verdicts.includes(v.verdict))
     errors.push(`verdict ${JSON.stringify(v.verdict)} not in ${verdicts.join("|")}`);
   return errors;
@@ -85,6 +121,7 @@ export const PARSE_FAILURE = "guard-in output invalid: ";
 
 const reject = (why: string): Verdict => ({
   verdict: "reject",
+  class: "guard_error",
   reason: PARSE_FAILURE + why,
   cleaned_text: "",
 });
@@ -101,7 +138,11 @@ function unwrap(reply: string): string {
     : t;
 }
 
-export function parseVerdict(reply: string, reviewed: Envelope): Verdict {
+export function parseVerdict(
+  reply: string,
+  reviewed: Envelope,
+  log?: (line: string) => void,
+): Verdict {
   const raw = unwrap(reply);
   let value: unknown;
   try {
@@ -116,6 +157,21 @@ export function parseVerdict(reply: string, reviewed: Envelope): Verdict {
   const v = value as Verdict;
   const broken = contractErrors(v, reviewed);
   if (broken.length) return reject(broken.join("; "));
+  // GI-12(b): a model reject must carry a valid `class` in MODEL_REJECT_CLASSES; a reject without
+  // one (including a model writing the reserved `guard_error` class) is logged and treated as `allow`.
+  if (v.verdict === "reject") {
+    if (!isModelRejectClass(v.class)) {
+      const l = log ?? ((line: string) => console.error(line));
+      l(
+        `genie-guard: reject without valid class (${JSON.stringify(v.class)}) treated as allow: ${v.reason}`,
+      );
+      return { verdict: "allow", reason: v.reason, cleaned_text: "" };
+    }
+    return { verdict: "reject", class: v.class, reason: v.reason, cleaned_text: "" };
+  }
   // Only a rewrite carries cleaned_text; allow and reject ignore whatever text the guard left.
-  return v.verdict === "rewrite" ? v : { ...v, cleaned_text: "" };
+  if (v.verdict === "rewrite") {
+    return { verdict: "rewrite", reason: v.reason, cleaned_text: v.cleaned_text };
+  }
+  return { verdict: "allow", reason: v.reason, cleaned_text: "" };
 }

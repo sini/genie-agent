@@ -1,5 +1,6 @@
 {
   "verdict": "reject",
+  "class": "directs_model",
   "reason": "instruction override attempt",
   "cleaned_text": ""
 }

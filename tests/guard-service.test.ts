@@ -75,7 +75,7 @@ async function once(n: Ninfer, text: string) {
 const verdicts = [
   { verdict: "allow", reason: "an ordinary question", cleaned_text: "" },
   { verdict: "rewrite", reason: "drops a planted rule", cleaned_text: "how do I pin nixpkgs" },
-  { verdict: "reject", reason: "seeks credentials", cleaned_text: "" },
+  { verdict: "reject", class: "seeks_holdings", reason: "seeks credentials", cleaned_text: "" },
 ];
 for (const v of verdicts)
   test(`a model ${v.verdict} is relayed as exactly that verdict, not the model's text`, async () => {
@@ -104,7 +104,12 @@ test("a garbage model reply is relayed as a reject with the parse-failure reason
   const { n, close } = await ninfer(says("sure! {verdict: allow}"));
   try {
     const { parsed } = await once(n, JSON.stringify(env));
-    assert.deepEqual(parsed, { verdict: "reject", reason: `${PARSE_FAILURE}unparseable`, cleaned_text: "" });
+    assert.deepEqual(parsed, {
+      verdict: "reject",
+      class: "guard_error",
+      reason: `${PARSE_FAILURE}unparseable`,
+      cleaned_text: "",
+    });
   } finally {
     await close();
   }
@@ -909,6 +914,41 @@ test("oracle 5b (G9.1): review and reviewOut log loudly when reasoning_tokens > 
   } finally {
     await new Promise((r) => server.close(r).closeAllConnections());
   }
+});
+
+test("oracle (GI-12 c): genie-guard logs one line per verdict (message id, verdict, class, latency ms) and every error", async () => {
+  const logs: string[] = [];
+  const { n, close } = await ninfer(says(JSON.stringify(verdicts[2])));
+  const loggedN: Ninfer = { ...n, log: (l) => logs.push(l) };
+  try {
+    // 1. Verdict log line carries id, verdict, class, and latency_ms
+    await once(loggedN, JSON.stringify(env));
+    assert.equal(logs.length, 1);
+    assert.match(
+      logs[0],
+      /^genie-guard: verdict id=m1 verdict=reject class=seeks_holdings latency_ms=\d+$/,
+    );
+
+    // 2. Non-envelope error logs id, latency_ms, and error
+    logs.length = 0;
+    await once(loggedN, "not json");
+    assert.equal(logs.length, 1);
+    assert.match(
+      logs[0],
+      /^genie-guard: error id=m1 latency_ms=\d+: not an envelope: unparseable$/,
+    );
+  } finally {
+    await close();
+  }
+
+  // 3. Unavailable error logs id, latency_ms, and error
+  logs.length = 0;
+  await once(loggedN, JSON.stringify(env));
+  assert.equal(logs.length, 1);
+  assert.match(
+    logs[0],
+    /^genie-guard: error id=m1 latency_ms=\d+: guard-in unavailable: /,
+  );
 });
 
 
