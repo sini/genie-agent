@@ -136,11 +136,12 @@ test("an unreadable journal refuses to start rather than forgetting every thread
 });
 
 // The real adapter, by its command lines.
-const cli = (replies: Record<string, string>) => {
+const cli = (replies: Record<string, string>, claude?: string) => {
   const calls: { argv: string[]; env: Record<string, string | undefined> }[] = [];
   const herdr = new CliHerdr({
     session: "public",
     basePane: "w1:p1",
+    claude,
     run: async (argv, env) => {
       calls.push({ argv, env });
       const key = argv.slice(3, 5).join(" ");
@@ -170,6 +171,19 @@ test("the cli adapter splits a pane under the config directory and starts claude
     ],
   );
   assert.equal(calls[0].env.HERDR_SOCKET_PATH, undefined);
+});
+
+test("the cli adapter passes --command to herdr agent start when claude path is configured", async () => {
+  const { herdr, calls } = cli({
+    "pane split": ok({ pane: { pane_id: "w1:p7" } }),
+    "agent start": ok({ type: "agent_started" }),
+  }, "/nix/store/claude/bin/claude");
+  await herdr.start({ name: "genie-1", configDir: "/cfg/a", cwd: "/cwd", args: ["--resume", "u-1"] });
+  assert.deepEqual(
+    calls[1].argv,
+    ["herdr", "--session", "public", "agent", "start", "genie-1", "--kind", "claude", "--pane", "w1:p7",
+      "--command", "/nix/store/claude/bin/claude", "--timeout", "60000", "--", "--resume", "u-1"],
+  );
 });
 
 test("the cli adapter closes the pane when claude does not start", async () => {

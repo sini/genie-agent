@@ -17,9 +17,10 @@ const settings = {
   tokenConfigDir: ["--token-config-dir", "GENIE_TOKEN_CONFIG_DIR"],
   model: ["--model", "GENIE_MODEL"],
   serviceName: ["--service-name", "GENIE_SERVICE_NAME"],
+  claudeBin: ["--claude-bin", "GENIE_CLAUDE_BIN"],
 } as const;
 
-const OPTIONAL_SETTINGS = new Set(["model", "serviceName"]);
+const OPTIONAL_SETTINGS = new Set(["model", "serviceName", "claudeBin"]);
 
 export interface Config {
   stateDir: string;
@@ -29,6 +30,7 @@ export interface Config {
   tokenConfigDir: string;
   model?: string;
   serviceName: string;
+  claudeBin?: string;
   // `$XDG_RUNTIME_DIR/xmsg`, the tier's xmsg instance.
   xmsgDir: string;
 }
@@ -73,7 +75,7 @@ export async function startDispatcher(
   await x.register();
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
-    herdr: deps.herdr ?? new CliHerdr({ session: c.session, basePane: c.basePane }),
+    herdr: deps.herdr ?? new CliHerdr({ session: c.session, basePane: c.basePane, claude: c.claudeBin }),
     xmsg: x,
     pickToken: () => ({ id: c.tokenConfigDir, configDir: c.tokenConfigDir }),
     cwd: c.cwd,

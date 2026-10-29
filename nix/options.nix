@@ -445,6 +445,14 @@ rec {
             herdrPackage = lib.mkOption {
               type = lib.types.nullOr lib.types.package;
               default = null;
+              apply =
+                p:
+                if p != null && (p ? src) then
+                  p.overrideAttrs (old: {
+                    patches = (old.patches or [ ]) ++ [ ./patches/herdr-agent-start-command.patch ];
+                  })
+                else
+                  p;
               description = "The herdr package used by genie-herdr@<tier> and genie-dispatcher@<tier>.";
             };
 

@@ -1,0 +1,127 @@
+--- a/docs/next/api/herdr-api.schema.json
++++ b/docs/next/api/herdr-api.schema.json
+@@ -1347,6 +1347,13 @@
+               },
+               "type": "array"
+             },
++            "command": {
++              "description": "Executable path or command override used to launch the agent in place of the canonical executable for `kind`.",
++              "type": [
++                "string",
++                "null"
++              ]
++            },
+             "kind": {
+               "type": "string"
+             },
+--- a/src/api/schema/agents.rs
++++ b/src/api/schema/agents.rs
+@@ -168,6 +168,9 @@
+     pub name: String,
+     pub kind: String,
+     pub pane_id: String,
++    /// Executable path or command override used to launch the agent in place of the canonical executable for `kind`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub command: Option<String>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub args: Vec<String>,
+     /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
+--- a/src/api/schema/tests.rs
++++ b/src/api/schema/tests.rs
+@@ -98,6 +98,7 @@
+             name: "reviewer".into(),
+             kind: "pi".into(),
+             pane_id: "w1:p2".into(),
++            command: None,
+             args: vec!["--no-session".into()],
+             timeout_ms: Some(30_000),
+         }),
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -154,6 +154,10 @@
+             return Err(AgentStartError::UnsupportedKind(params.kind));
+         };
+         if params
++            .command
++            .as_deref()
++            .is_some_and(|cmd| cmd.is_empty() || cmd.chars().any(char::is_control))
++            || params
+             .args
+             .iter()
+             .any(|arg| arg.chars().any(char::is_control))
+@@ -194,7 +198,10 @@
+         let shell_name = available_shell_name(runtime)
+             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+ 
+-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
++        let executable = params
++            .command
++            .unwrap_or_else(|| crate::detect::interactive_agent_executable(kind).to_string());
++        let mut argv = vec![executable];
+         argv.extend(params.args);
+         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
+             .ok_or(AgentStartError::InvalidArgument)?;
+--- a/src/cli/agent.rs
++++ b/src/cli/agent.rs
+@@ -288,7 +288,7 @@
+ 
+ fn agent_start(args: &[String]) -> std::io::Result<i32> {
+     let Some(name) = args.first() else {
+-        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]");
++        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--command PATH] [--timeout MS] [-- <agent-args...>]");
+         return Ok(2);
+     };
+     let separator = args
+@@ -297,6 +297,7 @@
+         .unwrap_or(args.len());
+     let mut kind = None;
+     let mut pane_id = None;
++    let mut command = None;
+     let mut timeout_ms = None;
+     let mut index = 1;
+     while index < separator {
+@@ -317,6 +318,14 @@
+                 pane_id = Some(super::normalize_pane_id(value));
+                 index += 2;
+             }
++            "--command" => {
++                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
++                    eprintln!("missing value for --command");
++                    return Ok(2);
++                };
++                command = Some(value.clone());
++                index += 2;
++            }
+             "--timeout" => {
+                 let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
+                     eprintln!("missing value for --timeout");
+@@ -375,6 +384,7 @@
+                 name: name.clone(),
+                 kind: kind.clone(),
+                 pane_id: pane_id.clone(),
++                command: command.clone(),
+                 args: agent_args.clone(),
+                 timeout_ms,
+             }),
+@@ -941,7 +951,7 @@
+     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
+     eprintln!("  herdr agent attach <target> [--takeover]");
+     eprintln!(
+-        "  herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]"
++        "  herdr agent start <name> --kind KIND --pane ID [--command PATH] [--timeout MS] [-- <agent-args...>]"
+     );
+     eprintln!("  herdr agent explain <target> [--json|--format text|json] [--verbose]");
+     eprintln!(
+--- a/src/cli/spec.rs
++++ b/src/cli/spec.rs
+@@ -418,6 +418,10 @@
+                         .help("Existing pane at an interactive shell prompt"),
+                 )
+                 .arg(
++                    option("command", "PATH")
++                        .help("Executable path or command override for launching the agent"),
++                )
++                .arg(
+                     option("timeout", "MS")
+                         .help("Wait for interactive readiness (default: 30000; max: 300000)"),
+                 )

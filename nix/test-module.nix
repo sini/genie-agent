@@ -39,6 +39,7 @@ let
           experts = {
             enable = true;
             herdrPackage = pkgs.writeShellScriptBin "herdr" "exit 0";
+            claudePackage = pkgs.writeShellScriptBin "claude" "exit 0";
             public = {
               address = "genie-expert-public@sini.bitstream";
               reposDir = "/var/lib/genie/public-repos";

@@ -123,7 +123,7 @@ pkgs.testers.runNixOSTest {
     probe = node { herdrPackage = probeHerdr; };
     real = node { herdrPackage = pkgs.herdr; };
   };
-  testScript = ''
+  testScript = { nodes, ... }: ''
     import shlex
     import time
 
@@ -204,7 +204,12 @@ pkgs.testers.runNixOSTest {
          f"@trusted settings.json read fails; settings marker occurrences in trusted log = {tru_settings}")
 
     # V3 (arm C): the real herdr, driven as CliHerdr.start drives it.
-    h = "setpriv --reuid=1000 --regid=100 --init-groups env HOME=${stateDir} XDG_RUNTIME_DIR=/run/user/1000 ${lib.getExe pkgs.herdr} --session genie-public"
+    herdr_bin = "${lib.getExe nodes.real.services.genie-agent.experts.herdrPackage}"
+    disp_unit = real.succeed("systemctl cat genie-dispatcher@public")
+    import re
+    m_claude = re.search(r"--claude-bin\s+(\S+)", disp_unit)
+    claude_cmd_args = f"--command {m_claude.group(1)}" if m_claude else ""
+    h = f"setpriv --reuid=1000 --regid=100 --init-groups env HOME=${stateDir} XDG_RUNTIME_DIR=/run/user/1000 {herdr_bin} --session genie-public"
     jq = "${lib.getExe pkgs.jq}"
     base = real.succeed(f"{h} workspace create --cwd ${stateDir}/cwd-public --no-focus | {jq} -r .result.root_pane.pane_id").strip()
     pane = real.succeed(
@@ -212,7 +217,7 @@ pkgs.testers.runNixOSTest {
         f"--env CLAUDE_CONFIG_DIR=${stateDir}/claude-public --no-focus | {jq} -r .result.pane.pane_id"
     ).strip()
     # The probe claude records and then sleeps; it never reports ready, so agent start times out.
-    print(real.execute(f"{h} agent start probe --kind claude --pane {pane} --timeout 15000 -- --probe")[1])
+    print(real.execute(f"{h} agent start probe --kind claude --pane {pane} {claude_cmd_args} --timeout 15000 -- --probe")[1])
     print(real.execute(f"{h} pane read {pane}")[1])
     # Diagnostic, not a cell: does the token reach the pane's shell, and what PATH does it run with?
     real.execute(f"{h} pane run {pane} " + shlex.quote('printf "DIAG tokhash=%s\\n" "$(printf %s "$CLAUDE_CODE_OAUTH_TOKEN" | sha256sum | cut -c1-64)"; echo "DIAG PATH=$PATH"'))

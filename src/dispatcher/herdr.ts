@@ -42,6 +42,7 @@ export interface CliOptions {
   basePane: string;
   readyTimeoutMs?: number;
   herdr?: string;
+  claude?: string;
   run?: Run;
 }
 
@@ -71,6 +72,7 @@ export class CliHerdr implements Herdr {
     try {
       await this.json([
         "agent", "start", s.name, "--kind", "claude", "--pane", pane,
+        ...(this.o.claude ? ["--command", this.o.claude] : []),
         "--timeout", String(this.o.readyTimeoutMs ?? 60000), "--", ...s.args,
       ]);
     } catch (e) {
