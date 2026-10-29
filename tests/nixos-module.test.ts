@@ -216,3 +216,42 @@ test("oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false om
     "services.genie-agent: guardRef must be set when guard.enable is true.",
   ]);
 });
+
+test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-write and exactly its repos and memory read-only, runs in a private PID namespace, and only herdr loads the tier token", () => {
+  for (const tier of ["public", "trusted"] as const) {
+    const expectedRepo = tier === "public" ? "/var/lib/genie/public-repos" : "/home/sini/Documents/repos/sini";
+    const expectedMem = tier === "public" ? "/var/lib/genie/support-memory" : "/home/sini/.claude/memory";
+    for (const kind of ["herdr", "dispatcher"] as const) {
+      const name = `genie-${kind}@${tier}`;
+      const sc = summary.units[name].serviceConfig;
+      // Exact sets: an allowlist, so any extra source (a parent of the credential, ~/.claude) is red.
+      assert.deepEqual(sc.BindPaths, ["/run/user/1000/xmsg"], `${name} BindPaths`);
+      assert.deepEqual(
+        [...sc.BindReadOnlyPaths].sort(),
+        [expectedRepo, expectedMem].sort(),
+        `${name} BindReadOnlyPaths`,
+      );
+      assert.equal(sc.PrivatePIDs, true, `${name} must set PrivatePIDs (no /proc/<pid>/root walk into the operator's namespace)`);
+    }
+    assert.equal(
+      summary.units[`genie-herdr@${tier}`].serviceConfig.EnvironmentFile,
+      `/run/agenix/genie-expert-${tier}-token`,
+      `genie-herdr@${tier} must load its own tier token`,
+    );
+    assert.equal(
+      summary.units[`genie-dispatcher@${tier}`].serviceConfig.EnvironmentFile,
+      null,
+      `genie-dispatcher@${tier} must not load the token`,
+    );
+    const bootstrap = readFileSync(summary.units[`genie-dispatcher@${tier}`].serviceConfig.ExecStartPre, "utf8");
+    assert.ok(!bootstrap.includes(".credentials.json"), `genie-dispatcher@${tier} bootstrap must not place a credential`);
+  }
+  assert.deepEqual(summary.localTmpfiles, [
+    "d /var/lib/genie-agent/claude-public 0700 sini - -",
+    "d /var/lib/genie-agent/claude-trusted 0700 sini - -",
+  ]);
+  assert.deepEqual(summary.localFailedAssertions, []);
+  assert.deepEqual(summary.noTierTokenFailedAssertions, [
+    "services.genie-agent.experts.enable requires experts.herdrPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.",
+  ]);
+});

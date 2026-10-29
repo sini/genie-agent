@@ -46,6 +46,13 @@ rec {
             default = null;
             description = "Optional Claude model override (`--model`) for genie-dispatcher@${tier}.";
           };
+
+          tokenEnvironmentFile = lib.mkOption {
+            type = lib.types.nullOr (secretPathType lib);
+            default = null;
+            example = "/run/agenix/genie-expert-${tier}-token";
+            description = "Root-owned EnvironmentFile holding `CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token>` for genie-herdr@${tier}; systemd reads it before dropping privileges, and no credential file is shared with the operator's `~/.claude`.";
+          };
         };
       };
     in
@@ -447,13 +454,6 @@ rec {
               description = "Optional Claude Code package placed on PATH for genie-herdr@<tier>.";
             };
 
-            credentialsFile = lib.mkOption {
-              type = lib.types.nullOr secretPath;
-              default = null;
-              example = "/home/sini/.claude/.credentials.json";
-              description = "Path to the Claude credentials JSON file symlinked into each tier's config dir in local mode.";
-            };
-
             permissionMode = lib.mkOption {
               type = lib.types.enum [
                 "bypassPermissions"
@@ -496,8 +496,13 @@ rec {
     [
       {
         assertion =
-          cfg.experts.enable -> (cfg.experts.herdrPackage != null && cfg.experts.credentialsFile != null);
-        message = "services.genie-agent.experts.enable requires both experts.herdrPackage and experts.credentialsFile to be set.";
+          cfg.experts.enable
+          -> (
+            cfg.experts.herdrPackage != null
+            && cfg.experts.public.tokenEnvironmentFile != null
+            && cfg.experts.trusted.tokenEnvironmentFile != null
+          );
+        message = "services.genie-agent.experts.enable requires experts.herdrPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.";
       }
       {
         assertion = (cfg.broker.threadLink != null) -> lib.hasInfix "{thread}" cfg.broker.threadLink;

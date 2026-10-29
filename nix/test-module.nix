@@ -39,16 +39,17 @@ let
           experts = {
             enable = true;
             herdrPackage = pkgs.writeShellScriptBin "herdr" "exit 0";
-            credentialsFile = "/home/sini/.claude/.credentials.json";
             public = {
               address = "genie-expert-public@sini.bitstream";
               reposDir = "/var/lib/genie/public-repos";
               memoryDir = "/var/lib/genie/support-memory";
+              tokenEnvironmentFile = "/run/agenix/genie-expert-public-token";
             };
             trusted = {
               address = "genie-expert-trusted@sini.bitstream";
               reposDir = "/home/sini/Documents/repos/sini";
               memoryDir = "/home/sini/.claude/memory";
+              tokenEnvironmentFile = "/run/agenix/genie-expert-trusted-token";
             };
           };
         };
@@ -161,6 +162,17 @@ let
     ];
   };
 
+  # GI-13: experts enabled with one tier's token file missing must fail the experts assertion.
+  evalNoTierToken = evalLocal.extendModules {
+    modules = [ { services.genie-agent.experts.trusted.tokenEnvironmentFile = lib.mkForce null; } ];
+  };
+
+  failedAssertions =
+    ev:
+    lib.filter (lib.hasPrefix "services.genie-agent") (
+      map (a: a.message) (lib.filter (a: !a.assertion) ev.config.assertions)
+    );
+
   localCfg = evalLocal.config.services.genie-agent;
   fullCfg = evalFull.config.services.genie-agent;
   noGuardCfg = evalNoGuard.config.services.genie-agent;
@@ -220,6 +232,8 @@ let
       BindPaths = u.serviceConfig.BindPaths or [ ];
       BindReadOnlyPaths = u.serviceConfig.BindReadOnlyPaths or [ ];
       ExecStartPre = u.serviceConfig.ExecStartPre or null;
+      PrivatePIDs = u.serviceConfig.PrivatePIDs or false;
+      EnvironmentFile = u.serviceConfig.EnvironmentFile or null;
     };
   };
 
@@ -252,6 +266,9 @@ let
     badGuardRefFailedAssertions = lib.filter (lib.hasPrefix "services.genie-agent:") (
       map (a: a.message) (lib.filter (a: !a.assertion) evalBadGuardRef.config.assertions)
     );
+    localFailedAssertions = failedAssertions evalLocal;
+    noTierTokenFailedAssertions = failedAssertions evalNoTierToken;
+    localTmpfiles = lib.filter (lib.hasInfix "/claude-") evalLocal.config.systemd.tmpfiles.rules;
     localRootAttrs = localRootJson.passthru.attrs;
     fullRootAttrs = fullRootJson.passthru.attrs;
     noGuardRootAttrs = noGuardRootJson.passthru.attrs;
@@ -302,6 +319,7 @@ pkgs.runCommand "genie-agent-nixos-module"
       && grep -q '^ok [0-9]* - oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expert deny rules, store-path-free secrets, and README isolation disclosure$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAttrs and src/root/index.ts Config$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false omit genie-guard unit, xmsg.guard, and guard-out-key credential; guard.enable = true with guardRef = null triggers assertion$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-write and exactly its repos and memory read-only, runs in a private PID namespace, and only herdr loads the tier token$' $TMPDIR/tap \
       && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
     touch $out
   ''

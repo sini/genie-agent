@@ -139,7 +139,6 @@ let
         set -euo pipefail
         mkdir -p -m 0700 "${claudeDir}" "${claudeDir}/sessions" "${claudeDir}/transcripts"
         mkdir -p -m 0700 "${cwdDir}" "${dispStateDir}" "${dispStateDir}/worktrees"
-        ln -sfn "${toString cfg.experts.credentialsFile}" "${claudeDir}/.credentials.json"
         install -m 0600 "${settingsJson}" "${claudeDir}/settings.json"
         install -m 0600 "${claudeJson}" "${claudeDir}/.claude.json"
         install -m 0644 "${claudeMd}" "${cwdDir}/CLAUDE.md"
@@ -150,11 +149,9 @@ let
         ln -sfn "${tierCfg.reposDir}" "${dispStateDir}/source-repos"
         ln -sfn "${tierCfg.memoryDir}" "${dispStateDir}/memory"
       '';
-      bindPaths =
-        lib.optional (cfg.xmsgSocket != null) (toString cfg.xmsgSocket)
-        ++ lib.optional (cfg.experts.credentialsFile != null) (
-          builtins.dirOf (toString cfg.experts.credentialsFile)
-        );
+      # The sandbox is an allowlist (GI-13): nothing under the operator's home is bound but the
+      # tier's repos and memory, both read-only below.
+      bindPaths = lib.optional (cfg.xmsgSocket != null) (toString cfg.xmsgSocket);
       bindReadOnlyPaths = [
         tierCfg.reposDir
         tierCfg.memoryDir
@@ -189,12 +186,22 @@ let
             StateDirectory = "genie-agent";
             RuntimeDirectory = "genie-agent";
             WorkingDirectory = toString cfg.stateDir;
-            ExecStart = "${pkgs.util-linux}/bin/setsid ${lib.getExe cfg.experts.herdrPackage} --session ${sessionName} server";
+            # No setsid: systemd already makes the main process a session leader, so setsid
+            # would fork, exit 0, and take the unit down.
+            ExecStart = "${lib.getExe cfg.experts.herdrPackage} --session ${sessionName} server";
             Restart = "on-failure";
             RestartSec = "5s";
             ProtectControlGroups = true;
+            # Same uid as the operator with PrivateUsers off: without a PID namespace,
+            # /proc/<pid>/root walks into the operator's mount namespace past every bind.
+            PrivatePIDs = true;
             BindPaths = lib.unique bindPaths;
             BindReadOnlyPaths = lib.unique bindReadOnlyPaths;
+          }
+          # The tier's token reaches claude only through the server's environment, which every
+          # pane inherits; the dispatcher never reads it.
+          // lib.optionalAttrs (tierCfg.tokenEnvironmentFile != null) {
+            EnvironmentFile = toString tierCfg.tokenEnvironmentFile;
           }
           // lib.optionalAttrs (effectiveGroup != null) {
             Group = effectiveGroup;
@@ -227,6 +234,7 @@ let
             Restart = "on-failure";
             RestartSec = "5s";
             ProtectControlGroups = true;
+            PrivatePIDs = true;
             BindPaths = lib.unique bindPaths;
             BindReadOnlyPaths = lib.unique bindReadOnlyPaths;
           }
@@ -292,6 +300,21 @@ in
         {
           genie-agent = { };
         };
+
+    # Each tier's config dir exists, owned by the service user, before any tier unit's namespace is set up.
+    systemd.tmpfiles.rules = lib.optionals cfg.experts.enable (
+      map
+        (
+          tier:
+          "d ${toString cfg.stateDir}/claude-${tier} 0700 ${cfg.user} ${
+            if effectiveGroup != null then effectiveGroup else "-"
+          } -"
+        )
+        [
+          "public"
+          "trusted"
+        ]
+    );
 
     systemd.services = {
       genie-agent = {
