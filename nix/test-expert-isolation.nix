@@ -154,11 +154,13 @@ pkgs.testers.runNixOSTest {
             st = m.execute(f"systemctl is-active genie-herdr@{tier}")[1].strip()
             cell(f"V0 {m.name} {tier}", st == "active", f"genie-herdr@{tier} is {st}")
 
-    # Probe node: a per-run marker in the operator's ~/.claude, generated in the VM.
+    # Probe node: one per-run marker per file in the operator's ~/.claude, generated in the VM, so a
+    # cell about memory/x is not reddened by a read of settings.json.
     c = "${claudeHome}"
     probe.succeed(
-        "head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \\n' > /root/marker",
-        f"for f in memory/x settings.json .credentials.json; do cat /root/marker > {c}/$f; chown sini:users {c}/$f; chmod 600 {c}/$f; done",
+        "for m in marker marker-settings marker-cred; do head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \\n' > /root/$m; done",
+        f"cat /root/marker > {c}/memory/x; cat /root/marker-settings > {c}/settings.json; cat /root/marker-cred > {c}/.credentials.json",
+        f"chown sini:users {c}/memory/x {c}/settings.json {c}/.credentials.json; chmod 600 {c}/memory/x {c}/settings.json {c}/.credentials.json",
         # an operator process outside every unit, in the host mount namespace
         "systemd-run --unit owner-sleep -p User=sini sleep infinity",
     )
@@ -171,8 +173,11 @@ pkgs.testers.runNixOSTest {
         probe.wait_until_succeeds(f"grep -q 'probe done' ${stateDir}/probe-{tier}.log", timeout=60)
     pub = "${stateDir}/probe-public.log"
     tru = "${stateDir}/probe-trusted.log"
-    # The probe logs, with the marker masked (it stays unprinted).
-    print(probe.succeed(f"sed \"s/$(cat /root/marker)/<MARKER>/g\" {pub} {tru}"))
+    # The probe logs, with the markers masked (they stay unprinted).
+    print(probe.succeed(
+        f"sed -e \"s/$(cat /root/marker)/<MARKER>/g\" -e \"s/$(cat /root/marker-settings)/<MARKER-SETTINGS>/g\" "
+        f"-e \"s/$(cat /root/marker-cred)/<MARKER-CRED>/g\" {pub} {tru}"
+    ))
 
     pub_marker = count(probe, "/root/marker", pub)
     cell("V1", has(probe, "PROBE direct-read-fail memory/x", pub) and pub_marker == 0,
@@ -182,7 +187,9 @@ pkgs.testers.runNixOSTest {
     agents_p = probe.execute(f"test -e {c}/agents/p")[0] == 0
     cell("V1b", walked and proc_hits == 0 and not agents_p and pub_marker == 0,
          f"@public /proc/<pid>/root reads+writes ok = {proc_hits}; agents/p on host = {agents_p}; marker in log = {pub_marker}")
-    cell("V2", has(probe, "PROBE direct-read-fail settings.json", pub), "@public settings.json read fails")
+    pub_settings = count(probe, "/root/marker-settings", pub)
+    cell("V2", has(probe, "PROBE direct-read-fail settings.json", pub) and pub_settings == 0,
+         f"@public settings.json read fails; settings marker occurrences in public log = {pub_settings}")
 
     tru_marker = count(probe, "/root/marker", tru)
     memory_y = probe.execute(f"test -e {c}/memory/y")[0] == 0
@@ -190,7 +197,9 @@ pkgs.testers.runNixOSTest {
          and has(probe, "PROBE direct-write-fail memory/x", tru) and has(probe, "Read-only file system", tru)
          and not memory_y and not has(probe, "PROBE proc-write-ok", tru),
          f"@trusted reads memory/x (marker occurrences {tru_marker}); write EROFS; memory/y on host = {memory_y}")
-    cell("V5", has(probe, "PROBE direct-read-fail settings.json", tru), "@trusted settings.json read fails")
+    tru_settings = count(probe, "/root/marker-settings", tru)
+    cell("V5", has(probe, "PROBE direct-read-fail settings.json", tru) and tru_settings == 0,
+         f"@trusted settings.json read fails; settings marker occurrences in trusted log = {tru_settings}")
 
     # V3 (arm C): the real herdr, driven as CliHerdr.start drives it.
     h = "setpriv --reuid=1000 --regid=100 --init-groups env HOME=${stateDir} XDG_RUNTIME_DIR=/run/user/1000 ${lib.getExe pkgs.herdr} --session genie-public"
