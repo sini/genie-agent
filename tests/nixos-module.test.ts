@@ -261,4 +261,9 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
   assert.deepEqual(summary.noTierTokenFailedAssertions, [
     "services.genie-agent.experts.enable requires experts.herdrPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.",
   ]);
+  assert.equal(
+    summary.unpatchedHerdrThrows,
+    true,
+    "a non-null herdrPackage without src must throw at evaluation rather than passing unpatched",
+  );
 });

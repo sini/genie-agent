@@ -447,12 +447,14 @@ rec {
               default = null;
               apply =
                 p:
-                if p != null && (p ? src) then
+                if p == null then
+                  null
+                else if p ? src then
                   p.overrideAttrs (old: {
                     patches = (old.patches or [ ]) ++ [ ./patches/herdr-agent-start-command.patch ];
                   })
                 else
-                  p;
+                  throw "services.genie-agent.experts.herdrPackage must be a source-built herdr so the agent-start command patch can be applied";
               description = "The herdr package used by genie-herdr@<tier> and genie-dispatcher@<tier>.";
             };
 

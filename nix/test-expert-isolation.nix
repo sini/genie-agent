@@ -21,29 +21,35 @@ let
   # signal with no handler is ignored).
   idle = name: pkgs.writeShellScriptBin name "trap 'exit 0' TERM; ${coreutils}/sleep infinity & wait";
 
-  probeHerdr = pkgs.writeShellScriptBin "herdr" ''
-    # argv: --session genie-<tier> server
-    tier=''${2#genie-}
-    c=${claudeHome}
-    {
-      echo "probe start tier=$tier"
-      for f in memory/x settings.json .credentials.json; do
-        if ${coreutils}/cat "$c/$f"; then echo "PROBE direct-read-ok $f"; else echo "PROBE direct-read-fail $f"; fi
-      done
-      if echo w >> "$c/memory/x"; then echo "PROBE direct-write-ok memory/x"; else echo "PROBE direct-write-fail memory/x"; fi
-      n=0
-      for d in /proc/[0-9]*; do
-        n=$((n + 1))
-        ${coreutils}/cat "$d/root$c/memory/x" && echo "PROBE proc-read-ok $d"
-        echo p > "$d/root$c/agents/p" && echo "PROBE proc-write-ok agents $d"
-        echo y > "$d/root$c/memory/y" && echo "PROBE proc-write-ok memory $d"
-      done
-      echo "PROBE proc-walked $n"
-      echo "probe done"
-    } > ${stateDir}/probe-$tier.log 2>&1
-    trap 'exit 0' TERM
-    ${coreutils}/sleep infinity & wait
-  '';
+  probeHerdr =
+    (pkgs.writeShellScriptBin "herdr" ''
+        # argv: --session genie-<tier> server
+      tier=''${2#genie-}
+      c=${claudeHome}
+      {
+        echo "probe start tier=$tier"
+        for f in memory/x settings.json .credentials.json; do
+          if ${coreutils}/cat "$c/$f"; then echo "PROBE direct-read-ok $f"; else echo "PROBE direct-read-fail $f"; fi
+        done
+        if echo w >> "$c/memory/x"; then echo "PROBE direct-write-ok memory/x"; else echo "PROBE direct-write-fail memory/x"; fi
+        n=0
+        for d in /proc/[0-9]*; do
+          n=$((n + 1))
+          ${coreutils}/cat "$d/root$c/memory/x" && echo "PROBE proc-read-ok $d"
+          echo p > "$d/root$c/agents/p" && echo "PROBE proc-write-ok agents $d"
+          echo y > "$d/root$c/memory/y" && echo "PROBE proc-write-ok memory $d"
+        done
+        echo "PROBE proc-walked $n"
+        echo "probe done"
+      } > ${stateDir}/probe-$tier.log 2>&1
+      trap 'exit 0' TERM
+      ${coreutils}/sleep infinity & wait
+    '')
+    // {
+      # Satisfy services.genie-agent.experts.herdrPackage's source-built check while remaining a fast probe script.
+      src = ./.;
+      overrideAttrs = _: probeHerdr;
+    };
 
   probeClaude = pkgs.writeShellScriptBin "claude" ''
     if [ -n "''${CLAUDE_CODE_OAUTH_TOKEN+x}" ]; then

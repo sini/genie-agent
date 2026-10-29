@@ -38,7 +38,7 @@ let
           };
           experts = {
             enable = true;
-            herdrPackage = pkgs.writeShellScriptBin "herdr" "exit 0";
+            herdrPackage = pkgs.herdr;
             claudePackage = pkgs.writeShellScriptBin "claude" "exit 0";
             public = {
               address = "genie-expert-public@sini.bitstream";
@@ -168,6 +168,19 @@ let
     modules = [ { services.genie-agent.experts.trusted.tokenEnvironmentFile = lib.mkForce null; } ];
   };
 
+  # GI-13: a herdrPackage without `src` must fail at evaluation with a throw rather than passing unpatched.
+  evalUnpatchedHerdr = evalLocal.extendModules {
+    modules = [
+      {
+        services.genie-agent.experts.herdrPackage = lib.mkForce (pkgs.writeShellScriptBin "herdr" "exit 0");
+      }
+    ];
+  };
+  unpatchedHerdrThrows =
+    !(builtins.tryEval (
+      builtins.seq evalUnpatchedHerdr.config.services.genie-agent.experts.herdrPackage true
+    )).success;
+
   failedAssertions =
     ev:
     lib.filter (lib.hasPrefix "services.genie-agent") (
@@ -269,6 +282,7 @@ let
     );
     localFailedAssertions = failedAssertions evalLocal;
     noTierTokenFailedAssertions = failedAssertions evalNoTierToken;
+    inherit unpatchedHerdrThrows;
     localTmpfiles = lib.filter (lib.hasInfix "/claude-") evalLocal.config.systemd.tmpfiles.rules;
     localRootAttrs = localRootJson.passthru.attrs;
     fullRootAttrs = fullRootJson.passthru.attrs;
