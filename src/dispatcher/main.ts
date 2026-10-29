@@ -11,7 +11,6 @@ import { Delivery, Dispatcher, SocketXmsg, type DeliveryOptions } from "./index.
 const settings = {
   stateDir: ["--state-dir", "GENIE_STATE_DIR"],
   session: ["--herdr-session", "GENIE_HERDR_SESSION"],
-  basePane: ["--base-pane", "GENIE_BASE_PANE"],
   cwd: ["--cwd", "GENIE_CWD"],
   // The single token config directory D1a's stub hands every thread. D4b's pool replaces it.
   tokenConfigDir: ["--token-config-dir", "GENIE_TOKEN_CONFIG_DIR"],
@@ -25,7 +24,6 @@ const OPTIONAL_SETTINGS = new Set(["model", "serviceName", "claudeBin"]);
 export interface Config {
   stateDir: string;
   session: string;
-  basePane: string;
   cwd: string;
   tokenConfigDir: string;
   model?: string;
@@ -75,7 +73,7 @@ export async function startDispatcher(
   await x.register();
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
-    herdr: deps.herdr ?? new CliHerdr({ session: c.session, basePane: c.basePane, claude: c.claudeBin }),
+    herdr: deps.herdr ?? new CliHerdr({ session: c.session, claude: c.claudeBin }),
     xmsg: x,
     pickToken: () => ({ id: c.tokenConfigDir, configDir: c.tokenConfigDir }),
     cwd: c.cwd,

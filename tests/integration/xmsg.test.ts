@@ -1121,7 +1121,6 @@ test(
       [
         "--state-dir", statePublic,
         "--herdr-session", "genie-public",
-        "--base-pane", "%0",
         "--cwd", node.dir,
         "--token-config-dir", tokPublic,
       ],
@@ -1145,7 +1144,6 @@ test(
         dispatcherMain,
         "--state-dir", stateTrusted,
         "--herdr-session", "genie-trusted",
-        "--base-pane", "%0",
         "--cwd", node.dir,
         "--token-config-dir", tokTrusted,
         "--service-name", "genie-expert-trusted",
@@ -1205,7 +1203,6 @@ test(
       [
         "--state-dir", statePublic,
         "--herdr-session", "genie-public",
-        "--base-pane", "%0",
         "--cwd", node.dir,
         "--token-config-dir", tokPublic,
         "--service-name", "genie-expert-public",
@@ -1376,7 +1373,6 @@ test(
         [
           "--state-dir", statePublic,
           "--herdr-session", "genie-public",
-          "--base-pane", "%0",
           "--cwd", tierCwd,
           "--token-config-dir", tokPublic,
           "--service-name", "genie-expert-public",

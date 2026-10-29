@@ -4,7 +4,8 @@
 // `node --test tests/dispatcher.test.ts`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Dispatcher, type Options } from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
@@ -140,7 +141,6 @@ const cli = (replies: Record<string, string>, claude?: string) => {
   const calls: { argv: string[]; env: Record<string, string | undefined> }[] = [];
   const herdr = new CliHerdr({
     session: "public",
-    basePane: "w1:p1",
     claude,
     run: async (argv, env) => {
       calls.push({ argv, env });
@@ -156,6 +156,7 @@ const ok = (result: object) => JSON.stringify({ id: "cli", result });
 test("the cli adapter splits a pane under the config directory and starts claude in it", async () => {
   process.env.HERDR_SOCKET_PATH = "/elsewhere/herdr.sock";
   const { herdr, calls } = cli({
+    "pane list": ok({ panes: [{ pane_id: "w1:p1" }] }),
     "pane split": ok({ pane: { pane_id: "w1:p7" } }),
     "agent start": ok({ type: "agent_started" }),
   });
@@ -164,6 +165,7 @@ test("the cli adapter splits a pane under the config directory and starts claude
   assert.deepEqual(
     calls.map((c) => c.argv),
     [
+      ["herdr", "--session", "public", "pane", "list"],
       ["herdr", "--session", "public", "pane", "split", "w1:p1", "--direction", "right", "--cwd", "/cwd",
         "--env", "CLAUDE_CONFIG_DIR=/cfg/a", "--no-focus"],
       ["herdr", "--session", "public", "agent", "start", "genie-1", "--kind", "claude", "--pane", "w1:p7",
@@ -173,14 +175,43 @@ test("the cli adapter splits a pane under the config directory and starts claude
   assert.equal(calls[0].env.HERDR_SOCKET_PATH, undefined);
 });
 
+test("the cli adapter creates a workspace when herdr has no panes yet and caches the root pane", async () => {
+  const { herdr, calls } = cli({
+    "pane list": ok({ panes: [] }),
+    "workspace create": ok({ root_pane: { pane_id: "w1:p1" } }),
+    "pane split": ok({ pane: { pane_id: "w1:p2" } }),
+    "agent start": ok({ type: "agent_started" }),
+  });
+  const pane1 = await herdr.start({ name: "genie-1", configDir: "/cfg/a", cwd: "/cwd", args: ["--resume", "u-1"] });
+  const pane2 = await herdr.start({ name: "genie-2", configDir: "/cfg/b", cwd: "/cwd", args: ["--resume", "u-2"] });
+  assert.equal(pane1, "w1:p2");
+  assert.equal(pane2, "w1:p2");
+  assert.deepEqual(
+    calls.map((c) => c.argv),
+    [
+      ["herdr", "--session", "public", "pane", "list"],
+      ["herdr", "--session", "public", "workspace", "create", "--cwd", "/cwd", "--no-focus"],
+      ["herdr", "--session", "public", "pane", "split", "w1:p1", "--direction", "right", "--cwd", "/cwd",
+        "--env", "CLAUDE_CONFIG_DIR=/cfg/a", "--no-focus"],
+      ["herdr", "--session", "public", "agent", "start", "genie-1", "--kind", "claude", "--pane", "w1:p2",
+        "--timeout", "60000", "--", "--resume", "u-1"],
+      ["herdr", "--session", "public", "pane", "split", "w1:p1", "--direction", "right", "--cwd", "/cwd",
+        "--env", "CLAUDE_CONFIG_DIR=/cfg/b", "--no-focus"],
+      ["herdr", "--session", "public", "agent", "start", "genie-2", "--kind", "claude", "--pane", "w1:p2",
+        "--timeout", "60000", "--", "--resume", "u-2"],
+    ],
+  );
+});
+
 test("the cli adapter passes --command to herdr agent start when claude path is configured", async () => {
   const { herdr, calls } = cli({
+    "pane list": ok({ panes: [{ pane_id: "w1:p1" }] }),
     "pane split": ok({ pane: { pane_id: "w1:p7" } }),
     "agent start": ok({ type: "agent_started" }),
   }, "/nix/store/claude/bin/claude");
   await herdr.start({ name: "genie-1", configDir: "/cfg/a", cwd: "/cwd", args: ["--resume", "u-1"] });
   assert.deepEqual(
-    calls[1].argv,
+    calls[2].argv,
     ["herdr", "--session", "public", "agent", "start", "genie-1", "--kind", "claude", "--pane", "w1:p7",
       "--command", "/nix/store/claude/bin/claude", "--timeout", "60000", "--", "--resume", "u-1"],
   );
@@ -188,12 +219,13 @@ test("the cli adapter passes --command to herdr agent start when claude path is 
 
 test("the cli adapter closes the pane when claude does not start", async () => {
   const { herdr, calls } = cli({
+    "pane list": ok({ panes: [{ pane_id: "w1:p1" }] }),
     "pane split": ok({ pane: { pane_id: "w1:p7" } }),
     "agent start error": '{"error":{"code":"agent_not_ready"}}',
     "pane close": ok({ type: "ok" }),
   });
   await assert.rejects(herdr.start({ name: "n", configDir: "/c", cwd: "/w", args: [] }), /agent_not_ready/);
-  assert.deepEqual(calls[2].argv, ["herdr", "--session", "public", "pane", "close", "w1:p7"]);
+  assert.deepEqual(calls[3].argv, ["herdr", "--session", "public", "pane", "close", "w1:p7"]);
 });
 
 test("the cli adapter treats an absent pane as closed and throws any other refusal", async () => {
@@ -206,3 +238,89 @@ test("the cli adapter lists agents by pane", async () => {
   assert.deepEqual(await herdr.list(), [{ pane: "w1:p2", name: "genie-1" }]);
   assert.deepEqual(calls[0].argv, ["herdr", "--session", "public", "agent", "list"]);
 });
+
+test(
+  "oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude",
+  { timeout: 30_000 },
+  async () => {
+    const dir = mkdtempSync(`${tmpdir()}/gi14-`);
+    const session = `gi14-${process.pid}-${Date.now()}`;
+    const claudeBin = `${dir}/claude`;
+    const claudeLog = `${dir}/claude.log`;
+    writeFileSync(
+      claudeBin,
+      `#!/bin/sh\nprintf 'args=%s\\ncfg=%s\\n' "$*" "$CLAUDE_CONFIG_DIR" >> "${claudeLog}"\nwhile IFS= read -r _; do :; done\n`,
+      { mode: 0o755 },
+    );
+    chmodSync(claudeBin, 0o755);
+    mkdirSync(`${dir}/state`, { recursive: true });
+    mkdirSync(`${dir}/cwd`, { recursive: true });
+    mkdirSync(`${dir}/cfg-a`, { recursive: true });
+
+    const prevHome = process.env.HOME;
+    const prevXdg = process.env.XDG_RUNTIME_DIR;
+    const prevShell = process.env.SHELL;
+    process.env.HOME = dir;
+    process.env.XDG_RUNTIME_DIR = dir;
+    process.env.SHELL = process.env.SHELL || "/bin/sh";
+    const mkHerdr = () =>
+      new CliHerdr({
+        session,
+        claude: claudeBin,
+        readyTimeoutMs: 15_000,
+      });
+    const herdr1 = mkHerdr();
+    const herdr2 = mkHerdr();
+    const srv = spawn("herdr", ["--session", session, "server"], {
+      env: { ...process.env },
+      stdio: "ignore",
+    });
+    process.env.HOME = prevHome;
+    process.env.XDG_RUNTIME_DIR = prevXdg;
+    if (prevShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = prevShell;
+
+    try {
+      for (let i = 0; i < 100; i++) {
+        try {
+          await herdr1.list();
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+
+      const d1 = await Dispatcher.open({
+        stateDir: `${dir}/state`,
+        herdr: herdr1,
+        xmsg: { list: async () => [] },
+        pickToken: () => ({ id: "tok-a", configDir: `${dir}/cfg-a` }),
+        cwd: `${dir}/cwd`,
+      });
+      const t1 = await d1.escalate("t1");
+      assert.equal(t1.state, "live");
+      assert.equal(t1.pane, "w1:p2");
+      assert.deepEqual(await herdr1.list(), [{ pane: "w1:p2", name: t1.name }]);
+
+      // A second CliHerdr against the same server finds w1:p1 via `pane list` instead of creating w2.
+      const d2 = await Dispatcher.open({
+        stateDir: `${dir}/state`,
+        herdr: herdr2,
+        xmsg: { list: async () => [t1.session] },
+        pickToken: () => ({ id: "tok-a", configDir: `${dir}/cfg-a` }),
+        cwd: `${dir}/cwd`,
+      });
+      const t2 = await d2.escalate("t2");
+      assert.equal(t2.state, "live");
+      assert.equal(t2.pane, "w1:p3");
+
+      const logText = readFileSync(claudeLog, "utf8");
+      assert.match(logText, new RegExp(`--session-id ${t1.session}`));
+      assert.match(logText, new RegExp(`--session-id ${t2.session}`));
+      assert.match(logText, new RegExp(`cfg=${dir}/cfg-a`));
+    } finally {
+      srv.kill("SIGTERM");
+      await new Promise<void>((resolve) => srv.once("exit", () => resolve()));
+    }
+  },
+);

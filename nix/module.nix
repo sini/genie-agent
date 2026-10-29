@@ -235,7 +235,7 @@ let
             RuntimeDirectory = "genie-agent";
             WorkingDirectory = toString cfg.stateDir;
             ExecStartPre = "${bootstrapScript}";
-            ExecStart = "${lib.getExe cfg.experts.dispatcherPackage} --state-dir ${dispStateDir} --herdr-session ${sessionName} --base-pane %0 --cwd ${cwdDir} --token-config-dir ${claudeDir} --service-name ${tierCfg.serviceName}${modelFlag}${claudeBinFlag}";
+            ExecStart = "${lib.getExe cfg.experts.dispatcherPackage} --state-dir ${dispStateDir} --herdr-session ${sessionName} --cwd ${cwdDir} --token-config-dir ${claudeDir} --service-name ${tierCfg.serviceName}${modelFlag}${claudeBinFlag}";
             Restart = "on-failure";
             RestartSec = "5s";
             ProtectControlGroups = true;

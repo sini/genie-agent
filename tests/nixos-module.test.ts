@@ -102,6 +102,7 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
     assert.match(dispUnit.serviceConfig.ExecStart, new RegExp(`--service-name genie-expert-${tier}`));
     assert.match(dispUnit.serviceConfig.ExecStart, new RegExp(`--herdr-session genie-${tier}`));
     assert.match(dispUnit.serviceConfig.ExecStart, /--claude-bin \/nix\/store\/[^ ]+-claude\/bin\/claude/);
+    assert.doesNotMatch(dispUnit.serviceConfig.ExecStart, /--base-pane|%0/);
 
     // Read-only source repo and memory mounts (§5.2)
     const expectedRepo = tier === "public" ? "/var/lib/genie/public-repos" : "/home/sini/Documents/repos/sini";

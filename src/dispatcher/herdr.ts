@@ -38,8 +38,6 @@ const scrubbed = ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_W
 
 export interface CliOptions {
   session: string;
-  // The pane every thread pane is split from: the server's first, never closed.
-  basePane: string;
   readyTimeoutMs?: number;
   herdr?: string;
   claude?: string;
@@ -49,6 +47,8 @@ export interface CliOptions {
 export class CliHerdr implements Herdr {
   private readonly o: CliOptions;
   private readonly env: Record<string, string | undefined>;
+  // The pane every thread pane is split from: the server's first, looked up or created lazily and never closed.
+  private basePane?: string;
 
   constructor(o: CliOptions) {
     this.o = o;
@@ -62,10 +62,25 @@ export class CliHerdr implements Herdr {
     return JSON.parse(await run([this.o.herdr ?? "herdr", "--session", this.o.session, ...args], this.env));
   }
 
+  private async ensureBasePane(cwd: string): Promise<string> {
+    if (this.basePane) return this.basePane;
+    const listed = await this.json(["pane", "list"]);
+    const existing: string | undefined = listed.result.panes[0]?.pane_id;
+    if (existing) {
+      this.basePane = existing;
+      return existing;
+    }
+    const created = await this.json(["workspace", "create", "--cwd", cwd, "--no-focus"]);
+    const root: string = created.result.root_pane.pane_id;
+    this.basePane = root;
+    return root;
+  }
+
   async start(s: StartSpec): Promise<string> {
+    const basePane = await this.ensureBasePane(s.cwd);
     // The config directory is not a secret, so it rides --env; the token never does (D5's shim).
     const split = await this.json([
-      "pane", "split", this.o.basePane, "--direction", "right", "--cwd", s.cwd,
+      "pane", "split", basePane, "--direction", "right", "--cwd", s.cwd,
       "--env", `CLAUDE_CONFIG_DIR=${s.configDir}`, "--no-focus",
     ]);
     const pane: string = split.result.pane.pane_id;
