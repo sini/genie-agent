@@ -68,7 +68,21 @@ export class XmsgGuardClient implements GuardClient {
   // request (consumed as a guard verdict, so it never enters the root intake).
   routeReply(inReplyTo: string, text: string): boolean {
     const p = this.pending.get(inReplyTo);
-    if (!p) return false;
+    if (!p) {
+      try {
+        const parsed = JSON.parse(text);
+        if (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          !Array.isArray(parsed) &&
+          ("verdict" in parsed || "error" in parsed)
+        ) {
+          this.earlyReplies.set(inReplyTo, text);
+          return true;
+        }
+      } catch {}
+      return false;
+    }
     this.pending.delete(inReplyTo);
     clearTimeout(p.timer);
     p.resolve(parseGuardVerdictReply(text));
@@ -81,6 +95,7 @@ export class XmsgGuardClient implements GuardClient {
       p.resolve({ unavailable: "guard client closed" });
     }
     this.pending.clear();
+    this.earlyReplies.clear();
   }
 
   async check(e: Envelope): Promise<Verdict | Unavailable> {

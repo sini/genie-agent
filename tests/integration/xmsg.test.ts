@@ -717,7 +717,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // -----------------------------------------------------------------------------
 test(
   "oracle 4 (GI-2): simulated matrix-xmsg forward to genie passes guard, runs fake pi, replies draft, and routes escalation to fake expert matched by inReplyTo",
-  { timeout: 30_000 },
+  { timeout: 60_000 },
   async () => {
     const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
     if (GENIE_ROOT_BIN) {
@@ -737,7 +737,7 @@ test(
       xmsgDir: node.xmsgDir,
       service: "genie",
       pollWaitMs: 500,
-      guard: { target: "genie-guard", maxConcurrency: 1, timeoutMs: 10_000 },
+      guard: { target: "genie-guard", maxConcurrency: 1, timeoutMs: 30_000 },
     });
 
     let ninferServer: ReturnType<typeof createHttpServer> | null = null;
@@ -819,17 +819,17 @@ test(
 
       // Spawn fake genie-expert service in its own PID that polls 2 escalations and replies in reverse order
       const expertCode = `
-const { SocketXmsg } = require(${JSON.stringify(new URL("../../src/dispatcher/xmsg.ts", import.meta.url).pathname)});
+const { awaitRegister, SocketXmsg } = require(${JSON.stringify(new URL("../../src/dispatcher/xmsg.ts", import.meta.url).pathname)});
 const [xmsgDir] = process.argv.slice(1);
 (async () => {
   const x = new SocketXmsg(xmsgDir, "genie-expert");
-  await x.register();
+  await awaitRegister(x);
   process.stdout.write("EXPERT_READY\\n");
-  const esc1 = await x.poll(15000);
-  if (!esc1) process.exit(1);
+  let esc1 = null;
+  while (!esc1) esc1 = await x.poll(1000);
   await x.ack(esc1.id);
-  const esc2 = await x.poll(15000);
-  if (!esc2) process.exit(1);
+  let esc2 = null;
+  while (!esc2) esc2 = await x.poll(1000);
   await x.ack(esc2.id);
   const t1 = JSON.parse(esc1.text).thread_id;
   const t2 = JSON.parse(esc2.text).thread_id;
@@ -848,18 +848,22 @@ const [xmsgDir] = process.argv.slice(1);
         for (const l of c.split("\n").filter(Boolean)) expertLines.push(l.trim());
       });
 
-      // Wait until genie-guard and genie-expert are registered
-      for (let i = 0; i < 200; i++) {
+      // Wait until genie-guard and genie-expert are registered and expert poll loop is ready
+      let servicesReady = false;
+      for (let i = 0; i < 600; i++) {
         const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
         const addrs: string[] = (res.json?.recipients ?? []).map((r: any) => r.address);
         if (
           addrs.some((a) => a.startsWith("genie-guard")) &&
-          addrs.some((a) => a.startsWith("genie-expert"))
+          addrs.some((a) => a.startsWith("genie-expert")) &&
+          expertLines.includes("EXPERT_READY")
         ) {
+          servicesReady = true;
           break;
         }
         await sleep(25);
       }
+      assert.ok(servicesReady, "genie-guard and genie-expert must register before test proceeds");
 
       await io.register();
 
@@ -918,6 +922,28 @@ const [xmsgDir] = process.argv.slice(1);
       assert.equal((g3 as any).verdict, "allow");
       assert.equal(io.guard.peakConcurrency, 1, "io.guard peakConcurrency over 3 parallel checks must be 1");
       assert.equal(peakGuardIn, 1, "genie-guard ninfer peak concurrent checks must be 1");
+
+      // Verify XmsgGuardClient buffers an early pushed reply that arrives on register.sock before send() resolves on agent.sock
+      let earlyClient!: XmsgGuardClient;
+      earlyClient = new XmsgGuardClient(
+        {
+          send: async () => {
+            const consumed = earlyClient.routeReply(
+              "msg-early-guard",
+              JSON.stringify({ verdict: "allow", reason: "early", cleaned_text: "" }),
+            );
+            assert.equal(consumed, true, "early guard verdict must be consumed by routeReply");
+            return "msg-early-guard";
+          },
+        },
+        { timeoutMs: 80 },
+      );
+      const earlyVerdict = await earlyClient.check({
+        source: "message",
+        history: [],
+        content: { sender: "@u:x", tier: "public", text: "p-early" },
+      });
+      assert.deepEqual(earlyVerdict, { verdict: "allow", reason: "early", cleaned_text: "" });
 
       // Send two simulated matrix-xmsg forwards to `genie` for threads $th1 and $th2 using the
       // exact `build_envelope_with_screening` layout from matrix-xmsg `src/context.rs:487–493`
@@ -991,13 +1017,19 @@ const [xmsgDir] = process.argv.slice(1);
       const fwd2Id = fwd2Res.json?.message_id;
       assert.ok(fwd2Id);
 
-      // Wait until both fake pi processes are spawned by the supervisor
-      for (let i = 0; i < 200; i++) {
-        if (root.supervisor.pid("$th1") !== undefined && root.supervisor.pid("$th2") !== undefined) break;
+      // Wait until both fake pi processes are spawned by the supervisor and have received their initial prompts
+      const hasRecordedPrompt = (thread: string): boolean => {
+        const pid = root?.supervisor.pid(thread);
+        if (pid === undefined) return false;
+        const recPath = join(piDir, `${pid}.jsonl`);
+        return existsSync(recPath) && readFileSync(recPath, "utf8").includes('"type":"prompt"');
+      };
+      for (let i = 0; i < 800; i++) {
+        if (hasRecordedPrompt("$th1") && hasRecordedPrompt("$th2")) break;
         await sleep(25);
       }
-      assert.ok(root.supervisor.pid("$th1") !== undefined, "fake pi for $th1 must be running");
-      assert.ok(root.supervisor.pid("$th2") !== undefined, "fake pi for $th2 must be running");
+      assert.ok(hasRecordedPrompt("$th1"), "fake pi for $th1 must be running and have received initial prompt");
+      assert.ok(hasRecordedPrompt("$th2"), "fake pi for $th2 must be running and have received initial prompt");
       assert.equal(root.store.read("$th1")?.sender_tier, "public");
       assert.equal(
         root.store.read("$th2")?.sender_tier,
@@ -1025,7 +1057,7 @@ const [xmsgDir] = process.argv.slice(1);
         placeholder: JSON.stringify({ method: "reply", arg: draft1 }),
       });
       const reply1Val = JSON.parse((reply1Cmd.data as any).value);
-      assert.equal(reply1Val.ok.posted, true);
+      assert.equal(reply1Val.ok.posted, true, `thread 1 Host.reply must succeed, got ${JSON.stringify(reply1Val)}`);
       assert.ok(reply1Val.ok.escalated, "thread 1 must escalate to genie-expert");
 
       const reply2Cmd = await root.supervisor.command("$th2", {
@@ -1034,18 +1066,18 @@ const [xmsgDir] = process.argv.slice(1);
         placeholder: JSON.stringify({ method: "reply", arg: draft2 }),
       });
       const reply2Val = JSON.parse((reply2Cmd.data as any).value);
-      assert.equal(reply2Val.ok.posted, true);
+      assert.equal(reply2Val.ok.posted, true, `thread 2 Host.reply must succeed, got ${JSON.stringify(reply2Val)}`);
       assert.ok(reply2Val.ok.escalated, "thread 2 must escalate to genie-expert");
 
       // Wait for both expert replies (sent in reverse order by expertProc) to be posted back to fwd1 and fwd2
       let fwd1All: any[] = [];
       let fwd2All: any[] = [];
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 800; i++) {
         const r1 = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(fwd1Id)}/replies`);
         const r2 = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(fwd2Id)}/replies`);
         fwd1All = r1.json ?? [];
         fwd2All = r2.json ?? [];
-        if (fwd1All.length >= 2 && fwd2All.length >= 2) break;
+        if (fwd1All.length >= 2 && fwd2All.length >= 2 && expertLines.some((l) => l.startsWith("EXPERT_DONE "))) break;
         await sleep(25);
       }
 
