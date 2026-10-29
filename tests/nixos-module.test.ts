@@ -11,7 +11,7 @@ if (!summaryPath) {
 const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
 
 const VERBATIM_ISOLATION_STATEMENT =
-  "**Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus and Claude credentials. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel, network, or credential isolation between `@public` and `@trusted` expert sessions.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).";
+  "**Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus. The expert tiers do not share that user's Claude credentials: each tier authenticates with its own Claude setup-token, which systemd reads from `experts.<tier>.tokenEnvironmentFile` into that tier's `genie-herdr@<tier>` unit only, and no expert unit mounts the user's `~/.claude` beyond the tier's configured memory directory, read-only. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, and `PrivatePIDs=true` on the expert units), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel or network isolation between `@public` and `@trusted` expert sessions, which run as the same OS user.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).";
 
 test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expert deny rules, store-path-free secrets, and README isolation disclosure", () => {
   // 1. Secret path type rejects /nix/store paths, store-context strings, and relative paths
@@ -244,7 +244,13 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
       `genie-dispatcher@${tier} must not load the token`,
     );
     const bootstrap = readFileSync(summary.units[`genie-dispatcher@${tier}`].serviceConfig.ExecStartPre, "utf8");
-    assert.ok(!bootstrap.includes(".credentials.json"), `genie-dispatcher@${tier} bootstrap must not place a credential`);
+    // No credential is placed in claudeDir, and one left by the old symlink layout is removed.
+    const credLines = bootstrap.split("\n").filter((l) => l.includes(".credentials.json"));
+    assert.deepEqual(
+      credLines.map((l) => l.trim()),
+      [`rm -f "/var/lib/genie-agent/claude-${tier}/.credentials.json"`],
+      `genie-dispatcher@${tier} bootstrap must only remove a stale credential`,
+    );
   }
   assert.deepEqual(summary.localTmpfiles, [
     "d /var/lib/genie-agent/claude-public 0700 sini - -",

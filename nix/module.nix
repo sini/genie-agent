@@ -139,6 +139,8 @@ let
         set -euo pipefail
         mkdir -p -m 0700 "${claudeDir}" "${claudeDir}/sessions" "${claudeDir}/transcripts"
         mkdir -p -m 0700 "${cwdDir}" "${dispStateDir}" "${dispStateDir}/worktrees"
+        # A credential left by the old symlink layout must not survive into the tier.
+        rm -f "${claudeDir}/.credentials.json"
         install -m 0600 "${settingsJson}" "${claudeDir}/settings.json"
         install -m 0600 "${claudeJson}" "${claudeDir}/.claude.json"
         install -m 0644 "${claudeMd}" "${cwdDir}/CLAUDE.md"
