@@ -148,7 +148,9 @@ pkgs.testers.runNixOSTest {
         m.wait_for_unit("multi-user.target")
     time.sleep(10)
 
-    # V0: genie-herdr@<tier> is still the running main process 10 s after boot.
+    # V0: genie-herdr@<tier> is still the running main process 10 s after boot. Its mutant is
+    # setsid restored AND PrivatePIDs dropped: under PrivatePIDs a restored setsid leaves the unit
+    # active (measured), and PrivatePIDs has its own oracles (G0, V1b).
     for m in (probe, real):
         for tier in ("public", "trusted"):
             st = m.execute(f"systemctl is-active genie-herdr@{tier}")[1].strip()
