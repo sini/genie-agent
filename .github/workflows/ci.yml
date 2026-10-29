@@ -45,6 +45,7 @@ env:
     tier
   INTEGRATION_CHECKS: >-
     dispatcher-sea
+    expert-isolation
     genie-guard-sea
     image
     root
