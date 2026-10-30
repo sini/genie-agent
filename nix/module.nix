@@ -284,7 +284,6 @@ let
             bwrap_argv = [
                 BWRAP_BIN,
                 "--die-with-parent",
-                "--new-session",
                 "--unshare-user",
                 "--unshare-pid",
                 "--ro-bind", "/", "/",
