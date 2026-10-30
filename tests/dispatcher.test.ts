@@ -267,6 +267,7 @@ test(
       new CliHerdr({
         session,
         claude: claudeBin,
+        cwdDir: `${dir}/cwd`,
         readyTimeoutMs: 15_000,
       });
     const herdr1 = mkHerdr();
@@ -322,5 +323,125 @@ test(
       srv.kill("SIGTERM");
       await new Promise<void>((resolve) => srv.once("exit", () => resolve()));
     }
+  },
+);
+
+test(
+  "oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair",
+  { timeout: 30_000 },
+  async () => {
+    const dir = mkdtempSync(`${tmpdir()}/gi15-unit-`);
+    const stateDir = `${dir}/dispatcher-public`;
+    const cwdDir = `${dir}/cwd-public`;
+    const cfgDir = `${dir}/claude-public`;
+    const credFile = `${dir}/tier-token`;
+    const shimBin = `${dir}/genie-claude-shim`;
+    const handoffOut = `${dir}/handoff.json`;
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cwdDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+    writeFileSync(credFile, "CLAUDE_CODE_OAUTH_TOKEN=canary-unit-token-0000\n", { mode: 0o600 });
+    writeFileSync(
+      shimBin,
+      [
+        "import json, os, socket, stat, sys",
+        "sep = sys.argv.index('--')",
+        "head = sys.argv[1:sep]",
+        "tail = sys.argv[sep+1:]",
+        "sock_path = head[1]",
+        "thread_id = head[3]",
+        "pane_cwd = head[5]",
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        "s.connect(sock_path)",
+        "msg, fds, _, _ = socket.recv_fds(s, 16, 1)",
+        "s.close()",
+        "fd = fds[0]",
+        "is_sock = stat.S_ISSOCK(os.fstat(fd).st_mode)",
+        "with os.fdopen(fd, 'rb', closefd=True) as f:",
+        "    tok = f.read().decode('utf-8').strip()",
+        `with open(${JSON.stringify(handoffOut)}, 'w', encoding='utf-8') as out:`,
+        "    json.dump({'thread_id': thread_id, 'pane_cwd': pane_cwd, 'is_sock': is_sock, 'tok': tok, 'tail': tail, 'shell_cwd': os.getcwd()}, out)",
+      ].join("\n") + "\n",
+      { mode: 0o755 },
+    );
+
+    const selfNspids = readFileSync("/proc/self/status", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("NSpid:"))!
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+    const calls: string[][] = [];
+    const herdr = new CliHerdr({
+      session: "genie-public",
+      claude: shimBin,
+      cwdDir,
+      stateDir,
+      tokenCredentialFile: credFile,
+      expectedNspidDepth: selfNspids.length,
+      run: async (argv) => {
+        calls.push(argv);
+        const key = argv.slice(3, 5).join(" ");
+        if (key === "pane list") return ok({ panes: [] });
+        if (key === "workspace create") return ok({ root_pane: { pane_id: "w1:p1" } });
+        if (key === "pane split") return ok({ pane: { pane_id: "w1:p2" } });
+        if (key === "agent start") {
+          const sep = argv.indexOf("--");
+          const cmd = argv[argv.indexOf("--command") + 1];
+          const shimArgs = argv.slice(sep + 1);
+          await new Promise<void>((resolve, reject) => {
+            const p = spawn("python3", ["-I", cmd, ...shimArgs], { cwd: cwdDir, stdio: "ignore" });
+            p.once("error", reject);
+            p.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`shim exited ${code}`))));
+          });
+          return ok({ type: "agent_started" });
+        }
+        throw new Error(`unexpected herdr command: ${argv.join(" ")}`);
+      },
+    });
+
+    const wtCwd = `${stateDir}/worktrees/thread-A`;
+    const pane = await herdr.start({
+      name: "genie-12345678",
+      threadId: "thread-A",
+      configDir: cfgDir,
+      cwd: wtCwd,
+      paneCwd: cwdDir,
+      args: ["-n", "genie-12345678", "--session-id", "12345678-0000-4000-8000-000000000000"],
+    });
+    assert.equal(pane, "w1:p2");
+    // K7: workspace create and pane split use cwdDir, never wtCwd
+    assert.deepEqual(calls[1], [
+      "herdr",
+      "--session",
+      "genie-public",
+      "workspace",
+      "create",
+      "--cwd",
+      cwdDir,
+      "--no-focus",
+    ]);
+    assert.deepEqual(calls[2], [
+      "herdr",
+      "--session",
+      "genie-public",
+      "pane",
+      "split",
+      "w1:p1",
+      "--direction",
+      "right",
+      "--cwd",
+      cwdDir,
+      "--env",
+      `CLAUDE_CONFIG_DIR=${cfgDir}`,
+      "--no-focus",
+    ]);
+    const recorded = JSON.parse(readFileSync(handoffOut, "utf8"));
+    assert.equal(recorded.thread_id, "thread-A");
+    assert.equal(recorded.pane_cwd, wtCwd);
+    assert.equal(recorded.shell_cwd, cwdDir);
+    assert.equal(recorded.is_sock, true);
+    assert.equal(recorded.tok, "canary-unit-token-0000");
+    assert.deepEqual(readdirSync(`${stateDir}/launch`), []);
   },
 );

@@ -168,6 +168,16 @@ let
     modules = [ { services.genie-agent.experts.trusted.tokenEnvironmentFile = lib.mkForce null; } ];
   };
 
+  # GI-15 (P9): experts enabled with xmsgSocket = null must fail the xmsgSocket assertion.
+  evalNoXmsgSocket = evalLocal.extendModules {
+    modules = [ { services.genie-agent.xmsgSocket = lib.mkForce null; } ];
+  };
+
+  # GI-15 (Gate v3): experts enabled with kernel.yama.ptrace_scope = 0 must fail the ptrace_scope assertion.
+  evalPtraceScope0 = evalLocal.extendModules {
+    modules = [ { boot.kernel.sysctl."kernel.yama.ptrace_scope" = 0; } ];
+  };
+
   # GI-13: a herdrPackage without `src` must fail at evaluation with a throw rather than passing unpatched.
   evalUnpatchedHerdr = evalLocal.extendModules {
     modules = [
@@ -220,6 +230,7 @@ let
       environment
       ;
     requires = u.requires or [ ];
+    path = map toString (u.path or [ ]);
     serviceConfig = {
       inherit (u.serviceConfig)
         Type
@@ -234,9 +245,12 @@ let
         PrivateDevices
         PrivateUsers
         ProtectHome
+        ProtectHostname
+        ProtectKernelLogs
         ProtectKernelTunables
         ProtectKernelModules
         ProtectControlGroups
+        RestrictAddressFamilies
         RestrictSUIDSGID
         LockPersonality
         UMask
@@ -245,6 +259,9 @@ let
       LoadCredential = u.serviceConfig.LoadCredential or [ ];
       BindPaths = u.serviceConfig.BindPaths or [ ];
       BindReadOnlyPaths = u.serviceConfig.BindReadOnlyPaths or [ ];
+      InaccessiblePaths = u.serviceConfig.InaccessiblePaths or [ ];
+      SystemCallFilter = u.serviceConfig.SystemCallFilter or [ ];
+      SystemCallErrorNumber = u.serviceConfig.SystemCallErrorNumber or null;
       ExecStartPre = u.serviceConfig.ExecStartPre or null;
       PrivatePIDs = u.serviceConfig.PrivatePIDs or false;
       EnvironmentFile = u.serviceConfig.EnvironmentFile or null;
@@ -282,8 +299,12 @@ let
     );
     localFailedAssertions = failedAssertions evalLocal;
     noTierTokenFailedAssertions = failedAssertions evalNoTierToken;
+    noXmsgSocketFailedAssertions = failedAssertions evalNoXmsgSocket;
+    ptraceScope0FailedAssertions = failedAssertions evalPtraceScope0;
+    localPtraceScope = evalLocal.config.boot.kernel.sysctl."kernel.yama.ptrace_scope";
     inherit unpatchedHerdrThrows;
     localTmpfiles = lib.filter (lib.hasInfix "/claude-") evalLocal.config.systemd.tmpfiles.rules;
+    allLocalTmpfiles = evalLocal.config.systemd.tmpfiles.rules;
     localRootAttrs = localRootJson.passthru.attrs;
     fullRootAttrs = fullRootJson.passthru.attrs;
     noGuardRootAttrs = noGuardRootJson.passthru.attrs;

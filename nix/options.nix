@@ -51,7 +51,7 @@ rec {
             type = lib.types.nullOr (secretPathType lib);
             default = null;
             example = "/run/agenix/genie-expert-${tier}-token";
-            description = "Root-owned EnvironmentFile holding `CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token>` for genie-herdr@${tier}; systemd reads it before dropping privileges, and no credential file is shared with the operator's `~/.claude`.";
+            description = "Root-owned credential file holding `CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token>` (or raw token) loaded via LoadCredential= on genie-dispatcher@${tier} and handed off per launch over an SO_PEERPIDFD-verified AF_UNIX socketpair (GI-15).";
           };
         };
       };
@@ -462,6 +462,13 @@ rec {
               type = lib.types.nullOr lib.types.package;
               default = null;
               description = "Optional Claude Code package placed on PATH for genie-herdr@<tier>.";
+            };
+
+            xmsgPackage = lib.mkOption {
+              type = lib.types.package;
+              default = pkgs.xmsg or (pkgs.writeShellScriptBin "xmsg" "exit 1");
+              defaultText = lib.literalExpression "pkgs.xmsg";
+              description = "The xmsg CLI package placed on PATH for genie-herdr@<tier> and registered in .claude.json mcpServers.xmsg.";
             };
 
             permissionMode = lib.mkOption {

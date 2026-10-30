@@ -1,6 +1,19 @@
 // The node APIs the dispatcher uses beyond src/eval/node.d.ts, declared here rather than pulling
 // in @types/node.
 declare module "node:child_process" {
+  interface Readable {
+    setEncoding(encoding: "utf8"): void;
+  }
+  interface Writable {
+    write(data: string): boolean;
+    end(): void;
+  }
+  interface ChildProcess {
+    stdin: Writable;
+    exitCode: number | null;
+    signalCode: string | null;
+    kill(signal?: string): boolean;
+  }
   export function execFile(
     file: string,
     args: string[],

@@ -158,7 +158,17 @@ export class Dispatcher {
       if (!resolved) continue;
       const dest = `${baseDir}/${resolved.name}`;
       if (!existsSync(dest)) {
-        execFileSync("git", ["clone", "--quiet", "--no-hardlinks", resolved.sourcePath, dest]);
+        execFileSync("git", [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "core.fsmonitor=",
+          "clone",
+          "--quiet",
+          "--no-hardlinks",
+          resolved.sourcePath,
+          dest,
+        ]);
       }
       materialized.push(dest);
     }
@@ -166,9 +176,10 @@ export class Dispatcher {
   }
 
   removeWorkingCopy(threadId: string): void {
-    const baseDir = this.workingCopyDir(threadId);
-    if (existsSync(baseDir)) {
-      rmSync(baseDir, { recursive: true, force: true });
+    for (const dir of [this.workingCopyDir(threadId), `${this.o.stateDir}/claude-threads/${threadId}`]) {
+      if (existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   }
 
@@ -217,7 +228,14 @@ export class Dispatcher {
     const args = t.launched
       ? ["--resume", t.session, ...this.modelArgs()]
       : ["-n", t.name, "--session-id", t.session, ...this.modelArgs()];
-    t.pane = await this.o.herdr.start({ name: t.name, configDir: t.configDir, cwd: paneCwd, args });
+    t.pane = await this.o.herdr.start({
+      name: t.name,
+      threadId,
+      configDir: t.configDir,
+      cwd: paneCwd,
+      paneCwd: this.o.cwd,
+      args,
+    });
     t.state = "live";
     t.launched = true;
     this.save();

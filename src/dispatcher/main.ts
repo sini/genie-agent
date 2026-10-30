@@ -2,6 +2,7 @@
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
 // single executable, which is the path xmsg's `--svc-exe` attests.
+import { existsSync } from "node:fs";
 import process from "node:process";
 import type { Clock } from "./clock.ts";
 import { CliHerdr, type Herdr } from "./herdr.ts";
@@ -14,18 +15,20 @@ const settings = {
   cwd: ["--cwd", "GENIE_CWD"],
   // The single token config directory D1a's stub hands every thread. D4b's pool replaces it.
   tokenConfigDir: ["--token-config-dir", "GENIE_TOKEN_CONFIG_DIR"],
+  tokenCredentialFile: ["--token-credential-file", "GENIE_TOKEN_CREDENTIAL_FILE"],
   model: ["--model", "GENIE_MODEL"],
   serviceName: ["--service-name", "GENIE_SERVICE_NAME"],
   claudeBin: ["--claude-bin", "GENIE_CLAUDE_BIN"],
 } as const;
 
-const OPTIONAL_SETTINGS = new Set(["model", "serviceName", "claudeBin"]);
+const OPTIONAL_SETTINGS = new Set(["tokenCredentialFile", "model", "serviceName", "claudeBin"]);
 
 export interface Config {
   stateDir: string;
   session: string;
   cwd: string;
   tokenConfigDir: string;
+  tokenCredentialFile?: string;
   model?: string;
   serviceName: string;
   claudeBin?: string;
@@ -71,9 +74,22 @@ export async function startDispatcher(
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
   await x.register();
+  const defaultCred = process.env.CREDENTIALS_DIRECTORY
+    ? `${process.env.CREDENTIALS_DIRECTORY}/tier-token`
+    : undefined;
+  const tokenCredentialFile =
+    c.tokenCredentialFile ?? (defaultCred && existsSync(defaultCred) ? defaultCred : undefined);
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
-    herdr: deps.herdr ?? new CliHerdr({ session: c.session, claude: c.claudeBin }),
+    herdr:
+      deps.herdr ??
+      new CliHerdr({
+        session: c.session,
+        claude: c.claudeBin,
+        cwdDir: c.cwd,
+        stateDir: c.stateDir,
+        tokenCredentialFile,
+      }),
     xmsg: x,
     pickToken: () => ({ id: c.tokenConfigDir, configDir: c.tokenConfigDir }),
     cwd: c.cwd,

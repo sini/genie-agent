@@ -66,9 +66,37 @@ let
     else
       null;
 
+  effectiveGroupOrDash = if effectiveGroup != null then effectiveGroup else "-";
+
+  emptyStoreFile = pkgs.writeText "genie-empty-file" "";
+  emptyJsonFile = pkgs.writeText "genie-empty.json" "{}\n";
+  emptyStoreDir = pkgs.runCommand "genie-empty-dir" { } "mkdir -p $out";
+  expertZdotdir = pkgs.runCommand "genie-expert-zdotdir" { } ''
+    mkdir -p $out
+    : > $out/.zshenv
+    : > $out/.zshrc
+    : > $out/.zprofile
+    : > $out/.zlogin
+    : > $out/.zlogout
+  '';
+  mkReadOnlyHerdrConfigDir =
+    tier:
+    pkgs.runCommand "genie-herdr-ro-config-${tier}" { } ''
+      mkdir -p $out/sessions/genie-${tier} $out/plugins
+      : > $out/config.toml
+    '';
+
+  defaultClaudePackage = pkgs.claude-code.overrideAttrs (old: {
+    meta = removeAttrs (old.meta or { }) [ "license" ];
+  });
+
   mkExpertSettingsJson =
     tier:
+    let
+      stateRel = lib.removePrefix "/" (toString cfg.stateDir);
+    in
     (pkgs.formats.json { }).generate "genie-claude-${tier}-settings.json" {
+      includeGitInstructions = false;
       permissions = {
         defaultMode = cfg.experts.permissionMode;
         allow = [
@@ -92,7 +120,29 @@ let
           "Bash(gh issue*)"
           "Bash(gh release*)"
           "Bash(gh api*)"
+          "Read(//${stateRel}/.config/herdr/**)"
+          "Read(//${stateRel}/herdr-session-${tier}/**)"
+          "Read(//${stateRel}/dispatcher-${tier}/launch/**)"
+          "Read(//${stateRel}/dispatcher-${tier}/journal.json)"
+          "Read(//run/credentials/**)"
+          "Edit(//${stateRel}/.*)"
+          "Edit(//${stateRel}/.*/**)"
+          "Edit(//${stateRel}/claude-${tier}/**)"
+          "Edit(//${stateRel}/herdr-session-${tier}/**)"
+          "Edit(//${stateRel}/dispatcher-${tier}/journal.json)"
+          "Edit(//${stateRel}/dispatcher-${tier}/source-repos/**)"
+          "Edit(//${stateRel}/dispatcher-${tier}/worktrees/.*)"
+          "Edit(//${stateRel}/dispatcher-${tier}/worktrees/.*/**)"
+          "Edit(**/.claude/**)"
+          "Edit(**/.mcp.json)"
+          "Edit(//**/.claude/**)"
+          "Edit(//**/.mcp.json)"
+          "Edit(//**/.git/hooks/**)"
+          "Edit(//**/.git/config)"
         ];
+      };
+      sandbox = {
+        enabled = false;
       };
     };
 
@@ -102,8 +152,17 @@ let
       tierCwd = "${cfg.stateDir}/cwd-${tier}";
       dispDir = "${cfg.stateDir}/dispatcher-${tier}";
     in
-    (pkgs.formats.json { }).generate "genie-claude-${tier}-onboarding.json" {
+    (pkgs.formats.json { }).generate "genie-claude-${tier}-claude.json" {
       hasCompletedOnboarding = true;
+      hasTrustDialogAccepted = true;
+      mcpServers = {
+        xmsg = {
+          type = "stdio";
+          command = "${lib.getExe cfg.experts.xmsgPackage}";
+          args = [ "mcp" ];
+          env = { };
+        };
+      };
       projects = {
         "${tierCwd}" = {
           hasTrustDialogAccepted = true;
@@ -125,9 +184,148 @@ let
       - Consult `./memory/MEMORY.md` for operating context.
     '';
 
+  mkExpertClaudeShim =
+    tier:
+    let
+      claudeDir = "${cfg.stateDir}/claude-${tier}";
+      dispStateDir = "${cfg.stateDir}/dispatcher-${tier}";
+      settingsJson = mkExpertSettingsJson tier;
+      claudeJson = mkExpertClaudeJson tier;
+      claudeMd = mkExpertClaudeMd tier;
+      realClaudeBin = lib.getExe (
+        if cfg.experts.claudePackage != null then cfg.experts.claudePackage else defaultClaudePackage
+      );
+      xmsgSockStr = if cfg.xmsgSocket != null then toString cfg.xmsgSocket else "";
+    in
+    pkgs.writeTextFile {
+      name = "genie-claude-shim-${tier}";
+      destination = "/bin/genie-claude-shim";
+      executable = true;
+      meta.mainProgram = "genie-claude-shim";
+      text = ''
+        #!${pkgs.python3}/bin/python3 -I
+        import os
+        import re
+        import socket
+        import stat
+        import sys
+
+        STATE_DIR = ${builtins.toJSON (toString cfg.stateDir)}
+        DISP_STATE_DIR = ${builtins.toJSON dispStateDir}
+        CLAUDE_DIR = ${builtins.toJSON claudeDir}
+        SETTINGS_JSON = ${builtins.toJSON (toString settingsJson)}
+        CLAUDE_JSON = ${builtins.toJSON (toString claudeJson)}
+        EMPTY_JSON = ${builtins.toJSON (toString emptyJsonFile)}
+        CLAUDE_MD = ${builtins.toJSON (toString claudeMd)}
+        EMPTY_DIR = ${builtins.toJSON (toString emptyStoreDir)}
+        XMSG_SOCKET = ${builtins.toJSON xmsgSockStr}
+        BWRAP_BIN = "${pkgs.bubblewrap}/bin/bwrap"
+        REAL_CLAUDE_BIN = ${builtins.toJSON realClaudeBin}
+
+        def die(msg: str) -> "None":
+            sys.stderr.write(f"genie-claude-shim: {msg}\n")
+            sys.exit(2)
+
+        def parse_argv(argv: list[str]) -> tuple[str, str, str, list[str]]:
+            if "--" not in argv:
+                die("missing '--' separator")
+            sep = argv.index("--")
+            head = argv[:sep]
+            claude_args = argv[sep + 1 :]
+            if len(head) != 6 or head[0] != "--token-sock" or head[2] != "--thread-id" or head[4] != "--cwd":
+                die(f"invalid shim arguments: {head!r}")
+            return head[1], head[3], head[5], claude_args
+
+        def main() -> None:
+            sock_path, thread_id, pane_cwd, claude_args = parse_argv(sys.argv[1:])
+            if thread_id in (".", "..") or not re.match(r"^[A-Za-z0-9_.-]{1,128}$", thread_id):
+                die(f"invalid thread_id: {thread_id!r}")
+
+            wt_root = f"{DISP_STATE_DIR}/worktrees/{thread_id}"
+            norm_cwd = os.path.normpath(pane_cwd)
+            if (
+                not pane_cwd.startswith("/")
+                or ".." in pane_cwd.split("/")
+                or not (norm_cwd == wt_root or norm_cwd.startswith(wt_root + "/"))
+            ):
+                die(f"invalid --cwd {pane_cwd!r} for thread {thread_id!r}")
+            worktree_cwd = norm_cwd
+
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                s.connect(sock_path)
+                _msg, fds, _flags, _addr = socket.recv_fds(s, 16, 1)
+            finally:
+                s.close()
+
+            if not fds:
+                die("did not receive token socketpair fd over SCM_RIGHTS")
+            tok_fd = fds[0]
+            st = os.fstat(tok_fd)
+            if not stat.S_ISSOCK(st.st_mode):
+                die(f"received fd {tok_fd} is not an AF_UNIX socket (mode={oct(st.st_mode)})")
+
+            try:
+                os.unlink(sock_path)
+            except FileNotFoundError:
+                pass
+
+            env = dict(os.environ)
+            for k in (
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_BG_AUTH_SNAPSHOT_PATH",
+                "ANTIGRAVITY_SOURCE_METADATA",
+            ):
+                env.pop(k, None)
+
+            os.set_inheritable(tok_fd, True)
+            env["CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"] = str(tok_fd)
+
+            bwrap_argv = [
+                BWRAP_BIN,
+                "--die-with-parent",
+                "--new-session",
+                "--unshare-user",
+                "--unshare-pid",
+                "--ro-bind", "/", "/",
+                "--dev", "/dev",
+                "--bind", "/proc", "/proc",
+                "--tmpfs", "/tmp",
+                "--tmpfs", STATE_DIR,
+                "--bind", wt_root, wt_root,
+                "--bind", f"{DISP_STATE_DIR}/claude-threads/{thread_id}", CLAUDE_DIR,
+                "--ro-bind", SETTINGS_JSON, f"{CLAUDE_DIR}/settings.json",
+                "--ro-bind", CLAUDE_JSON, f"{CLAUDE_DIR}/.claude.json",
+                "--ro-bind", EMPTY_JSON, f"{CLAUDE_DIR}/.config.json",
+                "--ro-bind", CLAUDE_MD, f"{CLAUDE_DIR}/CLAUDE.md",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/hooks",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/plugins",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/cowork_plugins",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/commands",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/skills",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/agents",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/rules",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/workflows",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/routines",
+                "--ro-bind", EMPTY_DIR, f"{CLAUDE_DIR}/output-styles",
+                *(["--ro-bind", XMSG_SOCKET, XMSG_SOCKET] if XMSG_SOCKET else []),
+                "--remount-ro", STATE_DIR,
+                "--chdir", worktree_cwd,
+                "--",
+                REAL_CLAUDE_BIN,
+                *claude_args,
+            ]
+            os.execve(BWRAP_BIN, bwrap_argv, env)
+
+        if __name__ == "__main__":
+            main()
+      '';
+    };
+
   mkTierUnits =
     tier: tierCfg:
     let
+      otherTier = if tier == "public" then "trusted" else "public";
       claudeDir = "${cfg.stateDir}/claude-${tier}";
       cwdDir = "${cfg.stateDir}/cwd-${tier}";
       dispStateDir = "${cfg.stateDir}/dispatcher-${tier}";
@@ -135,31 +333,97 @@ let
       settingsJson = mkExpertSettingsJson tier;
       claudeJson = mkExpertClaudeJson tier;
       claudeMd = mkExpertClaudeMd tier;
+      claudeShim = mkExpertClaudeShim tier;
+      dispCredPath = "/run/credentials/genie-dispatcher@${tier}.service/tier-token";
       bootstrapScript = pkgs.writeShellScript "genie-expert-${tier}-bootstrap" ''
         set -euo pipefail
+        [ "$(${pkgs.coreutils}/bin/cat /proc/sys/kernel/yama/ptrace_scope)" -ge 1 ] || {
+          echo "genie-expert-${tier}-bootstrap: kernel.yama.ptrace_scope must be >= 1" >&2
+          exit 1
+        }
         mkdir -p -m 0700 "${claudeDir}" "${claudeDir}/sessions" "${claudeDir}/transcripts"
-        mkdir -p -m 0700 "${cwdDir}" "${dispStateDir}" "${dispStateDir}/worktrees"
+        mkdir -p -m 0700 "${cwdDir}" "${dispStateDir}" "${dispStateDir}/launch" "${dispStateDir}/worktrees" "${dispStateDir}/claude-threads"
+        mkdir -p -m 0700 "${cfg.stateDir}/herdr-session-${tier}"
         # A credential left by the old symlink layout must not survive into the tier.
         rm -f "${claudeDir}/.credentials.json"
-        install -m 0600 "${settingsJson}" "${claudeDir}/settings.json"
-        install -m 0600 "${claudeJson}" "${claudeDir}/.claude.json"
         install -m 0644 "${claudeMd}" "${cwdDir}/CLAUDE.md"
-        install -m 0644 "${claudeMd}" "${claudeDir}/CLAUDE.md"
         install -m 0644 "${claudeMd}" "${dispStateDir}/CLAUDE.md"
         ln -sfn "${tierCfg.reposDir}" "${cwdDir}/source-repos"
         ln -sfn "${tierCfg.memoryDir}" "${cwdDir}/memory"
         ln -sfn "${tierCfg.reposDir}" "${dispStateDir}/source-repos"
         ln -sfn "${tierCfg.memoryDir}" "${dispStateDir}/memory"
       '';
-      # The sandbox is an allowlist (GI-13): nothing under the operator's home is bound but the
-      # tier's repos and memory, both read-only below.
-      bindPaths = lib.optional (cfg.xmsgSocket != null) (toString cfg.xmsgSocket);
-      bindReadOnlyPaths = [
+      herdrBindPaths = lib.optional (cfg.xmsgSocket != null) (toString cfg.xmsgSocket) ++ [
+        "${cfg.stateDir}/herdr-session-${tier}:${cfg.stateDir}/.config/herdr/sessions/genie-${tier}"
+      ];
+      herdrBindReadOnlyPaths = [
+        tierCfg.reposDir
+        tierCfg.memoryDir
+        "${settingsJson}:${claudeDir}/settings.json"
+        "${claudeJson}:${claudeDir}/.claude.json"
+        "${emptyJsonFile}:${claudeDir}/.config.json"
+        "${claudeMd}:${claudeDir}/CLAUDE.md"
+        "${emptyStoreDir}:${claudeDir}/hooks"
+        "${emptyStoreDir}:${claudeDir}/plugins"
+        "${emptyStoreDir}:${claudeDir}/cowork_plugins"
+        "${emptyStoreDir}:${claudeDir}/commands"
+        "${emptyStoreDir}:${claudeDir}/skills"
+        "${emptyStoreDir}:${claudeDir}/agents"
+        "${emptyStoreDir}:${claudeDir}/rules"
+        "${emptyStoreDir}:${claudeDir}/workflows"
+        "${emptyStoreDir}:${claudeDir}/routines"
+        "${emptyStoreDir}:${claudeDir}/output-styles"
+        "${claudeJson}:${cfg.stateDir}/.claude.json"
+        "${emptyStoreFile}:${cfg.stateDir}/.zshenv"
+        "${emptyStoreFile}:${cfg.stateDir}/.zshrc"
+        "${emptyStoreFile}:${cfg.stateDir}/.zprofile"
+        "${emptyStoreFile}:${cfg.stateDir}/.zlogin"
+        "${emptyStoreFile}:${cfg.stateDir}/.zlogout"
+        "${emptyStoreFile}:${cfg.stateDir}/.bashrc"
+        "${emptyStoreFile}:${cfg.stateDir}/.bash_profile"
+        "${emptyStoreFile}:${cfg.stateDir}/.bash_login"
+        "${emptyStoreFile}:${cfg.stateDir}/.bash_logout"
+        "${emptyStoreFile}:${cfg.stateDir}/.profile"
+        "${emptyStoreFile}:${cfg.stateDir}/.bash_completion"
+        "${emptyStoreFile}:${cfg.stateDir}/.inputrc"
+        "${emptyStoreFile}:${cfg.stateDir}/.envrc"
+        "${emptyStoreDir}:${cfg.stateDir}/.nix-profile"
+        "${emptyStoreDir}:${cfg.stateDir}/.local/state/nix/profile"
+        "${mkReadOnlyHerdrConfigDir tier}:${cfg.stateDir}/.config/herdr"
+      ];
+      herdrInaccessiblePaths = [
+        "-/run/credentials"
+        "-/run/agenix"
+        "-/run/agenix.d"
+        "-/run/genie-secrets"
+        "${cfg.stateDir}/claude-${otherTier}"
+        "${cfg.stateDir}/cwd-${otherTier}"
+        "${cfg.stateDir}/dispatcher-${otherTier}"
+        "${cfg.stateDir}/herdr-session-${otherTier}"
+        "-${cfg.stateDir}/.config/herdr/sessions/genie-${otherTier}"
+      ];
+      dispBindPaths = herdrBindPaths;
+      dispBindReadOnlyPaths = [
         tierCfg.reposDir
         tierCfg.memoryDir
       ];
+      dispInaccessiblePaths = [
+        "-/run/agenix"
+        "-/run/agenix.d"
+        "-/run/genie-secrets"
+        "${cfg.stateDir}/claude-${otherTier}"
+        "${cfg.stateDir}/cwd-${otherTier}"
+        "${cfg.stateDir}/dispatcher-${otherTier}"
+        "${cfg.stateDir}/herdr-session-${otherTier}"
+        "-${cfg.stateDir}/.config/herdr/sessions/genie-${otherTier}"
+      ];
       herdrPackages = [
         cfg.experts.herdrPackage
+        claudeShim
+        pkgs.bubblewrap
+        cfg.experts.xmsgPackage
+        pkgs.ripgrep
+        pkgs.python3
         pkgs.git
         pkgs.nix
         pkgs.coreutils
@@ -169,9 +433,10 @@ let
       modelFlag = lib.optionalString (
         tierCfg.model != null
       ) " --model ${lib.escapeShellArg tierCfg.model}";
-      claudeBinFlag = lib.optionalString (
-        cfg.experts.claudePackage != null
-      ) " --claude-bin ${lib.escapeShellArg (lib.getExe cfg.experts.claudePackage)}";
+      claudeBinFlag = " --claude-bin ${lib.escapeShellArg (lib.getExe claudeShim)}";
+      tokenCredFlag = lib.optionalString (
+        tierCfg.tokenEnvironmentFile != null
+      ) " --token-credential-file ${lib.escapeShellArg dispCredPath}";
     in
     {
       "genie-herdr@${tier}" = {
@@ -182,6 +447,7 @@ let
         environment = {
           HOME = toString cfg.stateDir;
           XDG_RUNTIME_DIR = runtimeDir;
+          ZDOTDIR = toString expertZdotdir;
         };
         serviceConfig =
           commonHardening
@@ -198,15 +464,14 @@ let
             RestartSec = "5s";
             ProtectControlGroups = true;
             # Same uid as the operator with PrivateUsers off: without a PID namespace,
-            # /proc/<pid>/root walks into the operator's mount namespace past every bind.
+            # /proc/<pid>/root walks into the operator's mount namespace past every bind,
+            # and PrivatePIDs=true hides host and genie-dispatcher@* PIDs from herdr's /proc.
             PrivatePIDs = true;
-            BindPaths = lib.unique bindPaths;
-            BindReadOnlyPaths = lib.unique bindReadOnlyPaths;
-          }
-          # The tier's token reaches claude only through the server's environment, which every
-          # pane inherits; the dispatcher never reads it.
-          // lib.optionalAttrs (tierCfg.tokenEnvironmentFile != null) {
-            EnvironmentFile = toString tierCfg.tokenEnvironmentFile;
+            SystemCallFilter = [ "~perf_event_open" ];
+            SystemCallErrorNumber = "EPERM";
+            BindPaths = lib.unique herdrBindPaths;
+            BindReadOnlyPaths = lib.unique herdrBindReadOnlyPaths;
+            InaccessiblePaths = lib.unique herdrInaccessiblePaths;
           }
           // lib.optionalAttrs (effectiveGroup != null) {
             Group = effectiveGroup;
@@ -235,13 +500,19 @@ let
             RuntimeDirectory = "genie-agent";
             WorkingDirectory = toString cfg.stateDir;
             ExecStartPre = "${bootstrapScript}";
-            ExecStart = "${lib.getExe cfg.experts.dispatcherPackage} --state-dir ${dispStateDir} --herdr-session ${sessionName} --cwd ${cwdDir} --token-config-dir ${claudeDir} --service-name ${tierCfg.serviceName}${modelFlag}${claudeBinFlag}";
+            ExecStart = "${lib.getExe cfg.experts.dispatcherPackage} --state-dir ${dispStateDir} --herdr-session ${sessionName} --cwd ${cwdDir} --token-config-dir ${claudeDir} --service-name ${tierCfg.serviceName}${modelFlag}${claudeBinFlag}${tokenCredFlag}";
             Restart = "on-failure";
             RestartSec = "5s";
             ProtectControlGroups = true;
-            PrivatePIDs = true;
-            BindPaths = lib.unique bindPaths;
-            BindReadOnlyPaths = lib.unique bindReadOnlyPaths;
+            # PrivatePIDs = false so genie-dispatcher runs in the ancestor (host) PID namespace
+            # and SO_PEERPIDFD resolves peers in genie-herdr@<tier>'s child PID namespace.
+            PrivatePIDs = false;
+            LoadCredential = lib.optional (
+              tierCfg.tokenEnvironmentFile != null
+            ) "tier-token:${toString tierCfg.tokenEnvironmentFile}";
+            BindPaths = lib.unique dispBindPaths;
+            BindReadOnlyPaths = lib.unique dispBindReadOnlyPaths;
+            InaccessiblePaths = lib.unique dispInaccessiblePaths;
           }
           // lib.optionalAttrs (effectiveGroup != null) {
             Group = effectiveGroup;
@@ -288,7 +559,19 @@ in
         assertion = cfg.xmsgSocket != null -> !cfg.dynamicUser;
         message = "services.genie-agent: when xmsgSocket is configured, dynamicUser must be false because xmsg's UID and /proc/<pid>/exe attestation requires running as the socket's owning user.";
       }
+      {
+        assertion = cfg.experts.enable -> cfg.xmsgSocket != null;
+        message = "services.genie-agent.experts.enable requires services.genie-agent.xmsgSocket != null.";
+      }
+      {
+        assertion = cfg.experts.enable -> (config.boot.kernel.sysctl."kernel.yama.ptrace_scope" or 1) >= 1;
+        message = "services.genie-agent.experts.enable requires boot.kernel.sysctl.\"kernel.yama.ptrace_scope\" >= 1.";
+      }
     ];
+
+    boot.kernel.sysctl = lib.mkIf cfg.experts.enable {
+      "kernel.yama.ptrace_scope" = lib.mkDefault 1;
+    };
 
     users.users = lib.mkIf (!cfg.dynamicUser && cfg.user == "genie-agent") {
       genie-agent = {
@@ -306,19 +589,63 @@ in
           genie-agent = { };
         };
 
-    # Each tier's config dir exists, owned by the service user, before any tier unit's namespace is set up.
+    # Mount targets and isolated directories exist, owned by the service user, before any tier unit's namespace is set up.
     systemd.tmpfiles.rules = lib.optionals cfg.experts.enable (
-      map
-        (
-          tier:
-          "d ${toString cfg.stateDir}/claude-${tier} 0700 ${cfg.user} ${
-            if effectiveGroup != null then effectiveGroup else "-"
-          } -"
-        )
-        [
-          "public"
-          "trusted"
-        ]
+      [
+        "d ${toString cfg.stateDir} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.claude.json 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.zshenv 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.zshrc 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.zprofile 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.zlogin 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.zlogout 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.bashrc 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.bash_profile 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.bash_login 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.bash_logout 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.profile 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.bash_completion 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.inputrc 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "f ${toString cfg.stateDir}/.envrc 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.nix-profile 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.local 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.local/state 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.local/state/nix 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.local/state/nix/profile 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.config 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.config/herdr 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+        "d ${toString cfg.stateDir}/.config/herdr/sessions 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+      ]
+      ++
+        lib.concatMap
+          (tier: [
+            "d ${toString cfg.stateDir}/claude-${tier} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "f ${toString cfg.stateDir}/claude-${tier}/settings.json 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+            "f ${toString cfg.stateDir}/claude-${tier}/.claude.json 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+            "f ${toString cfg.stateDir}/claude-${tier}/.config.json 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+            "f ${toString cfg.stateDir}/claude-${tier}/CLAUDE.md 0400 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/hooks 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/plugins 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/cowork_plugins 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/commands 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/skills 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/agents 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/rules 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/workflows 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/routines 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/claude-${tier}/output-styles 0500 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/cwd-${tier} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/dispatcher-${tier} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/dispatcher-${tier}/launch 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/dispatcher-${tier}/worktrees 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/dispatcher-${tier}/claude-threads 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/herdr-session-${tier} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+            "d ${toString cfg.stateDir}/.config/herdr/sessions/genie-${tier} 0700 ${cfg.user} ${effectiveGroupOrDash} -"
+          ])
+          [
+            "public"
+            "trusted"
+          ]
     );
 
     systemd.services = {
