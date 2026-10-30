@@ -465,9 +465,21 @@ rec {
             };
 
             xmsgPackage = lib.mkOption {
-              type = lib.types.package;
-              default = pkgs.xmsg or (pkgs.writeShellScriptBin "xmsg" "exit 1");
-              defaultText = lib.literalExpression "pkgs.xmsg";
+              type = lib.types.nullOr lib.types.package;
+              default =
+                if pkgs ? xmsg then
+                  pkgs.xmsg
+                else if cfg.experts.enable then
+                  throw "services.genie-agent.experts.xmsgPackage must be set when pkgs.xmsg is absent"
+                else
+                  null;
+              defaultText = lib.literalExpression "pkgs.xmsg or null";
+              apply =
+                p:
+                if p == null && cfg.experts.enable then
+                  throw "services.genie-agent.experts.xmsgPackage must be set when services.genie-agent.experts.enable is true"
+                else
+                  p;
               description = "The xmsg CLI package placed on PATH for genie-herdr@<tier> and registered in .claude.json mcpServers.xmsg.";
             };
 
@@ -516,10 +528,11 @@ rec {
           cfg.experts.enable
           -> (
             cfg.experts.herdrPackage != null
+            && cfg.experts.xmsgPackage != null
             && cfg.experts.public.tokenEnvironmentFile != null
             && cfg.experts.trusted.tokenEnvironmentFile != null
           );
-        message = "services.genie-agent.experts.enable requires experts.herdrPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.";
+        message = "services.genie-agent.experts.enable requires experts.herdrPackage, experts.xmsgPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.";
       }
       {
         assertion = (cfg.broker.threadLink != null) -> lib.hasInfix "{thread}" cfg.broker.threadLink;

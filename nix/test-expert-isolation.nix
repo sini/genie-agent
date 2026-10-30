@@ -2051,6 +2051,7 @@ let
         experts = {
           enable = true;
           inherit herdrPackage claudePackage;
+          xmsgPackage = idle "xmsg";
           dispatcherPackage = idle "genie-dispatcher";
           public = {
             reposDir = "/var/lib/genie/public-repos";

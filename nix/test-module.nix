@@ -40,6 +40,7 @@ let
             enable = true;
             herdrPackage = pkgs.herdr;
             claudePackage = pkgs.writeShellScriptBin "claude" "exit 0";
+            xmsgPackage = pkgs.writeShellScriptBin "xmsg" "exit 0";
             public = {
               address = "genie-expert-public@sini.bitstream";
               reposDir = "/var/lib/genie/public-repos";
@@ -191,6 +192,51 @@ let
       builtins.seq evalUnpatchedHerdr.config.services.genie-agent.experts.herdrPackage true
     )).success;
 
+  # GF2: experts enabled without a resolvable xmsgPackage (neither set nor in pkgs) must fail at evaluation with a throw rather than falling back to a dead stub.
+  evalMissingXmsgPackage = nixpkgs.lib.nixosSystem {
+    system = pkgs.stdenv.hostPlatform.system;
+    modules = [
+      self.nixosModules.default
+      {
+        system.stateVersion = "25.05";
+        services.genie-agent = {
+          enable = true;
+          user = "sini";
+          xmsgSocket = "/run/user/1000/xmsg";
+          model = {
+            baseUrl = "http://10.9.2.2:18020/v1";
+            id = "qwen3.6-35b-a3b";
+            keyFile = "/home/sini/.config/hyperqwen/api-key";
+          };
+          tier1.searxngUrl = "http://10.11.0.24:8080";
+          guardRef = null;
+          guard.enable = false;
+          broker.guardOut.enable = false;
+          experts = {
+            enable = true;
+            herdrPackage = pkgs.herdr;
+            claudePackage = pkgs.writeShellScriptBin "claude" "exit 0";
+            public.tokenEnvironmentFile = "/run/agenix/genie-expert-public-token";
+            trusted.tokenEnvironmentFile = "/run/agenix/genie-expert-trusted-token";
+          };
+        };
+      }
+    ];
+  };
+  missingXmsgPackageThrows =
+    !(builtins.tryEval (
+      builtins.seq evalMissingXmsgPackage.config.services.genie-agent.experts.xmsgPackage true
+    )).success;
+
+  # GF2: experts enabled with xmsgPackage explicitly forced to null must also throw at evaluation.
+  evalNullXmsgPackage = evalLocal.extendModules {
+    modules = [ { services.genie-agent.experts.xmsgPackage = lib.mkForce null; } ];
+  };
+  nullXmsgPackageThrows =
+    !(builtins.tryEval (
+      builtins.seq evalNullXmsgPackage.config.services.genie-agent.experts.xmsgPackage true
+    )).success;
+
   failedAssertions =
     ev:
     lib.filter (lib.hasPrefix "services.genie-agent") (
@@ -302,7 +348,7 @@ let
     noXmsgSocketFailedAssertions = failedAssertions evalNoXmsgSocket;
     ptraceScope0FailedAssertions = failedAssertions evalPtraceScope0;
     localPtraceScope = evalLocal.config.boot.kernel.sysctl."kernel.yama.ptrace_scope";
-    inherit unpatchedHerdrThrows;
+    inherit unpatchedHerdrThrows missingXmsgPackageThrows nullXmsgPackageThrows;
     localTmpfiles = lib.filter (lib.hasInfix "/claude-") evalLocal.config.systemd.tmpfiles.rules;
     allLocalTmpfiles = evalLocal.config.systemd.tmpfiles.rules;
     localRootAttrs = localRootJson.passthru.attrs;

@@ -407,11 +407,21 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
   }
   assert.deepEqual(summary.localFailedAssertions, []);
   assert.deepEqual(summary.noTierTokenFailedAssertions, [
-    "services.genie-agent.experts.enable requires experts.herdrPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.",
+    "services.genie-agent.experts.enable requires experts.herdrPackage, experts.xmsgPackage, experts.public.tokenEnvironmentFile and experts.trusted.tokenEnvironmentFile to be set.",
   ]);
   assert.equal(
     summary.unpatchedHerdrThrows,
     true,
     "a non-null herdrPackage without src must throw at evaluation rather than passing unpatched",
+  );
+  assert.equal(
+    summary.missingXmsgPackageThrows,
+    true,
+    "experts enabled without a resolvable xmsgPackage must throw at evaluation rather than falling back to a dead stub (GF2)",
+  );
+  assert.equal(
+    summary.nullXmsgPackageThrows,
+    true,
+    "experts enabled with xmsgPackage = null must throw at evaluation (GF2)",
   );
 });
