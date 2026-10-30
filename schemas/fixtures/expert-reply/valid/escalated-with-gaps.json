@@ -1,0 +1,9 @@
+{
+  "answer": "Verified module evaluation up to the private overlay boundary, which cannot be evaluated in @public.",
+  "confidence": 0.62,
+  "gaps": [
+    "User flake references unmounted private input `corp-secrets`"
+  ],
+  "tier": "expert",
+  "escalate": true
+}

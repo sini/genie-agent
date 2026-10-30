@@ -1,0 +1,14 @@
+{
+  "answer": "Deferred proposal field must be rejected until GS1 OQ4 lands",
+  "confidence": 0.9,
+  "gaps": [],
+  "tier": "expert",
+  "proposal": {
+    "kind": "gist",
+    "title": "repro",
+    "body": "body",
+    "files": {
+      "repro.nix": "{}\n"
+    }
+  }
+}

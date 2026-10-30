@@ -14,6 +14,7 @@ import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient,
 import { gist } from "../broker/gist.ts";
 import { broker, byKind, outbound } from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
+import { parseExpertReply, type ExpertReply } from "../dispatcher/reply.ts";
 import { escalationGuard } from "../escalation/guard.ts";
 import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts";
 import { router } from "../escalation/route.ts";
@@ -295,7 +296,11 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
 
   // Wrap every outbound post in a structured envelope { text: <string> }, with approval: true
   // only on approval notices, so model output can never mint an approval request (Unit C10).
-  const postEnvelope = async (thread: string, msg: string | Draft | PostEnvelope, approval?: boolean): Promise<string | void> => {
+  const postEnvelope = async (
+    thread: string,
+    msg: string | Draft | ExpertReply | PostEnvelope,
+    approval?: boolean,
+  ): Promise<string | void> => {
     if (typeof msg === "object" && msg !== null && "text" in msg && (msg as PostEnvelope).approval === true) {
       return io.post.post(thread, msg as PostEnvelope);
     }
@@ -496,16 +501,27 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       setContext(i.thread, { cleaned_question: text });
       await lifecycle.message(i.thread, text, { hadState, isDelta });
     } else if ("expert" in i) {
+      const check = parseExpertReply(i.expert);
+      if (!check.ok) {
+        console.error(`thread ${i.thread}: malformed expert reply rejected: ${check.error}`);
+        return;
+      }
+      const parsed = check.value;
       const q = context(i.thread).cleaned_question;
-      const out = await outbound(q, (scrub) => scrub(i.expert), guardOut);
+      const out = await outbound(
+        q,
+        (scrub): ExpertReply => ({ ...parsed, answer: scrub(parsed.answer), gaps: parsed.gaps.map(scrub) }),
+        guardOut,
+      );
       if (!("value" in out)) {
         console.error(`thread ${i.thread}: expert reply withheld: ${out.reason}`);
         store.addBlockedExpertReply(i.thread, store.read(i.thread)?.sender_tier ?? "public");
         await postEnvelope(i.thread, WITHHELD);
         return;
       }
-      await postEnvelope(i.thread, out.value);
-      await lifecycle.message(i.thread, out.value);
+      const serialized = JSON.stringify(out.value);
+      await postEnvelope(i.thread, serialized);
+      await lifecycle.message(i.thread, serialized);
     } else if (i.control === "trust") {
       observe(store, i.thread, i);
     } else if (i.control === "approve") {

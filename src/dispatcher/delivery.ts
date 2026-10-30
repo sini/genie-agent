@@ -8,6 +8,7 @@ import { XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
 import type { Outstanding, Thread } from "./journal.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import { DispatcherGc } from "./gc.ts";
+import { parseExpertReply } from "./reply.ts";
 
 export const UNAVAILABLE = "expert unavailable";
 
@@ -184,12 +185,25 @@ export class Delivery {
       for (const t of Object.values(this.d.journal.threads)) {
         const o = t.outstanding.find((x) => x.sent === m.inReplyTo);
         if (o) {
+          const check = parseExpertReply(m.text);
+          if (!check.ok) {
+            try {
+              await this.x.send(
+                t.session,
+                `expert reply rejected (schemas/expert-reply.json): ${check.error}; reply again to message_id=${o.sent} with a valid JSON object {"answer","confidence","gaps","tier":"expert","escalate"?:boolean}`,
+                `${m.id}#err`,
+              );
+            } catch {
+              // Ignore send failure so the malformed reply is still acked while o remains outstanding.
+            }
+            return;
+          }
           const timer = this.timeouts.get(o);
           if (timer !== undefined) {
             clearTimeout(timer as any);
             this.timeouts.delete(o);
           }
-          await this.x.reply(o.id, m.text);
+          await this.x.reply(o.id, JSON.stringify(check.value));
           t.outstanding = t.outstanding.filter((x) => x !== o);
           t.lastReply = this.o.now();
           this.d.save();
@@ -307,7 +321,15 @@ export class Delivery {
       const left = o.deadline - this.o.now();
       if (left <= 0) break;
       const r = await this.x.replies(o.sent, left);
-      if (r.length && this.o.now() <= o.deadline) text = r[0];
+      if (this.o.now() <= o.deadline) {
+        for (const candidate of r) {
+          const check = parseExpertReply(candidate);
+          if (check.ok) {
+            text = JSON.stringify(check.value);
+            break;
+          }
+        }
+      }
     }
     if (this.stopped) return;
     if (!t.outstanding.includes(o)) return; // already resolved by pushed reply

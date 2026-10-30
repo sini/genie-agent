@@ -221,9 +221,10 @@ const cell = (name: string, body: (s: ReturnType<typeof setup>) => Promise<void>
   });
 
 // A thread that has completed one turn and whose lastReply is T0.
+const validReply = (answer: string) => JSON.stringify({ answer, confidence: 0.9, gaps: [], tier: "expert" });
 const answeredTurn = async (s: ReturnType<typeof setup>) => {
   const { d, del } = await s.boot();
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   s.msg("m1", "t:first");
   await del.pump(0);
   await until("first reply", () => s.x.relayed.length === 1);
@@ -258,7 +259,7 @@ cell("oracle 26: never parked with a message outstanding or in buffer", async (s
 
   // Clear buffer and answer m1
   d.journal.threads.t.buffer.pop();
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   await until("first reply", () => s.x.relayed.length === 1);
   assert.equal(d.journal.threads.t.outstanding.length, 0);
   assert.equal(d.journal.threads.t.buffer.length, 0);
@@ -286,9 +287,9 @@ cell("oracle 26: parked at the threshold after the last reply, and resumable", a
   await until("delivery after resume", () => s.x.deliveries.length === 2);
   assert.equal(s.herdr.starts.length, 2);
   assert.deepEqual(s.herdr.starts[1].args, ["--resume", session]);
-  s.x.answer(2, "a2");
+  s.x.answer(2, validReply("a2"));
   await until("reply after resume", () => s.x.relayed.length === 2);
-  assert.equal(s.x.relayed[1].text, "a2");
+  assert.equal(s.x.relayed[1].text, validReply("a2"));
 });
 
 cell("oracle 26: at 95h idle kept, at 96h handed off and gone", async (s) => {

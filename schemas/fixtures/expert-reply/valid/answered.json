@@ -1,0 +1,6 @@
+{
+  "answer": "Aspect functor composition preserves `provides` attributes across `includes` when evaluated at the host aspect level.",
+  "confidence": 0.94,
+  "gaps": [],
+  "tier": "expert"
+}

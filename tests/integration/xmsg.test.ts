@@ -544,10 +544,12 @@ process.stdin.on("data", (chunk) => {
       await inst2.waitLine(`DELIVERED ${sent2Id}`);
 
       // Now fakes reply in REVERSE order: inst-2 replies first, inst-1 replies second
-      inst2.sendCmd(`REPLY ${sent2Id} Reply 2`);
+      const reply1Json = JSON.stringify({ answer: "Reply 1", confidence: 0.9, gaps: [], tier: "expert" });
+      const reply2Json = JSON.stringify({ answer: "Reply 2", confidence: 0.9, gaps: [], tier: "expert" });
+      inst2.sendCmd(`REPLY ${sent2Id} ${reply2Json}`);
       await inst2.waitLine(`REPLIED ${sent2Id}`);
 
-      inst1.sendCmd(`REPLY ${sent1Id} Reply 1`);
+      inst1.sendCmd(`REPLY ${sent1Id} ${reply1Json}`);
       await inst1.waitLine(`REPLIED ${sent1Id}`);
 
       // Pump delivery twice to consume pushed replies and resolve turns
@@ -564,12 +566,12 @@ process.stdin.on("data", (chunk) => {
       const m1Replies = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(supMsg1Id)}/replies?wait=2`);
       assert.equal(m1Replies.status, 200);
       assert.ok(Array.isArray(m1Replies.json) && m1Replies.json.length > 0, "supervisor msg 1 must have reply");
-      assert.equal(m1Replies.json[0].text, "Reply 1", "thread-1 turn must be answered with Reply 1");
+      assert.equal(m1Replies.json[0].text, reply1Json, "thread-1 turn must be answered with Reply 1");
 
       const m2Replies = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(supMsg2Id)}/replies?wait=2`);
       assert.equal(m2Replies.status, 200);
       assert.ok(Array.isArray(m2Replies.json) && m2Replies.json.length > 0, "supervisor msg 2 must have reply");
-      assert.equal(m2Replies.json[0].text, "Reply 2", "thread-2 turn must be answered with Reply 2");
+      assert.equal(m2Replies.json[0].text, reply2Json, "thread-2 turn must be answered with Reply 2");
     } finally {
       del?.stop();
       dispatcherXmsg.close();
@@ -834,8 +836,8 @@ const [xmsgDir] = process.argv.slice(1);
   const t1 = JSON.parse(esc1.text).thread_id;
   const t2 = JSON.parse(esc2.text).thread_id;
   // Reply in reverse order (esc2 first, then esc1)
-  await x.reply(esc2.id, "Expert answer for " + t2);
-  await x.reply(esc1.id, "Expert answer for " + t1);
+  await x.reply(esc2.id, JSON.stringify({ answer: "Expert answer for " + t2, confidence: 0.9, gaps: [], tier: "expert" }));
+  await x.reply(esc1.id, JSON.stringify({ answer: "Expert answer for " + t1, confidence: 0.9, gaps: [], tier: "expert" }));
   process.stdout.write("EXPERT_DONE " + t1 + " " + t2 + "\\n");
 })();
 `;
@@ -1085,8 +1087,10 @@ const [xmsgDir] = process.argv.slice(1);
       assert.equal(fwd2All.length, 2, "fwd2 must have draft reply + expert reply");
       assert.deepEqual(JSON.parse(fwd1All[0].text), { text: JSON.stringify(draft1) });
       assert.deepEqual(JSON.parse(fwd2All[0].text), { text: JSON.stringify(draft2) });
-      assert.deepEqual(JSON.parse(fwd1All[1].text), { text: "Expert answer for $th1" });
-      assert.deepEqual(JSON.parse(fwd2All[1].text), { text: "Expert answer for $th2" });
+      const expert1Json = JSON.stringify({ answer: "Expert answer for $th1", confidence: 0.9, gaps: [], tier: "expert" });
+      const expert2Json = JSON.stringify({ answer: "Expert answer for $th2", confidence: 0.9, gaps: [], tier: "expert" });
+      assert.deepEqual(JSON.parse(fwd1All[1].text), { text: expert1Json });
+      assert.deepEqual(JSON.parse(fwd2All[1].text), { text: expert2Json });
       assert.ok(totalGuardIn >= 11, `expected >= 11 guard-in checks (3 parallel + 2 guardIn + 6 escalationGuard), got ${totalGuardIn}`);
 
       io.close();

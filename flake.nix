@@ -340,6 +340,9 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/dispatcher
+                    ./src/tier1/schema.ts
+                    ./schemas/expert-reply.json
+                    ./schemas/fixtures/expert-reply
                     ./tests/dispatcher.test.ts
                     ./tests/delivery.test.ts
                     ./tests/dispatcher-gc.test.ts
@@ -352,7 +355,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/dispatcher.test.ts tests/delivery.test.ts tests/dispatcher-gc.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The verdict parser's gating oracle: any reply outside schemas/verdict.json, or breaking its
@@ -382,6 +385,7 @@
                     ./tests/guard-out.test.ts
                     ./tests/guard-service.test.ts
                     ./src/dispatcher/xmsg.ts
+                    ./src/dispatcher/reply.ts
                     ./tests/rewrite-predicate.ts
                     ./tests/fixtures/guard
                   ];
@@ -1073,6 +1077,7 @@
                 grep -q '^ok [0-9]* - oracle (GI-8 c): room_context screens returned <context> block through guard-in when guard.enable is true (withholding on reject) and makes 0 guard calls under unscreened prompt framing when guard.enable is false$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GI-8 d): resync paging loops offset over a > 4 KiB multi-page transcript when local state is missing and is not called when local state is intact$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GI-11): a guard-out that blocks the first draft and passes the second posts only the second with no WITHHELD; blocking every draft until the turn settles posts WITHHELD once$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle GE1: root scrubs expert reply answer and gaps field-by-field while preserving tier and escalate, and rejects malformed expert replies without posting$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover

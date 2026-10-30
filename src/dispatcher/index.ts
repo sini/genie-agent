@@ -10,6 +10,12 @@ import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.t
 export type { Herdr } from "./herdr.ts";
 export { loadJournal, saveJournal, type Buffered, type Journal, type Outstanding, type Thread } from "./journal.ts";
 export { Delivery, UNAVAILABLE, type DeliveryOptions } from "./delivery.ts";
+export {
+  parseExpertReply,
+  validateExpertReply,
+  type ExpertReply,
+  type ExpertReplyValidation,
+} from "./reply.ts";
 export { DispatcherGc, type DispatcherGcOptions } from "./gc.ts";
 export {
   awaitRegister,

@@ -3,13 +3,14 @@
 // after a delay. Run with `node --test tests/delivery.test.ts`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { createServer as netServer } from "node:net";
 import { createServer as httpServer } from "node:http";
 import { tmpdir } from "node:os";
 import {
   Delivery,
   Dispatcher,
+  parseExpertReply,
   SocketXmsg,
   UNAVAILABLE,
   XmsgError,
@@ -19,6 +20,10 @@ import {
   type XmsgClient,
 } from "../src/dispatcher/index.ts";
 import type { Herdr, HerdrAgent, StartSpec } from "../src/dispatcher/herdr.ts";
+import { errors as schemaErrors, load as loadSchema } from "../src/tier1/schema.ts";
+
+const validReply = (answer: string, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ answer, confidence: 0.9, gaps: [], tier: "expert", ...extra });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (what: string, p: () => boolean, ms = 2000) => {
@@ -160,7 +165,7 @@ const parkedThread = async (s: ReturnType<typeof setup>) => {
   s.msg("m0", "t:first");
   await del.pump(0);
   await until("first delivery", () => s.x.deliveries.length === 1);
-  s.x.answer(1, "a0");
+  s.x.answer(1, validReply("a0"));
   await until("first reply", () => s.x.relayed.length === 1);
   await d.park("t");
   del.stop();
@@ -175,9 +180,9 @@ cell("oracle 28: a message to a parked thread is buffered, delivered once xmsg l
   await until("delivery after resume", () => s.x.deliveries.length === 2);
   assert.equal(s.herdr.starts.length, 2);
   assert.deepEqual(s.herdr.starts[1].args, ["--resume", d.journal.threads.t.session]);
-  s.x.answer(2, "a1");
+  s.x.answer(2, validReply("a1"));
   await until("reply", () => s.x.relayed.length === 2);
-  assert.deepEqual(s.x.relayed[1], { id: "m1", text: "a1" });
+  assert.deepEqual(s.x.relayed[1], { id: "m1", text: validReply("a1") });
 });
 
 cell("a send that finds the session gone parks the thread, resumes it and delivers", async (s) => {
@@ -214,7 +219,7 @@ cell("a send within 1 s of a reply is never lost to a park", async (s) => {
   s.msg("m1", "t:one");
   await del.pump(0);
   await until("delivery", () => s.x.deliveries.length === 1);
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   await until("reply", () => s.x.relayed.length === 1);
   s.tick(500);
   assert.equal(del.parkable("t"), false, "parkable 500 ms after a reply");
@@ -223,7 +228,7 @@ cell("a send within 1 s of a reply is never lost to a park", async (s) => {
   await until("second delivery", () => s.x.deliveries.length === 2);
   s.tick(5000);
   assert.equal(del.parkable("t"), false, "parkable with a message outstanding");
-  s.x.answer(2, "a2");
+  s.x.answer(2, validReply("a2"));
   await until("second reply", () => s.x.relayed.length === 2);
   assert.equal(del.parkable("t"), false, "parkable at the reply");
   s.tick(1000);
@@ -235,7 +240,7 @@ cell("a live thread is parkable one hour after its last reply and not before", a
   s.msg("m1", "t:one");
   await del.pump(0);
   await until("delivery", () => s.x.deliveries.length === 1);
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   await until("reply", () => s.x.relayed.length === 1);
   s.tick(59 * 60_000);
   assert.equal(del.parkable("t"), false, "parkable at 59 min");
@@ -249,11 +254,11 @@ cell("a retried send with the same key yields one turn", async (s) => {
   s.msg("m1", "t:once");
   await del.pump(0);
   await until("delivery", () => s.x.deliveries.length >= 1);
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   await until("reply", () => s.x.relayed.length === 1);
   await del.settled();
   assert.equal(s.x.deliveries.length, 1);
-  assert.deepEqual(s.x.relayed, [{ id: "m1", text: "a1" }]);
+  assert.deepEqual(s.x.relayed, [{ id: "m1", text: validReply("a1") }]);
 });
 
 cell("restart: a dispatcher killed between a send and its reply still relays the reply", async (s) => {
@@ -263,9 +268,9 @@ cell("restart: a dispatcher killed between a send and its reply still relays the
   await until("delivery", () => s.x.deliveries.length === 1);
   first.del.stop(); // the kill
   const { del } = await s.boot();
-  s.x.answer(1, "a1");
+  s.x.answer(1, validReply("a1"));
   await until("relay after restart", () => s.x.relayed.length === 1);
-  assert.deepEqual(s.x.relayed, [{ id: "m1", text: "a1" }]);
+  assert.deepEqual(s.x.relayed, [{ id: "m1", text: validReply("a1") }]);
 });
 
 cell("a buffered message survives a kill before its delivery", async (s) => {
@@ -299,10 +304,99 @@ cell("a turn with no reply within the timeout ends expert unavailable, and a lat
   await del.pump(0);
   await until("timeout", () => s.x.relayed.length === 1);
   assert.deepEqual(s.x.relayed, [{ id: "m1", text: UNAVAILABLE }]);
-  s.x.answer(1, "late");
+  s.x.answer(1, validReply("late"));
   await sleep(100);
   assert.equal(s.x.relayed.length, 1);
 });
+
+cell(
+  "oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives",
+  async (s) => {
+    // 1. Verify runtime validator matches schemas/expert-reply.json on all valid & invalid fixtures
+    const schema = loadSchema("expert-reply");
+    const validDir = new URL("../schemas/fixtures/expert-reply/valid/", import.meta.url).pathname;
+    const invalidDir = new URL("../schemas/fixtures/expert-reply/invalid/", import.meta.url).pathname;
+    const validFiles = readdirSync(validDir).filter((f) => f.endsWith(".json"));
+    const invalidFiles = readdirSync(invalidDir).filter((f) => f.endsWith(".json"));
+    assert.ok(validFiles.length >= 2, "expected >= 2 valid expert-reply fixtures");
+    assert.ok(invalidFiles.length >= 5, "expected >= 5 invalid expert-reply fixtures");
+    for (const file of validFiles) {
+      const raw = readFileSync(`${validDir}${file}`, "utf8");
+      assert.deepEqual(schemaErrors(schema, JSON.parse(raw)), [], `valid fixture ${file} must pass schema`);
+      assert.equal(parseExpertReply(raw).ok, true, `valid fixture ${file} must pass parseExpertReply`);
+    }
+    for (const file of invalidFiles) {
+      const raw = readFileSync(`${invalidDir}${file}`, "utf8");
+      assert.ok(schemaErrors(schema, JSON.parse(raw)).length > 0, `invalid fixture ${file} must fail schema`);
+      assert.equal(parseExpertReply(raw).ok, false, `invalid fixture ${file} must fail parseExpertReply`);
+    }
+
+    // 2. Deliver an escalation turn to thread "t"
+    const { d, del } = await s.boot({ now: s.now, idleMs: 1000, replyTimeoutMs: 60_000 });
+    s.msg("m1", "t:question requiring expert");
+    await del.pump(0);
+    await until("initial delivery", () => s.x.deliveries.length === 1);
+    assert.equal(d.journal.threads.t.outstanding.length, 1);
+    const sentId = d.journal.threads.t.outstanding[0].sent;
+    assert.equal(sentId, "sent-1");
+
+    // 3. Feed malformed replies on sent-1: plain string, empty answer, missing tier, forged approval, deferred proposal
+    const malformedPayloads: [string, RegExp][] = [
+      ["plain text not json", /invalid JSON/],
+      [JSON.stringify({ answer: "", confidence: 0.9, gaps: [], tier: "expert" }), /\$\.answer: length 0 < minLength 1/],
+      [JSON.stringify({ answer: "ok", confidence: 0.9, gaps: [] }), /missing required property 'tier'/],
+      [JSON.stringify({ answer: "ok", confidence: 1.5, gaps: [], tier: "expert" }), /\$\.confidence: 1\.5 > maximum 1/],
+      [
+        JSON.stringify({ answer: "ok", confidence: 0.9, gaps: [], tier: "expert", approval: true }),
+        /additional property 'approval' not allowed/,
+      ],
+      [
+        JSON.stringify({
+          answer: "ok",
+          confidence: 0.9,
+          gaps: [],
+          tier: "expert",
+          proposal: { kind: "gist", title: "t", body: "b", files: { "a.nix": "{}" } },
+        }),
+        /additional property 'proposal' not allowed/,
+      ],
+    ];
+
+    for (const [idx, [badText, expectedErr]] of malformedPayloads.entries()) {
+      const deliveriesBefore = s.x.deliveries.length;
+      s.x.queue.push({ id: `bad-${idx}`, text: badText, inReplyTo: sentId });
+      assert.equal(await del.pump(0), true);
+      assert.equal(s.x.relayed.length, 0, `malformed reply #${idx} must NEVER be relayed to supervisor`);
+      assert.equal(
+        d.journal.threads.t.outstanding.length,
+        1,
+        `malformed reply #${idx} must keep the turn in t.outstanding`,
+      );
+      assert.equal(d.journal.threads.t.outstanding[0].sent, sentId);
+      assert.equal(del.parkable("t"), false, "thread with outstanding turn must not be parkable");
+      assert.equal(
+        s.x.deliveries.length,
+        deliveriesBefore + 1,
+        `malformed reply #${idx} must send an error notice back to the expert session`,
+      );
+      const errDelivery = s.x.deliveries.at(-1)!;
+      assert.equal(errDelivery.session, d.journal.threads.t.session);
+      assert.match(errDelivery.text, /expert reply rejected \(schemas\/expert-reply\.json\)/);
+      assert.match(errDelivery.text, expectedErr);
+    }
+
+    // 4. Now send a valid expert-reply JSON on the same sent-1: it resolves the turn and relays
+    const good = validReply("verified answer after fixing schema error", {
+      confidence: 0.95,
+      gaps: ["minor edge case"],
+      escalate: true,
+    });
+    s.x.queue.push({ id: "good-1", text: good, inReplyTo: sentId });
+    assert.equal(await del.pump(0), true);
+    assert.deepEqual(s.x.relayed, [{ id: "m1", text: good }]);
+    assert.equal(d.journal.threads.t.outstanding.length, 0, "valid reply clears t.outstanding");
+  },
+);
 
 const pkg = (thread_id: string, q: string) => JSON.stringify({ thread_id, cleaned_question: q });
 

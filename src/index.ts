@@ -7,6 +7,7 @@ export const schemaNames = [
   "eval-result",
   "launch",
   "escalation",
+  "expert-reply",
   "proposal",
   "thread-state",
   "candidate",
