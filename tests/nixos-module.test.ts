@@ -175,10 +175,15 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
   // Verify nested required/optional shapes on fullRootAttrs and localRootAttrs
   assert.deepEqual(Object.keys(summary.fullRootAttrs.model).sort(), ["api", "baseUrl", "id", "keyFile"]);
   assert.deepEqual(Object.keys(summary.localRootAttrs.mirror).sort(), ["mirrorRoot", "worktreeRoot"]);
-  assert.deepEqual(Object.keys(summary.localRootAttrs.tier1).sort(), ["cluster", "memoryRoot", "searxngUrl"]);
+  assert.deepEqual(
+    Object.keys(summary.localRootAttrs.tier1).sort(),
+    ["cluster", "maxConcurrentTurns", "maxQueueWaitSecs", "memoryRoot", "searxngUrl"],
+  );
+  assert.equal(summary.localRootAttrs.tier1.maxConcurrentTurns, 2);
+  assert.equal(summary.localRootAttrs.tier1.maxQueueWaitSecs, 180);
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.tier1).sort(),
-    ["checkinMs", "cluster", "memoryRoot", "questionTimeoutMs", "searxngUrl"],
+    ["checkinMs", "cluster", "maxConcurrentTurns", "maxQueueWaitSecs", "memoryRoot", "questionTimeoutMs", "searxngUrl"],
   );
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.s3).sort(),

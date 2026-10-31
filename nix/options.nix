@@ -219,6 +219,18 @@ rec {
               default = null;
               description = "Optional check-in interval in milliseconds.";
             };
+
+            maxConcurrentTurns = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 2;
+              description = "Maximum concurrent Tier 1 pi turns (FIFO turn-slot semaphore, GL1).";
+            };
+
+            maxQueueWaitSecs = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 180;
+              description = "Maximum seconds a turn may wait in the Tier 1 FIFO slot queue before fast-escalating to the expert tier (GL1).";
+            };
           };
         };
       };
@@ -573,6 +585,8 @@ rec {
         searxngUrl = cfg.tier1.searxngUrl;
         cluster = cfg.tier1.cluster;
         memoryRoot = cfg.tier1.memoryRoot;
+        maxConcurrentTurns = cfg.tier1.maxConcurrentTurns;
+        maxQueueWaitSecs = cfg.tier1.maxQueueWaitSecs;
       }
       // lib.optionalAttrs (cfg.tier1.questionTimeoutMs != null) {
         questionTimeoutMs = cfg.tier1.questionTimeoutMs;

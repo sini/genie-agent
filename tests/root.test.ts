@@ -288,6 +288,8 @@ test("oracle: a reply is redacted then guard-out'd before Post", async () => {
   assert.ok(!reviews[0].includes(token) && reviews[0].includes("[redacted:"));
   // guard-out judged the bytes that were posted.
   assert.ok(JSON.parse(reviews[0]).messages.at(-1).content.includes(JSON.stringify(JSON.stringify(parsed, null, 2))));
+  await root.supervisor.command("p", { type: "settle" });
+  while (root.store.pending("p").length > 0) await new Promise((r) => setTimeout(r, 5));
 });
 
 test("oracle: a credential in the user's question never reaches guard-out", async () => {
@@ -297,6 +299,8 @@ test("oracle: a credential in the user's question never reaches guard-out", asyn
   assert.equal((await host("q", "reply", draft(false))).ok.posted, true);
   assert.equal(reviews.length, 1);
   assert.ok(!reviews[0].includes(token) && reviews[0].includes("[redacted:"));
+  await root.supervisor.command("q", { type: "settle" });
+  while (root.store.pending("q").length > 0) await new Promise((r) => setTimeout(r, 5));
 });
 
 test("oracle: a guard-out block posts the withheld notice, never the draft", async () => {
@@ -389,6 +393,7 @@ test("oracle: a proposal through the root's Host reaches the right act", async (
   const prCall = ghRequests.find((r) => r.method === "POST" && r.url === "/repos/alice/flake/pulls");
   assert.ok(prCall, "PR call not found");
   assert.ok(JSON.parse(prCall.body).body.includes("Thread: https://chat.example.org/thread/q"));
+  await root.supervisor.teardown("q");
 });
 
 test("oracle: an idle close at 24 h archives once through the timers", async () => {
@@ -444,6 +449,7 @@ test("oracle: an expired thread collected by GC resumes on a new message with it
   assert.deepEqual(threadPrompts, ["turn 1 before gc", "turn 2 after gc"]);
   assert.equal(root.store.read(thread)?.status, "active");
   assert.equal(root.store.tombstone(thread), undefined);
+  await root.supervisor.teardown(thread);
 });
 
 test("oracle: a new thread with S3 down still starts", async () => {
@@ -453,6 +459,7 @@ test("oracle: a new thread with S3 down still starts", async () => {
   assert.ok(prompts().includes("hello while s3 is down"));
   assert.equal(root.store.read(thread)?.status, "active");
   assert.equal(root.store.tombstone(thread), undefined);
+  await root.supervisor.teardown(thread);
   status = 200;
 });
 
@@ -521,6 +528,7 @@ test("oracle: an expired thread whose removal throws after tombstoning still res
   assert.deepEqual(threadPrompts, ["turn 1 before crash", "turn 2 after crash"]);
   assert.equal(root.store.read(thread)?.status, "active");
   assert.equal(root.store.tombstone(thread), undefined, "tombstone cleared after successful replay");
+  await root.supervisor.teardown(thread);
 });
 
 
@@ -2241,6 +2249,163 @@ test("oracle (GI-11): a guard-out that blocks the first draft and passes the sec
   assert.equal(escPkg.cleaned_question, "question where every draft is blocked");
   assert.deepEqual(escPkg.draft, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
   await root.supervisor.teardown(thAllBlocked);
+});
+
+function assertQueueEscalationOutcome(
+  threadPosts: [string, unknown][],
+  threadSends: { to: string; text: string }[],
+  expectedQuestion: string,
+  statusAfterWait: string | undefined,
+  pidAfterWait: number | undefined,
+) {
+  assert.equal(threadPosts.length, 1, "at queue wait timeout, 1 notice must be posted");
+  assert.deepEqual(threadPosts[0][1], { text: DEADLINE_NOTICE });
+  assert.equal(threadSends.length, 1, "at queue wait timeout, 1 fast-escalation must be sent to expert");
+  assert.equal(threadSends[0].to, EXPERTS.public);
+  const pkg = JSON.parse(threadSends[0].text);
+  assert.equal(pkg.cleaned_question, expectedQuestion);
+  assert.deepEqual(pkg.draft, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });
+  assert.deepEqual(pkg.gaps, ["tier-1 busy"]);
+  assert.equal(statusAfterWait, "escalated", "thread status must be escalated after queue-wait fast-escalation");
+  assert.equal(pidAfterWait, undefined, "fast-escalated thread must never spawn a tier-1 pi process");
+}
+
+test("oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts the 10m timer at slot acquisition, and fast-escalates queued turns past tier1.maxQueueWaitSecs with 'tier-1 busy'", async () => {
+  const gl1Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-gl1-root-test-`);
+  const piHold = `${gl1Tmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${gl1Tmp}/${f}-key`, "k\n");
+  const cfg = `${gl1Tmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${gl1Tmp}/state`,
+      storeRoot: `${gl1Tmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${gl1Tmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${gl1Tmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], maxConcurrentTurns: 2, maxQueueWaitSecs: 180 },
+      s3: null,
+      broker: {
+        tokenFile: `${gl1Tmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-10-30T00:00:00Z"));
+  const gl1Batches: Inbound[][] = [];
+  const gl1Posts: [string, unknown][] = [];
+  const gl1Sends: { to: string; text: string }[] = [];
+  const gl1Root = main(
+    cfg,
+    {
+      intake: { next: async () => gl1Batches.shift() ?? null },
+      post: { post: async (t, m) => (gl1Posts.push([t, m]), `$ev_${gl1Posts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${gl1Sends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    // Send a burst of 4 threads (gl1_1, gl1_2, gl1_3, gl1_4) at T0
+    gl1Batches.push([
+      { thread: "gl1_1", envelope: envelope(BOB, "question 1") },
+      { thread: "gl1_2", envelope: envelope(BOB, "question 2") },
+      { thread: "gl1_3", envelope: envelope(BOB, "question 3 acquires at 120s") },
+      { thread: "gl1_4", envelope: envelope(BOB, "question 4 waits 180s in queue") },
+    ]);
+    await gl1Root.run();
+
+    // Only gl1_1 and gl1_2 run concurrently; gl1_3 and gl1_4 are queued in FIFO order
+    assert.deepEqual(gl1Root.lifecycle.activeTurns(), ["gl1_1", "gl1_2"]);
+    assert.deepEqual(gl1Root.lifecycle.queuedThreads(), ["gl1_3", "gl1_4"]);
+    assert.equal(gl1Root.supervisor.pid("gl1_3"), undefined);
+    assert.equal(gl1Root.supervisor.pid("gl1_4"), undefined);
+
+    // At T0 + 120s: gl1_1 replies and settles, so gl1_3 (first in FIFO) acquires slot 1 at T0 + 120s
+    await clock.advance(120_000);
+    await gl1Root.supervisor.command("gl1_1", {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "reply", arg: draft(false) }),
+    });
+    await gl1Root.supervisor.command("gl1_1", { type: "settle" });
+    while (gl1Root.store.pending("gl1_1").length > 0) await new Promise((r) => setTimeout(r, 5));
+
+    assert.deepEqual(gl1Root.lifecycle.activeTurns(), ["gl1_2", "gl1_3"]);
+    assert.deepEqual(gl1Root.lifecycle.queuedThreads(), ["gl1_4"]);
+    assert.ok(gl1Root.supervisor.pid("gl1_3") !== undefined, "gl1_3 acquired slot at 120s");
+
+    // At T0 + 180s (another 60s): gl1_4 has waited maxQueueWaitSecs (180s) -> fast-escalates with "tier-1 busy"
+    await clock.advance(60_000);
+    assertQueueEscalationOutcome(
+      gl1Posts.filter(([t]) => t === "gl1_4"),
+      gl1Sends,
+      "question 4 waits 180s in queue",
+      gl1Root.store.read("gl1_4")?.status,
+      gl1Root.supervisor.pid("gl1_4"),
+    );
+    assert.deepEqual(gl1Root.lifecycle.queuedThreads(), []);
+
+    // Verify gl1_3's 600s deadline started at slot acquisition (T0 + 120s), so at T0 + 600s it has NOT timed out
+    await clock.advance(420_000); // now at T0 + 600s (gl1_2 hits deadline at T0 + 600s, gl1_3 is at 480s of active time)
+    assert.equal(gl1Sends.length, 2, "only gl1_4 (at 180s) and gl1_2 (at 600s) have escalated by T0 + 600s");
+    assert.ok(gl1Root.supervisor.pid("gl1_3") !== undefined, "gl1_3 is still running at T0 + 600s");
+
+    // At T0 + 720s (120s + 600s): gl1_3's 600s deadline fires
+    await clock.advance(120_000);
+    assert.equal(gl1Sends.length, 3, "gl1_3 escalates at T0 + 120s + 600s = 720s");
+    assert.equal(gl1Root.supervisor.pid("gl1_3"), undefined);
+  } finally {
+    await gl1Root.stop();
+  }
+});
+
+test("mutant (GL1 root): dropping queued turn or omitting 'tier-1 busy' note makes GL1 root oracle go RED", () => {
+  // Mutant (a): queued turn dropped at maxQueueWaitSecs without escalating
+  assert.throws(
+    () =>
+      assertQueueEscalationOutcome(
+        [],
+        [],
+        "question 4 waits 180s in queue",
+        "active",
+        undefined,
+      ),
+    /AssertionError/,
+    "mutant dropping queued turn without escalation must fail GL1 root oracle RED",
+  );
+  // Mutant (b): escalation omits "tier-1 busy" note
+  assert.throws(
+    () =>
+      assertQueueEscalationOutcome(
+        [["gl1_4", { text: DEADLINE_NOTICE }]],
+        [
+          {
+            to: EXPERTS.public,
+            text: JSON.stringify({
+              cleaned_question: "question 4 waits 180s in queue",
+              draft: { answer: "", confidence: 0, gaps: [], escalate_forced: true },
+              gaps: [],
+            }),
+          },
+        ],
+        "question 4 waits 180s in queue",
+        "escalated",
+        undefined,
+      ),
+    /AssertionError/,
+    "mutant omitting 'tier-1 busy' note must fail GL1 root oracle RED",
+  );
 });
 
 

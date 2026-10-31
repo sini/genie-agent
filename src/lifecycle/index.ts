@@ -34,6 +34,9 @@ export const PARK_MS = 60 * 60 * 1000;
 export const CLOSE_MS = 24 * 60 * 60 * 1000;
 export const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
 export const CHECKIN_MS = 5 * 60 * 1000;
+export const DEFAULT_MAX_CONCURRENT_TURNS = 2;
+export const DEFAULT_MAX_QUEUE_WAIT_SECS = 180;
+export const MAX_QUEUE_WAIT_MS = DEFAULT_MAX_QUEUE_WAIT_SECS * 1000;
 
 import { pathToFileURL } from "node:url";
 
@@ -186,21 +189,46 @@ export interface LifecycleOptions {
   questionTimeoutMs?: number;
   checkinMs?: number;
   checkinPrompt?: string;
+  maxConcurrentTurns?: number;
+  maxQueueWaitSecs?: number;
+  queueOrder?: "fifo" | "lifo";
   onDeadline?: (thread: string) => Promise<unknown> | unknown;
+  onQueueTimeout?: (thread: string) => Promise<unknown> | unknown;
   replayResume?: (thread: string) => Promise<unknown>;
   resync?: (thread: string) => Promise<string | void>;
+}
+
+interface QueuedTurn {
+  thread: string;
+  messages: string[];
+  timer?: unknown;
 }
 
 export class Lifecycle {
   private timers = new Map<string, unknown>();
   private seenThreads = new Set<string>();
+  private activeSlots = new Set<string>();
+  private dispatching = new Set<string>();
+  private queue: QueuedTurn[] = [];
   private turns: TurnController;
   private o: LifecycleOptions;
   private clock: Clock;
+  private maxConcurrentTurns: number;
+  private maxQueueWaitMs: number;
 
   constructor(o: LifecycleOptions) {
     this.o = o;
     this.clock = o.clock ?? systemClock;
+    this.maxConcurrentTurns = o.maxConcurrentTurns ?? DEFAULT_MAX_CONCURRENT_TURNS;
+    this.maxQueueWaitMs = (o.maxQueueWaitSecs ?? DEFAULT_MAX_QUEUE_WAIT_SECS) * 1000;
+    const origTeardown = this.o.supervisor.teardown.bind(this.o.supervisor);
+    this.o.supervisor.teardown = async (thread: string) => {
+      this.removeQueued(thread);
+      this.dispatching.delete(thread);
+      this.turns.settle(thread);
+      await origTeardown(thread);
+      await this.releaseSlot(thread);
+    };
     this.turns = new TurnController({
       clock: this.clock,
       questionTimeoutMs: o.questionTimeoutMs,
@@ -232,7 +260,21 @@ export class Lifecycle {
   stop(): void {
     for (const t of this.timers.values()) this.clock.clearTimeout(t);
     this.timers.clear();
+    for (const q of this.queue) {
+      if (q.timer !== undefined) this.clock.clearTimeout(q.timer);
+    }
+    this.queue = [];
+    this.activeSlots.clear();
+    this.dispatching.clear();
     this.turns.stop();
+  }
+
+  activeTurns(): string[] {
+    return [...this.activeSlots];
+  }
+
+  queuedThreads(): string[] {
+    return this.queue.map((q) => q.thread);
   }
 
   disarm(thread: string): void {
@@ -246,6 +288,9 @@ export class Lifecycle {
   // A user message in the thread. A parked thread is resumed: pi starts on its session and is sent
   // the messages it never answered before this one. An expired thread with a tombstone is replayed from the archive first.
   // When a thread restarts with missing or corrupted local session state, resyncs from matrix-xmsg first (GI-8, §5.3).
+  // Under GL1, at most `maxConcurrentTurns` (default 2) tier-1 turns run concurrently; excess turns wait in a
+  // strict FIFO queue, starting their 600 s TurnController timer at slot acquisition, or fast-escalate after
+  // `maxQueueWaitSecs` (default 180 s).
   async message(thread: string, text: string, opts?: { isDelta?: boolean; hadState?: boolean }): Promise<void> {
     const { store, supervisor } = this.o;
     const tombstone = store.tombstone?.(thread);
@@ -256,10 +301,11 @@ export class Lifecycle {
       store.clearTombstone?.(thread);
     }
     const isRunning = supervisor.pid(thread) !== undefined;
+    const existingQueued = this.queue.find((q) => q.thread === thread);
     const sessionFile = `${store.stateRoot}/${thread}/session/thread.jsonl`;
     const stateFile = `${store.stateRoot}/${thread}/state.json`;
     const hadState = opts?.hadState ?? existsSync(stateFile);
-    const isRestart = !isRunning && (hadState || this.seenThreads.has(thread) || Boolean(opts?.isDelta));
+    const isRestart = !isRunning && !existingQueued && (hadState || this.seenThreads.has(thread) || Boolean(opts?.isDelta));
     let hasState = false;
     if (existsSync(sessionFile) && existsSync(stateFile)) {
       try {
@@ -277,7 +323,7 @@ export class Lifecycle {
     }
     this.seenThreads.add(thread);
 
-    let st = store.read(thread);
+    const st = store.read(thread);
     if (st?.status === "closed") throw new Error(`thread ${thread}: closed`);
 
     let resyncedText: string | undefined;
@@ -292,16 +338,96 @@ export class Lifecycle {
     const now = new Date(this.clock.now()).toISOString();
     // A new thread enters at the public tier; C7 owns raising it.
     store.write({ thread_id: thread, status: "active", created: now, sender_tier: "public", ...st, last_active: now });
-    const replay = !isRunning ? store.pending(thread) : [];
+    const replay = !isRunning && !existingQueued ? store.pending(thread) : [];
     const toSend = [...(resyncedText !== undefined ? [resyncedText] : replay), text];
     store.setPending(thread, [...store.pending(thread), ...(resyncedText !== undefined ? [resyncedText] : []), text]);
+
+    if (existingQueued) {
+      existingQueued.messages.push(...toSend);
+      this.arm(thread);
+      return;
+    }
+
+    if (this.activeSlots.has(thread) || this.activeSlots.size < this.maxConcurrentTurns) {
+      this.activeSlots.add(thread);
+      await this.dispatchSlot(thread, toSend);
+      return;
+    }
+
+    const entry: QueuedTurn = { thread, messages: toSend };
+    if (this.maxQueueWaitMs > 0) {
+      entry.timer = this.clock.setTimeout(() => this.fireQueueTimeout(thread), this.maxQueueWaitMs);
+    }
+    this.queue.push(entry);
+    this.arm(thread);
+  }
+
+  private async dispatchSlot(thread: string, toSend: string[]): Promise<void> {
     this.turns.begin(thread);
+    let ok = false;
     try {
       // followUp: pi queues a prompt sent while a turn runs instead of refusing it.
-      for (const message of toSend) await supervisor.command(thread, { type: "prompt", message, streamingBehavior: "followUp" });
+      for (let i = 0; i < toSend.length; i++) {
+        if (i < toSend.length - 1) this.dispatching.add(thread);
+        else this.dispatching.delete(thread);
+        await this.o.supervisor.command(thread, { type: "prompt", message: toSend[i], streamingBehavior: "followUp" });
+      }
+      ok = true;
     } finally {
+      this.dispatching.delete(thread);
       this.arm(thread);
+      if (!ok && this.o.supervisor.pid(thread) === undefined) {
+        this.turns.settle(thread);
+        await this.releaseSlot(thread);
+      }
     }
+  }
+
+  private async releaseSlot(thread: string): Promise<void> {
+    this.activeSlots.delete(thread);
+    while (this.activeSlots.size < this.maxConcurrentTurns && this.queue.length > 0) {
+      const next = this.o.queueOrder === "lifo" ? this.queue.pop()! : this.queue.shift()!;
+      if (next.timer !== undefined) {
+        this.clock.clearTimeout(next.timer);
+        next.timer = undefined;
+      }
+      const st = this.o.store.read(next.thread);
+      if (!st || st.status === "closed") continue;
+      this.activeSlots.add(next.thread);
+      try {
+        await this.dispatchSlot(next.thread, next.messages);
+      } catch (e) {
+        console.error(`thread ${next.thread}: queued turn dispatch failed: ${e}`);
+      }
+    }
+  }
+
+  private removeQueued(thread: string): QueuedTurn | undefined {
+    const idx = this.queue.findIndex((q) => q.thread === thread);
+    if (idx < 0) return undefined;
+    const [entry] = this.queue.splice(idx, 1);
+    if (entry.timer !== undefined) {
+      this.clock.clearTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+    return entry;
+  }
+
+  private async fireQueueTimeout(thread: string): Promise<void> {
+    const entry = this.removeQueued(thread);
+    if (!entry) return;
+    const st0 = this.o.store.read(thread);
+    if (!st0 || st0.status === "closed") return;
+    this.o.store.setPending(thread, []);
+    try {
+      await this.o.onQueueTimeout?.(thread);
+    } catch (e) {
+      console.error(`thread ${thread}: queue timeout failed: ${e}`);
+    }
+    const st = this.o.store.read(thread);
+    if (!st || st.status === "closed") return;
+    this.o.store.write({ ...st, last_active: new Date(this.clock.now()).toISOString() });
+    this.arm(thread);
   }
 
   // The supervisor's onEvent: a settled turn is the thread's reply, and pi has written its session.
@@ -309,21 +435,29 @@ export class Lifecycle {
   // onDeadline action (notice + escalation) and then the existing settle bookkeeping (C13.1).
   async event(thread: string, r: Record): Promise<void> {
     if (r.type !== "agent_settled") return;
+    if (this.dispatching.has(thread)) return;
     const unanswered = this.turns.settle(thread);
-    const st0 = this.o.store.read(thread);
-    if (!st0 || st0.status === "closed") return;
-    if (unanswered) {
-      try {
-        await this.o.onDeadline?.(thread);
-      } catch (e) {
-        console.error(`thread ${thread}: deadline failed: ${e}`);
+    try {
+      const st0 = this.o.store.read(thread);
+      if (!st0 || st0.status === "closed") return;
+      if (unanswered) {
+        try {
+          await this.o.onDeadline?.(thread);
+        } catch (e) {
+          console.error(`thread ${thread}: deadline failed: ${e}`);
+        }
+      }
+      const st = this.o.store.read(thread);
+      if (!st || st.status === "closed") return;
+      this.o.store.write({ ...st, last_active: new Date(this.clock.now()).toISOString() });
+      this.arm(thread);
+    } finally {
+      await this.releaseSlot(thread);
+      const st = this.o.store.read(thread);
+      if (st && st.status !== "closed") {
+        this.o.store.setPending(thread, []);
       }
     }
-    const st = this.o.store.read(thread);
-    if (!st || st.status === "closed") return;
-    this.o.store.write({ ...st, last_active: new Date(this.clock.now()).toISOString() });
-    this.o.store.setPending(thread, []);
-    this.arm(thread);
   }
 
   // A thread control from the bot (M5a). ✅ accepts and closes the thread. 🔍 escalates (C5): the
@@ -336,6 +470,8 @@ export class Lifecycle {
   // Accept or 24 hours idle. On a failure the status stays open, and the next `start` retries.
   async close(thread: string): Promise<void> {
     const { store, supervisor, mirror } = this.o;
+    this.removeQueued(thread);
+    this.dispatching.delete(thread);
     this.turns.settle(thread);
     this.clock.clearTimeout(this.timers.get(thread));
     this.timers.delete(thread);

@@ -463,6 +463,8 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
     clock,
     questionTimeoutMs: c.tier1.questionTimeoutMs,
     checkinMs: c.tier1.checkinMs,
+    maxConcurrentTurns: c.tier1.maxConcurrentTurns,
+    maxQueueWaitSecs: c.tier1.maxQueueWaitSecs,
     onDeadline: async (t) => {
       const out = await outbound(context(t).cleaned_question, (scrub) => scrub(DEADLINE_NOTICE), guardOut);
       if (!("value" in out)) {
@@ -472,6 +474,16 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
         await postEnvelope(t, out.value);
       }
       await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+    },
+    onQueueTimeout: async (t) => {
+      const out = await outbound(context(t).cleaned_question, (scrub) => scrub(DEADLINE_NOTICE), guardOut);
+      if (!("value" in out)) {
+        console.error(`thread ${t}: queue timeout notice withheld: ${out.reason}`);
+        await postEnvelope(t, WITHHELD);
+      } else {
+        await postEnvelope(t, out.value);
+      }
+      await escalation.reply(t, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });
     },
     deeper: (t) => escalation.deeper(t),
     replayResume: c.s3

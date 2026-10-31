@@ -78,6 +78,9 @@ export interface Config {
   // Per-question turn deadline (default: 600_000 ms) and check-in (default: 300_000 ms).
   questionTimeoutMs?: number;
   checkinMs?: number;
+  // FIFO turn-slot semaphore cap (default: 2) and max queue wait in seconds before fast-escalation (default: 180) (GL1).
+  maxConcurrentTurns?: number;
+  maxQueueWaitSecs?: number;
   // Addresses web_fetch may reach although refused. Tests only.
   exempt?: string[];
 }
