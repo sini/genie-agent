@@ -2,7 +2,6 @@
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
 // single executable, which is the path xmsg's `--svc-exe` attests.
-import { existsSync } from "node:fs";
 import process from "node:process";
 import type { Clock } from "./clock.ts";
 import { CliHerdr, type Herdr } from "./herdr.ts";
@@ -74,11 +73,9 @@ export async function startDispatcher(
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
   await x.register();
-  const defaultCred = process.env.CREDENTIALS_DIRECTORY
-    ? `${process.env.CREDENTIALS_DIRECTORY}/tier-token`
-    : undefined;
-  const tokenCredentialFile =
-    c.tokenCredentialFile ?? (defaultCred && existsSync(defaultCred) ? defaultCred : undefined);
+  const credentialsDir =
+    process.env.CREDENTIALS_DIRECTORY ??
+    (c.tokenCredentialFile ? c.tokenCredentialFile.replace(/\/[^/]+$/, "") : undefined);
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
     herdr:
@@ -88,10 +85,11 @@ export async function startDispatcher(
         claude: c.claudeBin,
         cwdDir: c.cwd,
         stateDir: c.stateDir,
-        tokenCredentialFile,
+        credentialsDir,
+        tokenCredentialFile: c.tokenCredentialFile,
       }),
     xmsg: x,
-    pickToken: () => ({ id: c.tokenConfigDir, configDir: c.tokenConfigDir }),
+    pickToken: () => ({ id: "tier-token", configDir: c.tokenConfigDir }),
     cwd: c.cwd,
     model: c.model,
     now: deps.clock ? () => deps.clock!.now() : undefined,

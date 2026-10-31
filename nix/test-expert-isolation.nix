@@ -86,21 +86,33 @@ let
         except OSError as e:
             return f"mem_err:{e.errno}", 0
         hits = 0
+        chunk_sz = 4 * 1024 * 1024
+        ov = max(0, len(needle) - 1)
+        step = chunk_sz - ov
         try:
             for line in maps_lines:
                 parts = line.split()
                 if len(parts) < 2 or "r" not in parts[1]:
                     continue
+                if len(parts) >= 6 and parts[5] in ("[vvar]", "[vvar_vclock]", "[vdso]", "[vsyscall]"):
+                    continue
                 start_s, end_s = parts[0].split("-")
                 start, end = int(start_s, 16), int(end_s, 16)
-                size = min(end - start, 4 * 1024 * 1024)
-                if size <= 0:
-                    continue
-                try:
-                    chunk = os.pread(mem_fd, size, start)
+                pos = start
+                while pos < end:
+                    to_read = min(chunk_sz, end - pos)
+                    if to_read <= 0:
+                        break
+                    try:
+                        chunk = os.pread(mem_fd, to_read, pos)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
                     hits += chunk.count(needle)
-                except OSError:
-                    pass
+                    if pos + to_read >= end:
+                        break
+                    pos += step
         finally:
             os.close(mem_fd)
         return "ok", hits
@@ -1850,6 +1862,541 @@ let
     cell("V6.6", *eval_v6_6("clean"))
 
     # =========================================================================
+    # 6b. V6.6b: GT3 Arm A1 Dispatcher Node V8 & HANDOFF_SERVER_PY Memory Residency
+    #            + C5 Cross-Tier /run/credentials Mount Isolation Measurement
+    # =========================================================================
+    def eval_v6_6b(mutant: str = "") -> tuple[bool, str]:
+        tag = mutant or "clean"
+        work_dir = f"/tmp/gt3-v66b-{tag}"
+        shutil.rmtree(work_dir, ignore_errors=True)
+        os.makedirs(work_dir, mode=0o755, exist_ok=True)
+        os.chown(work_dir, 1000, 100)
+        cred_dir = f"{work_dir}/creds"
+        outside_dir = f"{work_dir}/outside"
+        os.makedirs(cred_dir, mode=0o700, exist_ok=True)
+        os.makedirs(outside_dir, mode=0o700, exist_ok=True)
+        os.chown(cred_dir, 1000, 100)
+        os.chown(outside_dir, 1000, 100)
+
+        # C5 Part 2 live measurement: verify inside genie-dispatcher@public's mount namespace that
+        # /run/credentials/genie-dispatcher@public.service/tier-token is readable by sini, whereas
+        # /run/credentials/genie-dispatcher@trusted.service/tier-token is inaccessible (EACCES/ENOENT).
+        for tier in ("public", "trusted"):
+            pid_chk = subprocess.check_output(
+                ["systemctl", "show", "-p", "MainPID", "--value", f"genie-dispatcher@{tier}"],
+                text=True,
+            ).strip()
+            if not pid_chk or pid_chk == "0":
+                subprocess.run(["systemctl", "start", f"genie-dispatcher@{tier}"], check=True)
+        disp_pub_pid = subprocess.check_output(
+            ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@public"],
+            text=True,
+        ).strip()
+        disp_tru_pid = subprocess.check_output(
+            ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@trusted"],
+            text=True,
+        ).strip()
+        c5_probe = subprocess.run([
+            "nsenter", "-t", disp_pub_pid, "-m",
+            "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
+            "${pkgs.python3}/bin/python3", "-I", "-c",
+            "\n".join([
+                "import errno, json, os",
+                "res = {}",
+                "for k, p in (('own', '/run/credentials/genie-dispatcher@public.service/tier-token'), ('other', '/run/credentials/genie-dispatcher@trusted.service/tier-token')):",
+                "    try:",
+                "        fd = os.open(p, os.O_RDONLY)",
+                "        os.close(fd)",
+                "        res[k] = 'OK'",
+                "    except OSError as ex:",
+                "        res[k] = errno.errorcode.get(ex.errno, str(ex.errno))",
+                "print(json.dumps(res))",
+            ]),
+        ], capture_output=True, text=True, check=True)
+        c5_cross_tier = json.loads(c5_probe.stdout.strip())
+
+        # Copy both tier-token credential files into cred_dir (`tier-token-public` & `tier-token-trusted`).
+        cred_pub_copy = f"{cred_dir}/tier-token-public"
+        cred_tru_copy = f"{cred_dir}/tier-token-trusted"
+        shutil.copyfile(
+            f"/proc/{disp_pub_pid}/root/run/credentials/genie-dispatcher@public.service/tier-token",
+            cred_pub_copy,
+        )
+        shutil.copyfile(
+            f"/proc/{disp_tru_pid}/root/run/credentials/genie-dispatcher@trusted.service/tier-token",
+            cred_tru_copy,
+        )
+        for cp in (cred_pub_copy, cred_tru_copy):
+            os.chown(cp, 1000, 100)
+            os.chmod(cp, 0o400)
+        subprocess.run(["systemctl", "stop", "genie-dispatcher@public", "genie-dispatcher@trusted"], check=True)
+
+        with open("/etc/genie-gi15-test/herdr.ts", "r", encoding="utf-8") as f:
+            herdr_ts = f.read()
+
+        if mutant == "M-node-readfile":
+            herdr_ts = herdr_ts.replace(
+                'import { mkdirSync, rmSync } from "node:fs";',
+                'import { mkdirSync, readFileSync, rmSync } from "node:fs";',
+            ).replace(
+                "const { credDir, credName } = this.resolveCredentialTarget(threadId, s);",
+                'const { credDir, credName } = this.resolveCredentialTarget(threadId, s);\n    (globalThis as any).__GT3_MUTANT_LEAK = readFileSync(credDir + "/tier-token-" + credName, "utf8");',
+            )
+        elif mutant == "M-handoff-early-hold":
+            herdr_ts = herdr_ts.replace(
+                "zero_ba(_probe_tok)\n    del _probe_tok",
+                "pass",
+            )
+        elif mutant == "M-empty-cred-accepted":
+            herdr_ts = herdr_ts.replace(
+                'raise ValueError("credential file contains no token")',
+                "pass",
+            )
+        elif mutant == "M-cred-outside-dir":
+            herdr_ts = herdr_ts.replace(
+                'if (!rawId || rawId === "." || rawId === ".." || rawId.includes("/") || !TOKEN_ID_RE.test(rawId)) {',
+                "if (!rawId) {",
+            ).replace(
+                'not c_name\n        or "/" in c_name\n        or c_name in (".", "..")\n        or not re.match(r"^[A-Za-z0-9._-]+$", c_name)',
+                "not c_name",
+            ).replace(
+                'c_file = "tier-token" if c_name == "tier-token" else f"tier-token-{c_name}"',
+                'if "/" in c_name:\n        return os.open(c_name, os.O_RDONLY)\n    c_file = "tier-token" if c_name == "tier-token" else f"tier-token-{c_name}"',
+            )
+
+        herdr_ts_path = f"{work_dir}/herdr.ts"
+        with open(herdr_ts_path, "w", encoding="utf-8") as f:
+            f.write(herdr_ts)
+        os.chown(herdr_ts_path, 1000, 100)
+
+        empty_cred = f"{cred_dir}/tier-token-empty"
+        with open(empty_cred, "w", encoding="utf-8") as f:
+            f.write("# comment only\n   \n")
+        os.chown(empty_cred, 1000, 100)
+        os.chmod(empty_cred, 0o600)
+
+        outside_cred = f"{outside_dir}/leaked-cred"
+        with open(outside_cred, "w", encoding="utf-8") as f:
+            f.write("CLAUDE_CODE_OAUTH_TOKEN=outside-secret\n")
+        os.chown(outside_cred, 1000, 100)
+        os.chmod(outside_cred, 0o600)
+
+        runner_mjs = f"{work_dir}/run_gt3.mjs"
+        with open(runner_mjs, "w", encoding="utf-8") as f:
+            f.write("""
+            import { execFile } from "node:child_process";
+            import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync } from "node:fs";
+            import { CliHerdr } from "./herdr.ts";
+
+            const [
+              herdrBin,
+              shimPub,
+              shimTru,
+              credDir,
+              outsideCred,
+              stateDir,
+              tag,
+            ] = process.argv.slice(2);
+
+            globalThis.__GT3_DISP_CTRL = ["GENIE_DISP", "MEM_CONTROL", "0000"].join("_").repeat(4);
+
+            const tokPubHead = Buffer.from("canary-public-", "utf8");
+            const tokPubTail = Buffer.from("token-0000", "utf8");
+            const tokTruHead = Buffer.from("canary-trusted-", "utf8");
+            const tokTruTail = Buffer.from("token-0000", "utf8");
+            const dispCtrlHead = Buffer.from("GENIE_DISP_", "utf8");
+            const dispCtrlTail = Buffer.from("MEM_CONTROL_0000", "utf8");
+
+            function countSplitNeedle(buf, limit, head, tail, minIdx = 0) {
+              let hits = 0;
+              let idx = Math.max(0, minIdx);
+              const totalLen = head.length + tail.length;
+              while (idx <= limit - totalLen) {
+                const pos = buf.indexOf(head, idx);
+                if (pos === -1 || pos > limit - totalLen) break;
+                if (buf.subarray(pos + head.length, pos + totalLen).equals(tail)) {
+                  hits += 1;
+                  idx = pos + totalLen;
+                } else {
+                  idx = pos + 1;
+                }
+              }
+              return hits;
+            }
+
+            function scanPidMem(pid, runtimeNeedles = null) {
+              const maps = readFileSync("/proc/" + pid + "/maps", "utf8").split("\\n");
+              const fd = openSync("/proc/" + pid + "/mem", "r");
+              const chunkSize = 4 * 1024 * 1024;
+              const chunk = Buffer.alloc(chunkSize);
+              const pubOv = tokPubHead.length + tokPubTail.length - 1;
+              const truOv = tokTruHead.length + tokTruTail.length - 1;
+              const ctrlOv = dispCtrlHead.length + dispCtrlTail.length - 1;
+              const sockOv = runtimeNeedles ? runtimeNeedles.sockHead.length + runtimeNeedles.sockTail.length - 1 : 0;
+              const tidOv = runtimeNeedles ? runtimeNeedles.tidHead.length + runtimeNeedles.tidTail.length - 1 : 0;
+              const maxOv = Math.max(pubOv, truOv, ctrlOv, sockOv, tidOv);
+              const step = BigInt(chunkSize - maxOv);
+
+              let regions = 0;
+              let pubHits = 0;
+              let truHits = 0;
+              let dispCtrlHits = 0;
+              let sockHits = 0;
+              let tidHits = 0;
+              let readErrors = 0;
+              let emptyReads = 0;
+              try {
+                for (const line of maps) {
+                  if (!line) continue;
+                  const parts = line.trim().split(/\\s+/);
+                  if (parts.length < 2) continue;
+                  const perms = parts[1];
+                  const pathname = parts.length >= 6 ? parts.slice(5).join(" ") : "";
+                  if (!perms.startsWith("r")) continue;
+                  if (pathname === "[vvar]" || pathname === "[vvar_vclock]" || pathname === "[vdso]" || pathname === "[vsyscall]") continue;
+                  if (pathname.startsWith("/nix/store/") && !perms.includes("w")) continue;
+                  const [startHex, endHex] = parts[0].split("-");
+                  const start = BigInt("0x" + startHex);
+                  const end = BigInt("0x" + endHex);
+                  if (end <= start) continue;
+                  let offset = start;
+                  while (offset < end) {
+                    const rem = end - offset;
+                    const toRead = Number(rem > BigInt(chunkSize) ? BigInt(chunkSize) : rem);
+                    let n = 0;
+                    try {
+                      n = readSync(fd, chunk, 0, toRead, offset);
+                    } catch {
+                      readErrors += 1;
+                      break;
+                    }
+                    if (n <= 0) {
+                      emptyReads += 1;
+                      break;
+                    }
+                    regions += 1;
+                    const first = offset === start;
+                    pubHits += countSplitNeedle(chunk, n, tokPubHead, tokPubTail, first ? 0 : maxOv - pubOv);
+                    truHits += countSplitNeedle(chunk, n, tokTruHead, tokTruTail, first ? 0 : maxOv - truOv);
+                    dispCtrlHits += countSplitNeedle(chunk, n, dispCtrlHead, dispCtrlTail, first ? 0 : maxOv - ctrlOv);
+                    if (runtimeNeedles) {
+                      sockHits += countSplitNeedle(chunk, n, runtimeNeedles.sockHead, runtimeNeedles.sockTail, first ? 0 : maxOv - sockOv);
+                      tidHits += countSplitNeedle(chunk, n, runtimeNeedles.tidHead, runtimeNeedles.tidTail, first ? 0 : maxOv - tidOv);
+                    }
+                    chunk.fill(0, 0, n);
+                    if (offset + BigInt(toRead) >= end) break;
+                    offset += step;
+                  }
+                }
+              } finally {
+                closeSync(fd);
+              }
+              return {
+                regions,
+                tokHits: pubHits + truHits,
+                pubHits,
+                truHits,
+                dispCtrlHits,
+                sockHits,
+                tidHits,
+                readErrors,
+                emptyReads,
+              };
+            }
+
+            function findHandoffChild(parentPid, sockPath, tid) {
+              const sockMid = Math.floor(sockPath.length / 2);
+              const tidMid = Math.floor(tid.length / 2);
+              const runtimeNeedles = {
+                sockHead: Buffer.from(sockPath.slice(0, sockMid), "utf8"),
+                sockTail: Buffer.from(sockPath.slice(sockMid), "utf8"),
+                tidHead: Buffer.from(tid.slice(0, tidMid), "utf8"),
+                tidTail: Buffer.from(tid.slice(tidMid), "utf8"),
+              };
+              for (const entry of readdirSync("/proc")) {
+                if (!/^\\d+$/.test(entry)) continue;
+                const pid = Number(entry);
+                if (pid === parentPid) continue;
+                try {
+                  const st = readFileSync("/proc/" + pid + "/status", "utf8");
+                  const ppidMatch = st.match(/^PPid:\\s+(\\d+)/m);
+                  if (!ppidMatch || Number(ppidMatch[1]) !== parentPid) continue;
+                  const cmd = readFileSync("/proc/" + pid + "/cmdline").toString("utf8");
+                  if (!cmd.includes(sockPath)) continue;
+                  let openCredFds = 0;
+                  for (const fdEntry of readdirSync("/proc/" + pid + "/fd")) {
+                    try {
+                      const target = readlinkSync("/proc/" + pid + "/fd/" + fdEntry);
+                      if (target.startsWith(credDir) || target.includes("tier-token")) {
+                        openCredFds += 1;
+                      }
+                    } catch {}
+                  }
+                  return { pid, mem: scanPidMem(pid, runtimeNeedles), openCredFds };
+                } catch {}
+              }
+              return null;
+            }
+
+            function execHerdr(argv, env, probePath) {
+              return new Promise((resolve, reject) => {
+                execFile(argv[0], argv.slice(1), { env }, async (err, stdout, stderr) => {
+                  if (err) {
+                    if (argv.includes("agent") && argv.includes("start") && probePath) {
+                      for (let i = 0; i < 20; i++) {
+                        if (existsSync(probePath)) {
+                          resolve(JSON.stringify({ id: "cli", result: { type: "agent_started" } }));
+                          return;
+                        }
+                        await new Promise((r) => setTimeout(r, 50));
+                      }
+                    }
+                    reject(new Error(argv.join(" ") + ": " + stdout + stderr));
+                  } else {
+                    resolve(stdout);
+                  }
+                });
+              });
+            }
+
+            async function runTier(tier, shimBin) {
+              const tid = "thread-v66b-" + tier + "-" + tag;
+              const dispDir = stateDir + "/dispatcher-" + tier;
+              const cwdDir = stateDir + "/cwd-" + tier;
+              const cfgDir = stateDir + "/claude-" + tier;
+              const wtDir = dispDir + "/worktrees/" + tid;
+              const ctDir = dispDir + "/claude-threads/" + tid;
+              const probePath = ctDir + "/probe";
+              mkdirSync(wtDir, { recursive: true, mode: 0o700 });
+              mkdirSync(ctDir, { recursive: true, mode: 0o700 });
+              let duringDispMem = null;
+              let pyAccept = null;
+
+              const herdr = new CliHerdr({
+                session: "genie-" + tier,
+                cwdDir,
+                stateDir: dispDir,
+                credentialsDir: credDir,
+                herdr: herdrBin,
+                claude: shimBin,
+                expectedNspidDepth: 2,
+                readyTimeoutMs: 3500,
+                run: async (argv, env) => {
+                  if (argv[3] === "agent" && argv[4] === "start") {
+                    const sockIdx = argv.indexOf("--token-sock");
+                    const sockPath = sockIdx >= 0 ? argv[sockIdx + 1] : "";
+                    duringDispMem = scanPidMem("self");
+                    pyAccept = findHandoffChild(process.pid, sockPath, tid);
+                  }
+                  return execHerdr(argv, env, probePath);
+                },
+              });
+
+              const pane = await herdr.start({
+                name: "g-v66b-" + tier.slice(0, 3),
+                threadId: tid,
+                token: tier,
+                configDir: cfgDir,
+                cwd: wtDir,
+                args: ["--probe"],
+              });
+              await herdr.close(pane).catch(() => {});
+              if (typeof global.gc !== "function") throw new Error("expected --expose-gc");
+              global.gc();
+              const afterDispMem = scanPidMem("self");
+              return { duringDispMem, afterDispMem, pyAccept, probePath };
+            }
+
+            const pubRes = await runTier("public", shimPub);
+            const truRes = await runTier("trusted", shimTru);
+
+            let splitCalled = false;
+            let emptySplitCalled = false;
+            let emptyRejected = false;
+            let outsideSplitCalled = false;
+            let outsideRejected = false;
+            const badHerdr = new CliHerdr({
+              session: "genie-public",
+              cwdDir: stateDir + "/cwd-public",
+              stateDir: stateDir + "/dispatcher-public",
+              credentialsDir: credDir,
+              herdr: herdrBin,
+              claude: shimPub,
+              expectedNspidDepth: 2,
+              readyTimeoutMs: 3500,
+              run: async (argv, env) => {
+                if (argv[3] === "pane" && argv[4] === "split") {
+                  splitCalled = true;
+                }
+                if (argv[3] === "agent" && argv[4] === "start") {
+                  throw new Error("unexpected agent start reached for invalid credential");
+                }
+                return execHerdr(argv, env, "");
+              },
+            });
+            splitCalled = false;
+            try {
+              await badHerdr.start({
+                name: "g-v66b-empty",
+                threadId: "thread-v66b-empty-" + tag,
+                token: "empty",
+                configDir: stateDir + "/claude-public",
+                cwd: stateDir + "/dispatcher-public/worktrees/thread-v66b-empty-" + tag,
+                args: ["--probe"],
+              });
+            } catch (e) {
+              if (/credential error: credential file contains no token/.test(String(e))) emptyRejected = true;
+            }
+            emptySplitCalled = splitCalled;
+
+            splitCalled = false;
+            try {
+              await badHerdr.start({
+                name: "g-v66b-outside",
+                threadId: "thread-v66b-outside-" + tag,
+                token: outsideCred,
+                configDir: stateDir + "/claude-public",
+                cwd: stateDir + "/dispatcher-public/worktrees/thread-v66b-outside-" + tag,
+                args: ["--probe"],
+              });
+            } catch (e) {
+              if (/credential error: invalid/.test(String(e))) outsideRejected = true;
+            }
+            outsideSplitCalled = splitCalled;
+
+            console.log(JSON.stringify({
+              pub: pubRes,
+              tru: truRes,
+              emptyRejected,
+              emptySplitCalled,
+              outsideRejected,
+              outsideSplitCalled,
+            }));
+            """)
+        os.chown(runner_mjs, 1000, 100)
+
+        shim_pub = make_custom_shim(
+            "public",
+            f"v66b-pub-{tag}",
+            real_claude_bin="${probeClaude}/bin/probe-claude",
+            sleep_before_connect=0.05,
+        )
+        shim_tru = make_custom_shim(
+            "trusted",
+            f"v66b-tru-{tag}",
+            real_claude_bin="${probeClaude}/bin/probe-claude",
+            sleep_before_connect=0.05,
+        )
+
+        # Symlink /var/lib/genie-agent/.config/herdr/sessions/genie-{public,trusted} -> herdr-session-{public,trusted}
+        # in the host mount namespace for the duration of r_node, then clean up sessions_dir in finally.
+        sessions_dir = f"{STATE_DIR}/.config/herdr/sessions"
+        os.makedirs(sessions_dir, mode=0o700, exist_ok=True)
+        for p_chown in (f"{STATE_DIR}/.config", f"{STATE_DIR}/.config/herdr", sessions_dir):
+            os.chown(p_chown, 1000, 100)
+        for tier in ("public", "trusted"):
+            link_path = f"{sessions_dir}/genie-{tier}"
+            if os.path.islink(link_path) or os.path.exists(link_path):
+                if os.path.islink(link_path):
+                    os.unlink(link_path)
+                else:
+                    shutil.rmtree(link_path, ignore_errors=True)
+            os.symlink(f"{STATE_DIR}/herdr-session-{tier}", link_path)
+
+        try:
+            r_node = subprocess.run([
+                "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
+                "env", f"HOME={STATE_DIR}", "XDG_RUNTIME_DIR=/run/user/1000", f"PATH={CLEAN_PATH}",
+                "${pkgs.nodejs}/bin/node", "--expose-gc", runner_mjs,
+                get_herdr_bin("public"),
+                shim_pub,
+                shim_tru,
+                cred_dir,
+                outside_cred,
+                STATE_DIR,
+                tag,
+            ], capture_output=True, text=True)
+        finally:
+            shutil.rmtree(sessions_dir, ignore_errors=True)
+        if r_node.returncode != 0:
+            return False, f"node rc={r_node.returncode} stderr={r_node.stderr.strip()} stdout={r_node.stdout.strip()}"
+
+        rep = json.loads(r_node.stdout.strip().splitlines()[-1])
+        pub_probe = rep["pub"]["probePath"]
+        tru_probe = rep["tru"]["probePath"]
+        pub_rec = open(pub_probe, "r", encoding="utf-8").read() if os.path.exists(pub_probe) else ""
+        tru_rec = open(tru_probe, "r", encoding="utf-8").read() if os.path.exists(tru_probe) else ""
+
+        pub_d = rep["pub"]["duringDispMem"]
+        pub_a = rep["pub"]["afterDispMem"]
+        pub_py = rep["pub"]["pyAccept"]
+        tru_d = rep["tru"]["duringDispMem"]
+        tru_a = rep["tru"]["afterDispMem"]
+        tru_py = rep["tru"]["pyAccept"]
+
+        disp_ctrl_ok = (
+            pub_d["dispCtrlHits"] >= 1
+            and pub_a["dispCtrlHits"] >= 1
+            and tru_d["dispCtrlHits"] >= 1
+            and tru_a["dispCtrlHits"] >= 1
+            and pub_d["regions"] >= 20
+            and pub_d["emptyReads"] == 0
+            and tru_d["emptyReads"] == 0
+        )
+        disp_tok_hits = (
+            pub_d["tokHits"] + pub_a["tokHits"] + tru_d["tokHits"] + tru_a["tokHits"]
+        )
+        py_ctrl_ok = (
+            pub_py is not None
+            and tru_py is not None
+            and pub_py["mem"]["regions"] >= 10
+            and pub_py["mem"]["readErrors"] == 0
+            and tru_py["mem"]["readErrors"] == 0
+            and pub_py["mem"]["emptyReads"] == 0
+            and tru_py["mem"]["emptyReads"] == 0
+            and pub_py["mem"]["sockHits"] >= 1
+            and pub_py["mem"]["tidHits"] >= 1
+            and tru_py["mem"]["sockHits"] >= 1
+            and tru_py["mem"]["tidHits"] >= 1
+        )
+        py_tok_hits = (
+            (pub_py["mem"]["tokHits"] if pub_py else 999)
+            + (tru_py["mem"]["tokHits"] if tru_py else 999)
+        )
+        py_open_fds = (
+            (pub_py["openCredFds"] if pub_py else 999)
+            + (tru_py["openCredFds"] if tru_py else 999)
+        )
+        tok_delivered_ok = (
+            f"tok={HASH_PUB}" in pub_rec and "sock=1" in pub_rec
+            and f"tok={HASH_TRU}" in tru_rec and "sock=1" in tru_rec
+        )
+        empty_ok = rep["emptyRejected"] is True and rep["emptySplitCalled"] is False
+        outside_ok = rep["outsideRejected"] is True and rep["outsideSplitCalled"] is False
+        c5_mount_ok = c5_cross_tier.get("own") == "OK" and c5_cross_tier.get("other") in ("ENOENT", "EACCES")
+
+        ok = (
+            disp_ctrl_ok
+            and disp_tok_hits == 0
+            and py_ctrl_ok
+            and py_tok_hits == 0
+            and py_open_fds == 0
+            and tok_delivered_ok
+            and empty_ok
+            and outside_ok
+            and c5_mount_ok
+        )
+        return ok, (
+            f"disp_ctrl_ok={disp_ctrl_ok} disp_tok_hits={disp_tok_hits} "
+            f"py_ctrl_ok={py_ctrl_ok} py_tok_hits={py_tok_hits} py_open_fds={py_open_fds} "
+            f"tok_delivered_ok={tok_delivered_ok} empty_ok={empty_ok} outside_ok={outside_ok} "
+            f"c5_cross_tier={c5_cross_tier}"
+        )
+
+    cell("V6.6b", *eval_v6_6b())
+
+
+    # =========================================================================
     # 7. V6.8: Real claude in-process Read-then-Write refusal on 6 paths (O6)
     # =========================================================================
     def eval_v6_8(shim_override: str | None = None, tag: str = "clean") -> tuple[bool, str]:
@@ -1999,6 +2546,18 @@ let
     j_xr = json.loads(open(rep_xr, "r", encoding="utf-8").read())
     check_mutant("M-xmsg-rw", "V6.11", *eval_v6_11_from(j_xr["v611"], ino_b, ino_a))
 
+    # 8.13 M-node-readfile -> V6.6b
+    check_mutant("M-node-readfile", "V6.6b", *eval_v6_6b(mutant="M-node-readfile"))
+
+    # 8.14 M-handoff-early-hold -> V6.6b
+    check_mutant("M-handoff-early-hold", "V6.6b", *eval_v6_6b(mutant="M-handoff-early-hold"))
+
+    # 8.15 M-empty-cred-accepted -> V6.6b
+    check_mutant("M-empty-cred-accepted", "V6.6b", *eval_v6_6b(mutant="M-empty-cred-accepted"))
+
+    # 8.16 M-cred-outside-dir -> V6.6b
+    check_mutant("M-cred-outside-dir", "V6.6b", *eval_v6_6b(mutant="M-cred-outside-dir"))
+
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)
         sys.exit(1)
@@ -2083,6 +2642,7 @@ pkgs.testers.runNixOSTest {
         environment.etc."genie-gi15-test/stub_api.py".source = "${gi15TestScripts}/stub_api.py";
         environment.etc."genie-gi15-test/jail_suite.py".source = jailSuitePy;
         environment.etc."genie-gi15-test/setup_v610_repo.py".source = setupV610RepoPy;
+        environment.etc."genie-gi15-test/herdr.ts".source = ../src/dispatcher/herdr.ts;
         environment.etc."genie-gi15-test/driver.py".source = driverPy;
         systemd.services.genie-stub-api = {
           description = "GI-15 local stub Anthropic Messages API & host xmsg socket listener";

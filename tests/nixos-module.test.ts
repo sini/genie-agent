@@ -400,6 +400,7 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
     assert.equal(dispSc.EnvironmentFile, null);
     assert.deepEqual(dispSc.LoadCredential, [`tier-token:/run/agenix/genie-expert-${tier}-token`]);
     assert.equal(dispSc.PrivatePIDs, false, `genie-dispatcher@${tier} must set PrivatePIDs = false for SO_PEERPIDFD`);
+    assert.equal(dispSc.LimitCORE, 0, `genie-dispatcher@${tier} must set LimitCORE = 0 (GT3 P1)`);
     assert.ok(
       dispSc.SystemCallFilter.includes("~perf_event_open"),
       `genie-dispatcher@${tier} SystemCallFilter must include ~perf_event_open (K9/GH1)`,

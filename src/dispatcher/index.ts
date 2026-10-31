@@ -237,6 +237,7 @@ export class Dispatcher {
     t.pane = await this.o.herdr.start({
       name: t.name,
       threadId,
+      token: t.token,
       configDir: t.configDir,
       cwd: paneCwd,
       paneCwd: this.o.cwd,

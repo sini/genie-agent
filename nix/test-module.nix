@@ -310,6 +310,7 @@ let
       SystemCallErrorNumber = u.serviceConfig.SystemCallErrorNumber or null;
       ExecStartPre = u.serviceConfig.ExecStartPre or null;
       PrivatePIDs = u.serviceConfig.PrivatePIDs or false;
+      LimitCORE = u.serviceConfig.LimitCORE or null;
       EnvironmentFile = u.serviceConfig.EnvironmentFile or null;
     };
   };

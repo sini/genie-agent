@@ -1,14 +1,17 @@
 // herdr does the lifecycle only (design §5.8): start a claude session in a new pane, close a pane,
 // list the live agents. Messages never travel through it.
-// Under GI-15 (Arm A), CliHerdr.start also runs the one-shot SO_PEERPIDFD + SCM_RIGHTS socketpair
-// token handoff to genie-claude-shim before the shim enters the outer bwrap jail.
+// Under GI-15 (Arm A) + GT3 (Arm A1), CliHerdr.start passes the credential file path directly to the
+// short-lived HANDOFF_SERVER_PY child (so zero token bytes ever enter the Node.js V8 heap) and runs
+// the one-shot SO_PEERPIDFD + SCM_RIGHTS socketpair token handoff to genie-claude-shim.
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 
 export interface StartSpec {
   name: string;
   threadId?: string;
+  // Validated token id (`^[A-Za-z0-9._-]+$`), resolved inside `$CREDENTIALS_DIRECTORY` via openat(O_NOFOLLOW) (GT3 C5).
+  token?: string;
   // CLAUDE_CONFIG_DIR of the thread's token (row 17).
   configDir: string;
   // The thread's working copy directory, passed to genie-claude-shim via `--cwd` (K7).
@@ -44,24 +47,8 @@ const execRun: Run = (argv, env) =>
 // Unset so a command reaches the session it names and no other (Q2).
 const scrubbed = ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID"];
 
-export function parseTokenCredential(raw: string): string {
-  for (const line of raw.split(/\r?\n/)) {
-    let s = line.trim();
-    if (!s || s.startsWith("#")) continue;
-    if (s.startsWith("export ")) s = s.slice("export ".length).trim();
-    if (s.startsWith("CLAUDE_CODE_OAUTH_TOKEN=")) {
-      s = s.slice("CLAUDE_CODE_OAUTH_TOKEN=".length).trim();
-    }
-    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-      s = s.slice(1, -1);
-    }
-    if (s) return s;
-  }
-  throw new Error("token credential file is empty");
-}
-
 const HANDOFF_SERVER_PY = `
-import os, socket, struct, sys, time
+import os, re, socket, stat, struct, sys, time
 
 SOL_SOCKET = 1
 SO_PEERCRED = 17
@@ -73,9 +60,98 @@ pane_cwd = sys.argv[3]
 claude_shim = sys.argv[4]
 accept_log = sys.argv[5]
 expected_depth = int(sys.argv[6])
+cred_dir = sys.argv[7]
+cred_name = sys.argv[8]
+timeout_secs = float(sys.argv[9])
 
-token = sys.stdin.buffer.read().decode("utf-8").rstrip("\\r\\n")
-sys.stdin.close()
+def zero_ba(buf: bytearray) -> None:
+    for k in range(len(buf)):
+        buf[k] = 0
+
+def extract_token_into(raw: bytearray, n: int) -> bytearray:
+    mv = memoryview(raw)
+    i = 0
+    while i < n:
+        j = raw.find(b"\\n", i, n)
+        if j < 0:
+            j = n
+        s, e = i, j
+        while s < e and raw[s] in (9, 10, 13, 32):
+            s += 1
+        while e > s and raw[e - 1] in (9, 10, 13, 32):
+            e -= 1
+        i = j + 1
+        if s >= e or raw[s] == 35:  # '#'
+            continue
+        if e - s >= 7 and mv[s : s + 7] == b"export ":
+            s += 7
+            while s < e and raw[s] in (9, 32):
+                s += 1
+        prefix = b"CLAUDE_CODE_OAUTH_TOKEN="
+        plen = len(prefix)
+        if e - s >= plen and mv[s : s + plen] == prefix:
+            s += plen
+            while s < e and raw[s] in (9, 32):
+                s += 1
+        if e - s >= 2 and (
+            (raw[s] == 34 and raw[e - 1] == 34) or (raw[s] == 39 and raw[e - 1] == 39)
+        ):
+            s += 1
+            e -= 1
+            while s < e and raw[s] in (9, 32):
+                s += 1
+            while e > s and raw[e - 1] in (9, 32):
+                e -= 1
+        if e > s:
+            out = bytearray(e - s + 1)
+            out[:-1] = mv[s:e]
+            out[-1] = 10
+            return out
+    raise ValueError("credential file contains no token")
+
+def read_token_bytearray(c_dir: str, c_name: str) -> bytearray:
+    if (
+        not c_name
+        or "/" in c_name
+        or c_name in (".", "..")
+        or not re.match(r"^[A-Za-z0-9._-]+$", c_name)
+    ):
+        raise ValueError(f"invalid credential token id: {c_name!r}")
+    if not c_dir or not c_dir.startswith("/"):
+        raise ValueError(f"invalid credentials directory: {c_dir!r}")
+    raw = bytearray(65536)
+    dir_fd = os.open(c_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            fd = os.open(c_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+        except FileNotFoundError:
+            if c_name.startswith("tier-token-"):
+                raise
+            fd = os.open(f"tier-token-{c_name}", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError("credential path is not a regular file")
+            n = os.preadv(fd, [raw], 0)
+            tok = extract_token_into(raw, n)
+            if not isinstance(tok, bytearray) or len(tok) < 2 or tok[-1] != 10:
+                raise ValueError("credential file contains no token")
+            return tok
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+        zero_ba(raw)
+
+# Phase 1 (GT3 Arm A1): validate credential file before printing LISTENING, then immediately zero
+# so neither Node nor HANDOFF_SERVER_PY holds token bytes or an open credential FD during accept().
+try:
+    _probe_tok = read_token_bytearray(cred_dir, cred_name)
+    zero_ba(_probe_tok)
+    del _probe_tok
+except Exception as ex:
+    sys.stderr.write(f"credential error: {ex}\\n")
+    sys.exit(2)
 
 srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 old_umask = os.umask(0o177)
@@ -83,6 +159,7 @@ try:
     srv.bind(sock_path)
     os.chmod(sock_path, 0o600)
     srv.listen(1)
+    srv.settimeout(timeout_secs)
 finally:
     os.umask(old_umask)
 
@@ -183,12 +260,17 @@ try:
             break
         cur_pid = ppid
 
+    # Phase 2 (GT3 Arm A1): read token into bytearray only after SO_PEERPIDFD verification succeeds,
+    # write to socketpair, and zero immediately before SCM_RIGHTS send.
+    tok_ba = read_token_bytearray(cred_dir, cred_name)
     a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        b.sendall((token + "\\n").encode("utf-8"))
-    finally:
-        b.close()
-    try:
+        try:
+            b.sendall(tok_ba)
+        finally:
+            zero_ba(tok_ba)
+            del tok_ba
+            b.close()
         socket.send_fds(conn, [b"\\x00"], [a.fileno()])
     finally:
         a.close()
@@ -209,10 +291,12 @@ export interface CliOptions {
   cwdDir?: string;
   // Dispatcher state directory (`${cfg.stateDir}/dispatcher-${tier}`) for launch/, worktrees/, claude-threads/.
   stateDir?: string;
+  // Directory holding systemd LoadCredential files (`$CREDENTIALS_DIRECTORY`, GT3 C5).
+  credentialsDir?: string;
   // Credential file holding the tier's token (or CLAUDE_CODE_OAUTH_TOKEN=<tok>).
   tokenCredentialFile?: string;
-  // Optional direct token resolver (for unit tests).
-  resolveToken?: (threadId: string) => string;
+  // Optional per-thread validated token id resolver (D4b contributor token pool, GT3 C5).
+  resolveTokenId?: (threadId: string) => string;
   // Expected NSpid depth of the connecting shim (default 2: host PID ns -> genie-herdr@<tier> PID ns).
   expectedNspidDepth?: number;
   readyTimeoutMs?: number;
@@ -221,6 +305,8 @@ export interface CliOptions {
   python?: string;
   run?: Run;
 }
+
+const TOKEN_ID_RE = /^[A-Za-z0-9._-]+$/;
 
 export class CliHerdr implements Herdr {
   private readonly o: CliOptions;
@@ -255,20 +341,35 @@ export class CliHerdr implements Herdr {
   }
 
   private hasTokenChannel(): boolean {
-    return Boolean(this.o.stateDir && (this.o.tokenCredentialFile || this.o.resolveToken));
+    return Boolean(
+      this.o.stateDir && (this.o.credentialsDir || this.o.tokenCredentialFile || this.o.resolveTokenId),
+    );
   }
 
-  private loadToken(threadId: string): string {
-    if (this.o.resolveToken) return this.o.resolveToken(threadId);
-    if (!this.o.tokenCredentialFile) throw new Error("tokenCredentialFile is not configured");
-    return parseTokenCredential(readFileSync(this.o.tokenCredentialFile, "utf8"));
+  private resolveCredentialTarget(threadId: string, spec: StartSpec): { credDir: string; credName: string } {
+    const credDir =
+      this.o.credentialsDir ??
+      this.env.CREDENTIALS_DIRECTORY ??
+      (this.o.tokenCredentialFile ? this.o.tokenCredentialFile.replace(/\/[^/]+$/, "") : undefined);
+    if (!credDir || !credDir.startsWith("/")) {
+      throw new Error("credential error: credentialsDir is not configured");
+    }
+    const defaultName = this.o.tokenCredentialFile
+      ? (this.o.tokenCredentialFile.split("/").pop() ?? "tier-token")
+      : "tier-token";
+    const rawId = spec.token ?? (this.o.resolveTokenId ? this.o.resolveTokenId(threadId) : defaultName);
+    if (!rawId || rawId === "." || rawId === ".." || rawId.includes("/") || !TOKEN_ID_RE.test(rawId)) {
+      throw new Error(`credential error: invalid token id ${JSON.stringify(rawId)}`);
+    }
+    return { credDir, credName: rawId };
   }
 
   private startHandoffServer(params: {
     sockPath: string;
     threadId: string;
     paneCwd: string;
-    token: string;
+    credDir: string;
+    credName: string;
   }): {
     ready: Promise<void>;
     done: Promise<void>;
@@ -276,6 +377,7 @@ export class CliHerdr implements Herdr {
   } {
     const acceptLog = this.o.stateDir ? `${this.o.stateDir}/accept.log` : "";
     const expectedDepth = String(this.o.expectedNspidDepth ?? 2);
+    const timeoutSecs = String(Math.max(20, Math.ceil(((this.o.readyTimeoutMs ?? 60000) + 5000) / 1000)));
     const proc = spawn(
       this.o.python ?? "python3",
       [
@@ -288,14 +390,15 @@ export class CliHerdr implements Herdr {
         this.o.claude ?? "",
         acceptLog,
         expectedDepth,
+        params.credDir,
+        params.credName,
+        timeoutSecs,
       ],
       {
         env: { PATH: this.env.PATH ?? "/usr/bin:/bin" },
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    proc.stdin.write(params.token);
-    proc.stdin.end();
 
     let stdout = "";
     let stderr = "";
@@ -363,21 +466,14 @@ export class CliHerdr implements Herdr {
     const threadId = s.threadId ?? s.name;
     const useTokenChannel = this.hasTokenChannel();
 
-    if (useTokenChannel && this.o.stateDir) {
-      mkdirSync(`${this.o.stateDir}/worktrees/${threadId}`, { recursive: true, mode: 0o700 });
-      mkdirSync(`${this.o.stateDir}/claude-threads/${threadId}`, { recursive: true, mode: 0o700 });
-      mkdirSync(`${this.o.stateDir}/launch`, { recursive: true, mode: 0o700 });
-    }
-
-    const basePane = await this.ensureBasePane(shellCwd);
-    // The config directory is not a secret, so it rides --env; the token never does (GI-15).
-    const split = await this.json([
-      "pane", "split", basePane, "--direction", "right", "--cwd", shellCwd,
-      "--env", `CLAUDE_CONFIG_DIR=${s.configDir}`, "--no-focus",
-    ]);
-    const pane: string = split.result.pane.pane_id;
-
     if (!useTokenChannel) {
+      const basePane = await this.ensureBasePane(shellCwd);
+      // The config directory is not a secret, so it rides --env; the token never does (GI-15).
+      const split = await this.json([
+        "pane", "split", basePane, "--direction", "right", "--cwd", shellCwd,
+        "--env", `CLAUDE_CONFIG_DIR=${s.configDir}`, "--no-focus",
+      ]);
+      const pane: string = split.result.pane.pane_id;
       try {
         await this.json([
           "agent", "start", s.name, "--kind", "claude", "--pane", pane,
@@ -391,17 +487,30 @@ export class CliHerdr implements Herdr {
       return pane;
     }
 
+    mkdirSync(`${this.o.stateDir}/worktrees/${threadId}`, { recursive: true, mode: 0o700 });
+    mkdirSync(`${this.o.stateDir}/claude-threads/${threadId}`, { recursive: true, mode: 0o700 });
+    mkdirSync(`${this.o.stateDir}/launch`, { recursive: true, mode: 0o700 });
+
     const sockPath = `${this.o.stateDir}/launch/${randomUUID()}.sock`;
-    const token = this.loadToken(threadId);
+    const { credDir, credName } = this.resolveCredentialTarget(threadId, s);
     const handoff = this.startHandoffServer({
       sockPath,
       threadId,
       paneCwd: s.cwd,
-      token,
+      credDir,
+      credName,
     });
 
+    let pane: string | undefined;
     try {
       await handoff.ready;
+      const basePane = await this.ensureBasePane(shellCwd);
+      // The config directory is not a secret, so it rides --env; the token never does (GI-15).
+      const split = await this.json([
+        "pane", "split", basePane, "--direction", "right", "--cwd", shellCwd,
+        "--env", `CLAUDE_CONFIG_DIR=${s.configDir}`, "--no-focus",
+      ]);
+      pane = split.result.pane.pane_id;
       const shimArgs = [
         "--token-sock", sockPath,
         "--thread-id", threadId,
@@ -411,7 +520,7 @@ export class CliHerdr implements Herdr {
       ];
       await Promise.all([
         this.json([
-          "agent", "start", s.name, "--kind", "claude", "--pane", pane,
+          "agent", "start", s.name, "--kind", "claude", "--pane", pane!,
           ...(this.o.claude ? ["--command", this.o.claude] : []),
           "--timeout", String(this.o.readyTimeoutMs ?? 60000), "--", ...shimArgs,
         ]),
@@ -420,13 +529,13 @@ export class CliHerdr implements Herdr {
     } catch (e) {
       handoff.kill();
       rmSync(sockPath, { recursive: false, force: true });
-      await this.close(pane);
+      if (pane) await this.close(pane);
       throw e;
     } finally {
       handoff.kill();
       rmSync(sockPath, { recursive: false, force: true });
     }
-    return pane;
+    return pane!;
   }
 
   // A pane that is already gone is closed; any other refusal throws.

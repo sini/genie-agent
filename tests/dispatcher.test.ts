@@ -4,8 +4,22 @@
 // `node --test tests/dispatcher.test.ts`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  readSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { Dispatcher, type Options } from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
@@ -385,6 +399,7 @@ test(
         if (key === "pane list") return ok({ panes: [] });
         if (key === "workspace create") return ok({ root_pane: { pane_id: "w1:p1" } });
         if (key === "pane split") return ok({ pane: { pane_id: "w1:p2" } });
+        if (key === "pane close") return ok({ type: "ok" });
         if (key === "agent start") {
           const sep = argv.indexOf("--");
           const cmd = argv[argv.indexOf("--command") + 1];
@@ -443,5 +458,395 @@ test(
     assert.equal(recorded.is_sock, true);
     assert.equal(recorded.tok, "canary-unit-token-0000");
     assert.deepEqual(readdirSync(`${stateDir}/launch`), []);
+  },
+);
+
+function countSplitNeedle(buf: Buffer, head: Buffer, tail: Buffer, minIdx = 0): number {
+  let hits = 0;
+  let idx = Math.max(0, minIdx);
+  const totalLen = head.length + tail.length;
+  const limit = buf.length - totalLen;
+  while (idx <= limit && (idx = buf.indexOf(head, idx)) !== -1) {
+    if (idx <= limit && buf.subarray(idx + head.length, idx + totalLen).equals(tail)) {
+      hits++;
+      idx += totalLen;
+    } else {
+      idx += 1;
+    }
+  }
+  return hits;
+}
+
+function scanPidMem(
+  pid: number,
+  runtimeNeedles?: { sockHead: Buffer; sockTail: Buffer; tidHead: Buffer; tidTail: Buffer },
+): {
+  tokHits: number;
+  ctrlHits: number;
+  sockHits: number;
+  tidHits: number;
+  regions: number;
+  readErrors: number;
+  emptyReads: number;
+} {
+  // Keep head and tail in separate Buffers so the scanner itself never forms a contiguous copy of the canary token.
+  const tokHead = Buffer.from("canary-gt3-", "utf8");
+  const tokTail = Buffer.from("unit-token-0000", "utf8");
+  const ctrlHead = Buffer.from("GENIE_DISP_", "utf8");
+  const ctrlTail = Buffer.from("MEM_CONTROL_0000", "utf8");
+
+  const maps = readFileSync(`/proc/${pid}/maps`, "utf8").split("\n");
+  const memFd = openSync(`/proc/${pid}/mem`, "r");
+  const chunkSize = 4 * 1024 * 1024;
+  const chunk = Buffer.alloc(chunkSize);
+  const tokOverlap = tokHead.length + tokTail.length - 1;
+  const ctrlOverlap = ctrlHead.length + ctrlTail.length - 1;
+  const sockOverlap = runtimeNeedles ? runtimeNeedles.sockHead.length + runtimeNeedles.sockTail.length - 1 : 0;
+  const tidOverlap = runtimeNeedles ? runtimeNeedles.tidHead.length + runtimeNeedles.tidTail.length - 1 : 0;
+  const maxOverlap = Math.max(tokOverlap, ctrlOverlap, sockOverlap, tidOverlap);
+  const step = chunkSize - maxOverlap;
+
+  let tokHits = 0;
+  let ctrlHits = 0;
+  let sockHits = 0;
+  let tidHits = 0;
+  let regions = 0;
+  let readErrors = 0;
+  let emptyReads = 0;
+  try {
+    for (const line of maps) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2 || !parts[1].includes("r")) continue;
+      const pathname = parts.length >= 6 ? parts.slice(5).join(" ") : "";
+      if (pathname === "[vvar]" || pathname === "[vvar_vclock]" || pathname === "[vdso]" || pathname === "[vsyscall]")
+        continue;
+      if (pathname.startsWith("/nix/store/") && !parts[1].includes("w")) continue;
+      const [startHex, endHex] = parts[0].split("-");
+      const start = Number.parseInt(startHex, 16);
+      const end = Number.parseInt(endHex, 16);
+      if (end <= start) continue;
+      for (let pos = start; pos < end; pos += step) {
+        const toRead = Math.min(chunkSize, end - pos);
+        let n = 0;
+        try {
+          n = readSync(memFd, chunk, 0, toRead, pos);
+        } catch {
+          readErrors++;
+          break;
+        }
+        if (n <= 0) {
+          emptyReads++;
+          break;
+        }
+        regions++;
+        const isFirstChunk = pos === start;
+        const view = chunk.subarray(0, n);
+        tokHits += countSplitNeedle(view, tokHead, tokTail, isFirstChunk ? 0 : maxOverlap - tokOverlap);
+        ctrlHits += countSplitNeedle(view, ctrlHead, ctrlTail, isFirstChunk ? 0 : maxOverlap - ctrlOverlap);
+        if (runtimeNeedles) {
+          sockHits += countSplitNeedle(
+            view,
+            runtimeNeedles.sockHead,
+            runtimeNeedles.sockTail,
+            isFirstChunk ? 0 : maxOverlap - sockOverlap,
+          );
+          tidHits += countSplitNeedle(
+            view,
+            runtimeNeedles.tidHead,
+            runtimeNeedles.tidTail,
+            isFirstChunk ? 0 : maxOverlap - tidOverlap,
+          );
+        }
+        view.fill(0);
+        if (pos + toRead >= end) break;
+      }
+    }
+  } finally {
+    closeSync(memFd);
+  }
+  return { tokHits, ctrlHits, sockHits, tidHits, regions, readErrors, emptyReads };
+}
+
+function findHandoffPidBySock(sockPath: string): number {
+  const needle = Buffer.from(sockPath, "utf8");
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    if (pid === process.pid) continue;
+    try {
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`);
+      if (cmdline.includes(needle)) return pid;
+    } catch {}
+  }
+  throw new Error(`could not find HANDOFF_SERVER_PY process for ${sockPath}`);
+}
+
+test(
+  "oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials",
+  { timeout: 30_000 },
+  async () => {
+    const dir = mkdtempSync(`${tmpdir()}/gt3-unit-`);
+    const credDir = `${dir}/creds`;
+    const outsideDir = `${dir}/outside`;
+    const stateDir = `${dir}/dispatcher-public`;
+    const cwdDir = `${dir}/cwd-public`;
+    const cfgDir = `${dir}/claude-public`;
+    const shimBin = `${dir}/genie-claude-shim`;
+    const handoffOut = `${dir}/handoff.json`;
+    mkdirSync(credDir, { recursive: true, mode: 0o700 });
+    mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cwdDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+
+    // C7 unit check: verify overlapped chunk scanning detects a token straddling a 4 MiB chunk boundary.
+    {
+      const chunkSize = 4 * 1024 * 1024;
+      const head = Buffer.from("canary-gt3-", "utf8");
+      const tail = Buffer.from("unit-token-0000", "utf8");
+      const overlap = head.length + tail.length - 1;
+      const step = chunkSize - overlap;
+      const twoChunks = Buffer.alloc(chunkSize + 4096);
+      const straddleOffset = chunkSize - 7; // 7 bytes in chunk 0, 19 bytes in chunk 1
+      head.copy(twoChunks, straddleOffset);
+      tail.copy(twoChunks, straddleOffset + head.length);
+      const c0 = twoChunks.subarray(0, chunkSize);
+      const c1 = twoChunks.subarray(step, step + 4096 + overlap);
+      const hitsNoOverlap =
+        countSplitNeedle(c0, head, tail, 0) + countSplitNeedle(twoChunks.subarray(chunkSize), head, tail, 0);
+      const hitsWithOverlap = countSplitNeedle(c0, head, tail, 0) + countSplitNeedle(c1, head, tail, 0);
+      twoChunks.fill(0);
+      assert.equal(hitsNoOverlap, 0, "unoverlapped 4 MiB boundary split must miss straddling needle");
+      assert.equal(hitsWithOverlap, 1, "overlapped 4 MiB boundary scan must detect straddling needle exactly once");
+    }
+
+    // Generate the 5 credential files under credDir (`tier-token-<k>`) in a short-lived python3 child
+    // so the test runner's V8 heap never allocates a JS string literal for the canary token.
+    const pyGen = [
+      "import hashlib, json, os, sys",
+      "d = sys.argv[1]",
+      "tok = 'canary-gt3-' + 'unit-token-' + '0000'",
+      "variants = {",
+      "  'kv': f'CLAUDE_CODE_OAUTH_TOKEN={tok}\\n',",
+      "  'export_dquote': f'export CLAUDE_CODE_OAUTH_TOKEN=\"{tok}\"\\n',",
+      "  'comment_squote': f'# leading comment\\n  CLAUDE_CODE_OAUTH_TOKEN=\\'{tok}\\'  \\n',",
+      "  'raw': f'  {tok}  \\n',",
+      "  'crlf': f'# crlf comment\\r\\nexport CLAUDE_CODE_OAUTH_TOKEN={tok}\\r\\n',",
+      "}",
+      "ids = []",
+      "for k, content in variants.items():",
+      "    p = os.path.join(d, f'tier-token-{k}')",
+      "    with open(p, 'wb') as f:",
+      "        f.write(content.encode('utf-8'))",
+      "    os.chmod(p, 0o600)",
+      "    ids.append(k)",
+      "print(json.dumps({'sha256': hashlib.sha256(tok.encode('utf-8')).hexdigest(), 'len': len(tok), 'ids': ids}))",
+    ].join("\n");
+    const genRes = spawnSync("python3", ["-I", "-c", pyGen, credDir], { encoding: "utf8" });
+    assert.equal(genRes.status, 0, genRes.stderr);
+    const { sha256: expectedSha256, len: expectedLen, ids: variantIds } = JSON.parse(genRes.stdout.trim()) as {
+      sha256: string;
+      len: number;
+      ids: string[];
+    };
+
+    // Plant positive control string in Node's V8 heap.
+    (globalThis as Record<string, unknown>).__GT3_MEM_CONTROL = ["GENIE_DISP", "MEM_CONTROL", "0000"]
+      .join("_")
+      .repeat(4);
+
+    // Shim records only sha256 and length of the received token, never writing the plaintext token to disk.
+    writeFileSync(
+      shimBin,
+      [
+        "import hashlib, json, os, socket, stat, sys",
+        "sep = sys.argv.index('--')",
+        "head = sys.argv[1:sep]",
+        "sock_path = head[1]",
+        "thread_id = head[3]",
+        "pane_cwd = head[5]",
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        "s.connect(sock_path)",
+        "msg, fds, _, _ = socket.recv_fds(s, 16, 1)",
+        "s.close()",
+        "fd = fds[0]",
+        "is_sock = stat.S_ISSOCK(os.fstat(fd).st_mode)",
+        "with os.fdopen(fd, 'rb', closefd=True) as f:",
+        "    raw = bytearray(f.read())",
+        "while raw and raw[-1] in (10, 13):",
+        "    raw.pop()",
+        "digest = hashlib.sha256(raw).hexdigest()",
+        "tok_len = len(raw)",
+        "for i in range(len(raw)):",
+        "    raw[i] = 0",
+        `with open(${JSON.stringify(handoffOut)}, 'w', encoding='utf-8') as out:`,
+        "    json.dump({'thread_id': thread_id, 'pane_cwd': pane_cwd, 'is_sock': is_sock, 'tok_sha256': digest, 'tok_len': tok_len}, out)",
+      ].join("\n") + "\n",
+      { mode: 0o755 },
+    );
+
+    const selfNspids = readFileSync("/proc/self/status", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("NSpid:"))!
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+
+    let activeTokenId = variantIds[0];
+    let duringAcceptChecked = 0;
+    const calls: string[][] = [];
+
+    const herdr = new CliHerdr({
+      session: "genie-public",
+      claude: shimBin,
+      cwdDir,
+      stateDir,
+      credentialsDir: credDir,
+      resolveTokenId: () => activeTokenId,
+      expectedNspidDepth: selfNspids.length,
+      run: async (argv) => {
+        calls.push(argv);
+        const key = argv.slice(3, 5).join(" ");
+        if (key === "pane list") return ok({ panes: [] });
+        if (key === "workspace create") return ok({ root_pane: { pane_id: "w1:p1" } });
+        if (key === "pane split") return ok({ pane: { pane_id: "w1:p2" } });
+        if (key === "pane close") return ok({ type: "ok" });
+        if (key === "agent start") {
+          const sep = argv.indexOf("--");
+          const cmd = argv[argv.indexOf("--command") + 1];
+          const shimArgs = argv.slice(sep + 1);
+          const sockPath = shimArgs[1];
+          const tidArg = shimArgs[3];
+
+          // Scan both Node (/proc/self/mem) and HANDOFF_SERVER_PY (/proc/<handoff-pid>/mem & fd)
+          // while HANDOFF_SERVER_PY is alive and waiting in srv.accept()!
+          const handoffPid = findHandoffPidBySock(sockPath);
+          const selfDuring = scanPidMem(process.pid);
+          assert.ok(selfDuring.regions >= 20, `expected >= 20 regions scanned, got ${selfDuring.regions}`);
+          assert.equal(selfDuring.emptyReads, 0, "expected 0 empty reads on /proc/self/mem");
+          assert.ok(selfDuring.ctrlHits >= 1, `expected positive control in Node heap, got ${selfDuring.ctrlHits}`);
+          assert.equal(selfDuring.tokHits, 0, "Node V8 heap must hold 0 token copies during handoff accept window");
+
+          const sockMid = Math.floor(sockPath.length / 2);
+          const tidMid = Math.floor(tidArg.length / 2);
+          const handoffDuring = scanPidMem(handoffPid, {
+            sockHead: Buffer.from(sockPath.slice(0, sockMid), "utf8"),
+            sockTail: Buffer.from(sockPath.slice(sockMid), "utf8"),
+            tidHead: Buffer.from(tidArg.slice(0, tidMid), "utf8"),
+            tidTail: Buffer.from(tidArg.slice(tidMid), "utf8"),
+          });
+          assert.ok(handoffDuring.regions >= 10, `expected >= 10 regions in handoff child, got ${handoffDuring.regions}`);
+          assert.equal(handoffDuring.readErrors, 0, "expected 0 read errors on /proc/<handoff-pid>/mem");
+          assert.equal(handoffDuring.emptyReads, 0, "expected 0 empty reads on /proc/<handoff-pid>/mem");
+          assert.ok(
+            handoffDuring.sockHits >= 1 && handoffDuring.tidHits >= 1,
+            `expected runtime positive control (sockHits=${handoffDuring.sockHits}, tidHits=${handoffDuring.tidHits}) in handoff child`,
+          );
+          assert.equal(
+            handoffDuring.tokHits,
+            0,
+            "HANDOFF_SERVER_PY must hold 0 token copies while waiting in srv.accept()",
+          );
+
+          let openCredFds = 0;
+          for (const fdEntry of readdirSync(`/proc/${handoffPid}/fd`)) {
+            try {
+              const target = readlinkSync(`/proc/${handoffPid}/fd/${fdEntry}`);
+              if (target.startsWith(credDir)) openCredFds++;
+            } catch {}
+          }
+          assert.equal(openCredFds, 0, "HANDOFF_SERVER_PY must hold 0 open credential FDs during srv.accept()");
+          duringAcceptChecked++;
+
+          await new Promise<void>((resolve, reject) => {
+            const p = spawn("python3", ["-I", cmd, ...shimArgs], { cwd: cwdDir, stdio: "ignore" });
+            p.once("error", reject);
+            p.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`shim exited ${code}`))));
+          });
+          return ok({ type: "agent_started" });
+        }
+        throw new Error(`unexpected herdr command: ${argv.join(" ")}`);
+      },
+    });
+
+    // 1. Exercise all 5 credential file formats (plus StartSpec.token validated token id on the 5th)
+    for (let i = 0; i < variantIds.length; i++) {
+      const k = variantIds[i];
+      activeTokenId = i === variantIds.length - 1 ? variantIds[0] : k;
+      const tid = `thread-${k}-12345678`;
+      const wtCwd = `${stateDir}/worktrees/${tid}`;
+      await herdr.start({
+        name: `genie-${k}`,
+        threadId: tid,
+        ...(i === variantIds.length - 1 ? { token: k } : {}),
+        configDir: cfgDir,
+        cwd: wtCwd,
+        paneCwd: cwdDir,
+        args: ["-n", `genie-${k}`, "--session-id", "12345678-0000-4000-8000-000000000000"],
+      });
+      const recorded = JSON.parse(readFileSync(handoffOut, "utf8"));
+      assert.equal(recorded.thread_id, tid);
+      assert.equal(recorded.is_sock, true);
+      assert.equal(recorded.tok_len, expectedLen, `variant ${k} tok_len mismatch`);
+      assert.equal(recorded.tok_sha256, expectedSha256, `variant ${k} tok_sha256 mismatch`);
+    }
+    assert.equal(duringAcceptChecked, variantIds.length);
+
+    // 2. Scan Node /proc/self/mem after all 5 launches, both before and after explicit V8 GC (P4: assert global.gc is a function)
+    const selfAfterBeforeGc = scanPidMem(process.pid);
+    assert.ok(selfAfterBeforeGc.regions >= 20);
+    assert.equal(selfAfterBeforeGc.emptyReads, 0);
+    assert.ok(selfAfterBeforeGc.ctrlHits >= 1);
+    assert.equal(selfAfterBeforeGc.tokHits, 0, "Node V8 heap must hold 0 token copies after 5 launches (pre-GC)");
+
+    assert.equal(typeof global.gc, "function", "Oracle 1 must run under node --expose-gc (GT3 P4)");
+    global.gc!();
+    const selfAfterPostGc = scanPidMem(process.pid);
+    assert.ok(selfAfterPostGc.regions >= 20);
+    assert.equal(selfAfterPostGc.emptyReads, 0);
+    assert.ok(selfAfterPostGc.ctrlHits >= 1);
+    assert.equal(selfAfterPostGc.tokHits, 0, "Node V8 heap must hold 0 token copies after 5 launches (post-GC)");
+
+    // 3. Invalid credential files (empty, comment-only, empty-quoted, missing, symlink) and C5 path traversal /
+    // absolute path token ids must fail fast BEFORE ensureBasePane / herdr pane split is ever called.
+    writeFileSync(`${credDir}/tier-token-empty`, "", { mode: 0o600 });
+    writeFileSync(`${credDir}/tier-token-comment`, "# comment line\n   \n", { mode: 0o600 });
+    writeFileSync(`${credDir}/tier-token-empty-quoted`, 'export CLAUDE_CODE_OAUTH_TOKEN=""\n', { mode: 0o600 });
+    symlinkSync(`${credDir}/tier-token-kv`, `${credDir}/tier-token-symlink`);
+    const outsideCred = `${outsideDir}/leaked-secret`;
+    writeFileSync(outsideCred, "CLAUDE_CODE_OAUTH_TOKEN=outside-secret\n", { mode: 0o600 });
+
+    const refusalCases: { tokenId: string; expectedErr: RegExp }[] = [
+      { tokenId: "empty", expectedErr: /credential error: credential file contains no token/ },
+      { tokenId: "comment", expectedErr: /credential error: credential file contains no token/ },
+      { tokenId: "empty-quoted", expectedErr: /credential error: credential file contains no token/ },
+      { tokenId: "does-not-exist", expectedErr: /credential error:/ },
+      { tokenId: "symlink", expectedErr: /credential error:/ },
+      { tokenId: outsideCred, expectedErr: /credential error: invalid/ },
+      { tokenId: "../outside/leaked-secret", expectedErr: /credential error: invalid/ },
+    ];
+
+    for (const { tokenId, expectedErr } of refusalCases) {
+      calls.length = 0;
+      activeTokenId = tokenId;
+      await assert.rejects(
+        herdr.start({
+          name: "genie-bad",
+          threadId: "thread-bad",
+          token: tokenId,
+          configDir: cfgDir,
+          cwd: `${stateDir}/worktrees/thread-bad`,
+          paneCwd: cwdDir,
+          args: ["--resume", "12345678-0000-4000-8000-000000000000"],
+        }),
+        expectedErr,
+        `expected ${expectedErr} for tokenId=${tokenId}`,
+      );
+      assert.deepEqual(
+        calls,
+        [],
+        `invalid credential tokenId=${tokenId} must fail before ensureBasePane or pane split is called`,
+      );
+    }
   },
 );
