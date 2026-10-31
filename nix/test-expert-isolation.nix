@@ -88,7 +88,6 @@ let
         hits = 0
         chunk_sz = 4 * 1024 * 1024
         ov = max(0, len(needle) - 1)
-        step = chunk_sz - ov
         try:
             for line in maps_lines:
                 parts = line.split()
@@ -99,6 +98,7 @@ let
                 start_s, end_s = parts[0].split("-")
                 start, end = int(start_s, 16), int(end_s, 16)
                 pos = start
+                actual_ov = 0
                 while pos < end:
                     to_read = min(chunk_sz, end - pos)
                     if to_read <= 0:
@@ -107,12 +107,15 @@ let
                         chunk = os.pread(mem_fd, to_read, pos)
                     except OSError:
                         break
-                    if not chunk:
+                    n = len(chunk)
+                    if n <= 0:
                         break
-                    hits += chunk.count(needle)
-                    if pos + to_read >= end:
+                    hits += chunk.count(needle, max(0, actual_ov - ov))
+                    if pos + n >= end:
                         break
-                    pos += step
+                    adv = max(1, n - ov)
+                    actual_ov = n - adv
+                    pos += adv
         finally:
             os.close(mem_fd)
         return "ok", hits
@@ -1957,11 +1960,8 @@ let
                 'if (!rawId || rawId === "." || rawId === ".." || rawId.includes("/") || !TOKEN_ID_RE.test(rawId)) {',
                 "if (!rawId) {",
             ).replace(
-                'not c_name\n        or "/" in c_name\n        or c_name in (".", "..")\n        or not re.match(r"^[A-Za-z0-9._-]+$", c_name)',
+                'not c_name\n        or "/" in c_name\n        or c_name in (".", "..")\n        or not re.fullmatch(r"[A-Za-z0-9._-]+", c_name)',
                 "not c_name",
-            ).replace(
-                'c_file = "tier-token" if c_name == "tier-token" else f"tier-token-{c_name}"',
-                'if "/" in c_name:\n        return os.open(c_name, os.O_RDONLY)\n    c_file = "tier-token" if c_name == "tier-token" else f"tier-token-{c_name}"',
             )
 
         herdr_ts_path = f"{work_dir}/herdr.ts"
@@ -2024,18 +2024,100 @@ let
               return hits;
             }
 
+            function scanRangeInChunks(start, end, chunk, needles, readAt) {
+              const chunkSize = chunk.length;
+              const overlaps = needles.map((nd) => Math.max(0, nd.head.length + nd.tail.length - 1));
+              const maxOv = overlaps.reduce((a, b) => Math.max(a, b), 0);
+              const hits = new Array(needles.length).fill(0);
+              let chunksRead = 0;
+              let readErrors = 0;
+              let emptyReads = 0;
+              let offset = start;
+              let actualOv = 0;
+
+              while (offset < end) {
+                const rem = end - offset;
+                const toRead = Number(rem > BigInt(chunkSize) ? BigInt(chunkSize) : rem);
+                if (toRead <= 0) break;
+                let n = 0;
+                try {
+                  n = readAt(offset, chunk, toRead);
+                } catch {
+                  readErrors += 1;
+                  break;
+                }
+                if (n <= 0) {
+                  emptyReads += 1;
+                  break;
+                }
+                chunksRead += 1;
+                for (let i = 0; i < needles.length; i++) {
+                  const minIdx = Math.max(0, actualOv - overlaps[i]);
+                  hits[i] += countSplitNeedle(chunk, n, needles[i].head, needles[i].tail, minIdx);
+                }
+                chunk.fill(0, 0, n);
+                if (offset + BigInt(n) >= end) break;
+                const adv = Math.max(1, n - maxOv);
+                actualOv = n - adv;
+                offset += BigInt(adv);
+              }
+              return { hits, chunksRead, readErrors, emptyReads };
+            }
+
+            // C7 + Q3 self-test on scanRangeInChunks (4 MiB boundary straddle + short-read boundary straddle)
+            {
+              const chunkSize = 4 * 1024 * 1024;
+              const backing = Buffer.alloc(chunkSize + 4096);
+              const straddleOffset = chunkSize - 7;
+              tokPubHead.copy(backing, straddleOffset);
+              tokPubTail.copy(backing, straddleOffset + tokPubHead.length);
+              const scratch = Buffer.alloc(chunkSize);
+              const fullScan = scanRangeInChunks(0n, BigInt(backing.length), scratch, [{ head: tokPubHead, tail: tokPubTail }], (off, buf, toRead) => {
+                const pos = Number(off);
+                const n = Math.min(toRead, backing.length - pos);
+                backing.copy(buf, 0, pos, pos + n);
+                return n;
+              });
+              backing.fill(0);
+              if (fullScan.hits[0] !== 1 || fullScan.chunksRead !== 2) {
+                throw new Error("C7 fullScan self-test failed: " + JSON.stringify(fullScan));
+              }
+
+              const shortBacking = Buffer.alloc(8192);
+              const shortStraddle = 2000 - 7;
+              tokPubHead.copy(shortBacking, shortStraddle);
+              tokPubTail.copy(shortBacking, shortStraddle + tokPubHead.length);
+              let calls = 0;
+              const shortScan = scanRangeInChunks(0n, BigInt(shortBacking.length), scratch, [{ head: tokPubHead, tail: tokPubTail }], (off, buf, toRead) => {
+                calls += 1;
+                const pos = Number(off);
+                const cap = calls === 1 ? 2000 : toRead;
+                const n = Math.min(cap, shortBacking.length - pos);
+                shortBacking.copy(buf, 0, pos, pos + n);
+                return n;
+              });
+              shortBacking.fill(0);
+              if (shortScan.hits[0] !== 1 || shortScan.chunksRead !== 2) {
+                throw new Error("C7 shortScan self-test failed: " + JSON.stringify(shortScan));
+              }
+            }
+
             function scanPidMem(pid, runtimeNeedles = null) {
               const maps = readFileSync("/proc/" + pid + "/maps", "utf8").split("\\n");
               const fd = openSync("/proc/" + pid + "/mem", "r");
               const chunkSize = 4 * 1024 * 1024;
               const chunk = Buffer.alloc(chunkSize);
-              const pubOv = tokPubHead.length + tokPubTail.length - 1;
-              const truOv = tokTruHead.length + tokTruTail.length - 1;
-              const ctrlOv = dispCtrlHead.length + dispCtrlTail.length - 1;
-              const sockOv = runtimeNeedles ? runtimeNeedles.sockHead.length + runtimeNeedles.sockTail.length - 1 : 0;
-              const tidOv = runtimeNeedles ? runtimeNeedles.tidHead.length + runtimeNeedles.tidTail.length - 1 : 0;
-              const maxOv = Math.max(pubOv, truOv, ctrlOv, sockOv, tidOv);
-              const step = BigInt(chunkSize - maxOv);
+              const needles = [
+                { head: tokPubHead, tail: tokPubTail },
+                { head: tokTruHead, tail: tokTruTail },
+                { head: dispCtrlHead, tail: dispCtrlTail },
+              ];
+              if (runtimeNeedles) {
+                needles.push(
+                  { head: runtimeNeedles.sockHead, tail: runtimeNeedles.sockTail },
+                  { head: runtimeNeedles.tidHead, tail: runtimeNeedles.tidTail },
+                );
+              }
 
               let regions = 0;
               let pubHits = 0;
@@ -2059,34 +2141,19 @@ let
                   const start = BigInt("0x" + startHex);
                   const end = BigInt("0x" + endHex);
                   if (end <= start) continue;
-                  let offset = start;
-                  while (offset < end) {
-                    const rem = end - offset;
-                    const toRead = Number(rem > BigInt(chunkSize) ? BigInt(chunkSize) : rem);
-                    let n = 0;
-                    try {
-                      n = readSync(fd, chunk, 0, toRead, offset);
-                    } catch {
-                      readErrors += 1;
-                      break;
-                    }
-                    if (n <= 0) {
-                      emptyReads += 1;
-                      break;
-                    }
-                    regions += 1;
-                    const first = offset === start;
-                    pubHits += countSplitNeedle(chunk, n, tokPubHead, tokPubTail, first ? 0 : maxOv - pubOv);
-                    truHits += countSplitNeedle(chunk, n, tokTruHead, tokTruTail, first ? 0 : maxOv - truOv);
-                    dispCtrlHits += countSplitNeedle(chunk, n, dispCtrlHead, dispCtrlTail, first ? 0 : maxOv - ctrlOv);
-                    if (runtimeNeedles) {
-                      sockHits += countSplitNeedle(chunk, n, runtimeNeedles.sockHead, runtimeNeedles.sockTail, first ? 0 : maxOv - sockOv);
-                      tidHits += countSplitNeedle(chunk, n, runtimeNeedles.tidHead, runtimeNeedles.tidTail, first ? 0 : maxOv - tidOv);
-                    }
-                    chunk.fill(0, 0, n);
-                    if (offset + BigInt(toRead) >= end) break;
-                    offset += step;
+                  const res = scanRangeInChunks(start, end, chunk, needles, (off, buf, toRead) =>
+                    readSync(fd, buf, 0, toRead, off),
+                  );
+                  pubHits += res.hits[0];
+                  truHits += res.hits[1];
+                  dispCtrlHits += res.hits[2];
+                  if (runtimeNeedles) {
+                    sockHits += res.hits[3];
+                    tidHits += res.hits[4];
                   }
+                  regions += res.chunksRead;
+                  readErrors += res.readErrors;
+                  emptyReads += res.emptyReads;
                 }
               } finally {
                 closeSync(fd);

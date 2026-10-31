@@ -114,7 +114,7 @@ def read_token_bytearray(c_dir: str, c_name: str) -> bytearray:
         not c_name
         or "/" in c_name
         or c_name in (".", "..")
-        or not re.match(r"^[A-Za-z0-9._-]+$", c_name)
+        or not re.fullmatch(r"[A-Za-z0-9._-]+", c_name)
     ):
         raise ValueError(f"invalid credential token id: {c_name!r}")
     if not c_dir or not c_dir.startswith("/"):
@@ -122,12 +122,12 @@ def read_token_bytearray(c_dir: str, c_name: str) -> bytearray:
     raw = bytearray(65536)
     dir_fd = os.open(c_dir, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        try:
-            fd = os.open(c_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
-        except FileNotFoundError:
-            if c_name.startswith("tier-token-"):
-                raise
-            fd = os.open(f"tier-token-{c_name}", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+        if not c_name.startswith("tier-token"):
+            try:
+                os.stat(c_name, dir_fd=dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                c_name = f"tier-token-{c_name}"
+        fd = os.open(c_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):

@@ -81,6 +81,20 @@ export class Dispatcher {
   // resume never runs the same uuid twice.
   static async open(o: Options): Promise<Dispatcher> {
     const d = new Dispatcher(o, loadJournal(o.stateDir));
+    // Migrate pre-GT3 journals (where pickToken stored t.token === t.configDir) to "tier-token" (GT3 N1).
+    // Any other invalid token id is left untouched so resolveCredentialTarget fails closed on escalate.
+    for (const t of Object.values(d.journal.threads)) {
+      if (t.token && t.token === t.configDir && t.configDir.startsWith("/")) {
+        const legacyId = t.token;
+        t.token = "tier-token";
+        if (legacyId in d.journal.tokens) {
+          d.journal.tokens["tier-token"] ??= d.journal.tokens[legacyId];
+          delete d.journal.tokens[legacyId];
+        } else {
+          d.journal.tokens["tier-token"] ??= { state: "available" };
+        }
+      }
+    }
     const panes = new Set((await o.herdr.list()).map((a) => a.pane));
     const sessions = new Set(await o.xmsg.list());
     for (const t of Object.values(d.journal.threads)) {

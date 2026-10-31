@@ -16,12 +16,13 @@ import {
   readdirSync,
   readlinkSync,
   readSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { Dispatcher, type Options } from "../src/dispatcher/index.ts";
+import { Dispatcher, loadJournal, saveJournal, type Options } from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
 
 // A herdr server that outlives the dispatcher, recording every call.
@@ -477,6 +478,65 @@ function countSplitNeedle(buf: Buffer, head: Buffer, tail: Buffer, minIdx = 0): 
   return hits;
 }
 
+interface SplitNeedleSpec {
+  head: Buffer;
+  tail: Buffer;
+}
+
+function scanRangeInChunks(
+  start: number,
+  end: number,
+  chunk: Buffer,
+  needles: SplitNeedleSpec[],
+  readAt: (pos: number, buf: Buffer, toRead: number) => number,
+): {
+  hits: number[];
+  chunksRead: number;
+  readErrors: number;
+  emptyReads: number;
+} {
+  const chunkSize = chunk.length;
+  const overlaps = needles.map((nd) => Math.max(0, nd.head.length + nd.tail.length - 1));
+  const maxOverlap = overlaps.reduce((a, b) => Math.max(a, b), 0);
+  const hits = new Array<number>(needles.length).fill(0);
+  let chunksRead = 0;
+  let readErrors = 0;
+  let emptyReads = 0;
+  let pos = start;
+  let actualOverlap = 0;
+
+  while (pos < end) {
+    const toRead = Math.min(chunkSize, end - pos);
+    if (toRead <= 0) break;
+    let n = 0;
+    try {
+      n = readAt(pos, chunk, toRead);
+    } catch {
+      readErrors++;
+      break;
+    }
+    if (n <= 0) {
+      emptyReads++;
+      break;
+    }
+    chunksRead++;
+    const view = chunk.subarray(0, n);
+    for (let i = 0; i < needles.length; i++) {
+      const minIdx = Math.max(0, actualOverlap - overlaps[i]);
+      hits[i] += countSplitNeedle(view, needles[i].head, needles[i].tail, minIdx);
+    }
+    view.fill(0);
+    if (pos + n >= end) break;
+    // Q3: on a short read (0 < n < toRead), advance by max(1, n - maxOverlap) rather than step
+    // so bytes between pos + n and pos + step are never skipped.
+    const advance = Math.max(1, n - maxOverlap);
+    actualOverlap = n - advance;
+    pos += advance;
+  }
+
+  return { hits, chunksRead, readErrors, emptyReads };
+}
+
 function scanPidMem(
   pid: number,
   runtimeNeedles?: { sockHead: Buffer; sockTail: Buffer; tidHead: Buffer; tidTail: Buffer },
@@ -495,16 +555,21 @@ function scanPidMem(
   const ctrlHead = Buffer.from("GENIE_DISP_", "utf8");
   const ctrlTail = Buffer.from("MEM_CONTROL_0000", "utf8");
 
+  const needles: SplitNeedleSpec[] = [
+    { head: tokHead, tail: tokTail },
+    { head: ctrlHead, tail: ctrlTail },
+  ];
+  if (runtimeNeedles) {
+    needles.push(
+      { head: runtimeNeedles.sockHead, tail: runtimeNeedles.sockTail },
+      { head: runtimeNeedles.tidHead, tail: runtimeNeedles.tidTail },
+    );
+  }
+
   const maps = readFileSync(`/proc/${pid}/maps`, "utf8").split("\n");
   const memFd = openSync(`/proc/${pid}/mem`, "r");
   const chunkSize = 4 * 1024 * 1024;
   const chunk = Buffer.alloc(chunkSize);
-  const tokOverlap = tokHead.length + tokTail.length - 1;
-  const ctrlOverlap = ctrlHead.length + ctrlTail.length - 1;
-  const sockOverlap = runtimeNeedles ? runtimeNeedles.sockHead.length + runtimeNeedles.sockTail.length - 1 : 0;
-  const tidOverlap = runtimeNeedles ? runtimeNeedles.tidHead.length + runtimeNeedles.tidTail.length - 1 : 0;
-  const maxOverlap = Math.max(tokOverlap, ctrlOverlap, sockOverlap, tidOverlap);
-  const step = chunkSize - maxOverlap;
 
   let tokHits = 0;
   let ctrlHits = 0;
@@ -525,41 +590,18 @@ function scanPidMem(
       const start = Number.parseInt(startHex, 16);
       const end = Number.parseInt(endHex, 16);
       if (end <= start) continue;
-      for (let pos = start; pos < end; pos += step) {
-        const toRead = Math.min(chunkSize, end - pos);
-        let n = 0;
-        try {
-          n = readSync(memFd, chunk, 0, toRead, pos);
-        } catch {
-          readErrors++;
-          break;
-        }
-        if (n <= 0) {
-          emptyReads++;
-          break;
-        }
-        regions++;
-        const isFirstChunk = pos === start;
-        const view = chunk.subarray(0, n);
-        tokHits += countSplitNeedle(view, tokHead, tokTail, isFirstChunk ? 0 : maxOverlap - tokOverlap);
-        ctrlHits += countSplitNeedle(view, ctrlHead, ctrlTail, isFirstChunk ? 0 : maxOverlap - ctrlOverlap);
-        if (runtimeNeedles) {
-          sockHits += countSplitNeedle(
-            view,
-            runtimeNeedles.sockHead,
-            runtimeNeedles.sockTail,
-            isFirstChunk ? 0 : maxOverlap - sockOverlap,
-          );
-          tidHits += countSplitNeedle(
-            view,
-            runtimeNeedles.tidHead,
-            runtimeNeedles.tidTail,
-            isFirstChunk ? 0 : maxOverlap - tidOverlap,
-          );
-        }
-        view.fill(0);
-        if (pos + toRead >= end) break;
+      const res = scanRangeInChunks(start, end, chunk, needles, (pos, buf, toRead) =>
+        readSync(memFd, buf, 0, toRead, pos),
+      );
+      tokHits += res.hits[0];
+      ctrlHits += res.hits[1];
+      if (runtimeNeedles) {
+        sockHits += res.hits[2];
+        tidHits += res.hits[3];
       }
+      regions += res.chunksRead;
+      readErrors += res.readErrors;
+      emptyReads += res.emptyReads;
     }
   } finally {
     closeSync(memFd);
@@ -599,25 +641,61 @@ test(
     mkdirSync(cwdDir, { recursive: true, mode: 0o700 });
     mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
 
-    // C7 unit check: verify overlapped chunk scanning detects a token straddling a 4 MiB chunk boundary.
+    // C7 + Q3 unit check: verify scanRangeInChunks stepping loop detects a token straddling a 4 MiB chunk boundary
+    // and also detects a token straddling a short-read boundary (0 < n < toRead) without skipping bytes.
     {
       const chunkSize = 4 * 1024 * 1024;
       const head = Buffer.from("canary-gt3-", "utf8");
       const tail = Buffer.from("unit-token-0000", "utf8");
-      const overlap = head.length + tail.length - 1;
-      const step = chunkSize - overlap;
-      const twoChunks = Buffer.alloc(chunkSize + 4096);
+      const backing = Buffer.alloc(chunkSize + 4096);
       const straddleOffset = chunkSize - 7; // 7 bytes in chunk 0, 19 bytes in chunk 1
-      head.copy(twoChunks, straddleOffset);
-      tail.copy(twoChunks, straddleOffset + head.length);
-      const c0 = twoChunks.subarray(0, chunkSize);
-      const c1 = twoChunks.subarray(step, step + 4096 + overlap);
+      head.copy(backing, straddleOffset);
+      tail.copy(backing, straddleOffset + head.length);
       const hitsNoOverlap =
-        countSplitNeedle(c0, head, tail, 0) + countSplitNeedle(twoChunks.subarray(chunkSize), head, tail, 0);
-      const hitsWithOverlap = countSplitNeedle(c0, head, tail, 0) + countSplitNeedle(c1, head, tail, 0);
-      twoChunks.fill(0);
+        countSplitNeedle(backing.subarray(0, chunkSize), head, tail, 0) +
+        countSplitNeedle(backing.subarray(chunkSize), head, tail, 0);
+      const scratch = Buffer.alloc(chunkSize);
+      const fullReadScan = scanRangeInChunks(0, backing.length, scratch, [{ head, tail }], (pos, buf, toRead) => {
+        const n = Math.min(toRead, backing.length - pos);
+        backing.copy(buf, 0, pos, pos + n);
+        return n;
+      });
+      backing.fill(0);
       assert.equal(hitsNoOverlap, 0, "unoverlapped 4 MiB boundary split must miss straddling needle");
-      assert.equal(hitsWithOverlap, 1, "overlapped 4 MiB boundary scan must detect straddling needle exactly once");
+      assert.equal(
+        fullReadScan.hits[0],
+        1,
+        "scanRangeInChunks stepping loop must detect 4 MiB boundary-straddling needle",
+      );
+      assert.equal(fullReadScan.chunksRead, 2);
+
+      // Short-read boundary straddle (Q3b): first read returns only 2000 bytes despite toRead = 4 MiB,
+      // and the needle straddles offset 2000 - 7.
+      const shortBacking = Buffer.alloc(8192);
+      const shortStraddleOffset = 2000 - 7;
+      head.copy(shortBacking, shortStraddleOffset);
+      tail.copy(shortBacking, shortStraddleOffset + head.length);
+      let callCount = 0;
+      const shortReadScan = scanRangeInChunks(
+        0,
+        shortBacking.length,
+        scratch,
+        [{ head, tail }],
+        (pos, buf, toRead) => {
+          callCount++;
+          const cap = callCount === 1 ? 2000 : toRead;
+          const n = Math.min(cap, shortBacking.length - pos);
+          shortBacking.copy(buf, 0, pos, pos + n);
+          return n;
+        },
+      );
+      shortBacking.fill(0);
+      assert.equal(
+        shortReadScan.hits[0],
+        1,
+        "scanRangeInChunks short-read stepping must detect needle straddling short read boundary",
+      );
+      assert.equal(shortReadScan.chunksRead, 2);
     }
 
     // Generate the 5 credential files under credDir (`tier-token-<k>`) in a short-lived python3 child
@@ -807,27 +885,33 @@ test(
     assert.ok(selfAfterPostGc.ctrlHits >= 1);
     assert.equal(selfAfterPostGc.tokHits, 0, "Node V8 heap must hold 0 token copies after 5 launches (post-GC)");
 
-    // 3. Invalid credential files (empty, comment-only, empty-quoted, missing, symlink) and C5 path traversal /
-    // absolute path token ids must fail fast BEFORE ensureBasePane / herdr pane split is ever called.
+    // 3. Invalid credential files (empty, comment-only, empty-quoted, missing, symlink to outside file, non-regular file)
+    // and C5 path traversal / absolute path token ids must fail fast BEFORE ensureBasePane / herdr pane split is ever called,
+    // and must never deliver the token.
     writeFileSync(`${credDir}/tier-token-empty`, "", { mode: 0o600 });
     writeFileSync(`${credDir}/tier-token-comment`, "# comment line\n   \n", { mode: 0o600 });
     writeFileSync(`${credDir}/tier-token-empty-quoted`, 'export CLAUDE_CODE_OAUTH_TOKEN=""\n', { mode: 0o600 });
-    symlinkSync(`${credDir}/tier-token-kv`, `${credDir}/tier-token-symlink`);
     const outsideCred = `${outsideDir}/leaked-secret`;
     writeFileSync(outsideCred, "CLAUDE_CODE_OAUTH_TOKEN=outside-secret\n", { mode: 0o600 });
+    symlinkSync(outsideCred, `${credDir}/symlink-outside`);
+    symlinkSync(outsideCred, `${credDir}/tier-token-symlink`);
+    mkdirSync(`${credDir}/dir-not-regular`, { mode: 0o700 });
 
     const refusalCases: { tokenId: string; expectedErr: RegExp }[] = [
       { tokenId: "empty", expectedErr: /credential error: credential file contains no token/ },
       { tokenId: "comment", expectedErr: /credential error: credential file contains no token/ },
       { tokenId: "empty-quoted", expectedErr: /credential error: credential file contains no token/ },
       { tokenId: "does-not-exist", expectedErr: /credential error:/ },
+      { tokenId: "symlink-outside", expectedErr: /credential error:/ },
       { tokenId: "symlink", expectedErr: /credential error:/ },
+      { tokenId: "dir-not-regular", expectedErr: /credential error: credential path is not a regular file/ },
       { tokenId: outsideCred, expectedErr: /credential error: invalid/ },
       { tokenId: "../outside/leaked-secret", expectedErr: /credential error: invalid/ },
     ];
 
     for (const { tokenId, expectedErr } of refusalCases) {
       calls.length = 0;
+      rmSync(handoffOut, { force: true });
       activeTokenId = tokenId;
       await assert.rejects(
         herdr.start({
@@ -847,6 +931,162 @@ test(
         [],
         `invalid credential tokenId=${tokenId} must fail before ensureBasePane or pane split is called`,
       );
+      assert.equal(
+        existsSync(handoffOut),
+        false,
+        `invalid credential tokenId=${tokenId} must never deliver a token`,
+      );
     }
+  },
+);
+
+test(
+  "oracle GT3 (N1): Dispatcher.open migrates legacy configDir token ids to tier-token and escalates through CliHerdr token channel while rejecting forged invalid token ids",
+  { timeout: 15_000 },
+  async () => {
+    const dir = mkdtempSync(`${tmpdir()}/gt3-n1-`);
+    const credDir = `${dir}/creds`;
+    const stateDir = `${dir}/dispatcher-trusted`;
+    const cwdDir = `${dir}/cwd-trusted`;
+    const cfgDir = `${dir}/claude-trusted`;
+    const shimBin = `${dir}/genie-claude-shim`;
+    const handoffOut = `${dir}/handoff-n1.json`;
+    mkdirSync(credDir, { recursive: true, mode: 0o700 });
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cwdDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+
+    writeFileSync(`${credDir}/tier-token`, "CLAUDE_CODE_OAUTH_TOKEN=canary-n1-migrated-token-0000\n", { mode: 0o600 });
+
+    // Pre-seed a journal matching 2a86671's shape (`token: cfgDir`, `tokens: { [cfgDir]: { state: "available" } }`),
+    // plus a second thread with a forged non-configDir path (`token: "/etc/shadow"`) that must NOT be migrated.
+    const legacySession = "11111111-2222-4333-8444-555555555555";
+    const forgedSession = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+    saveJournal(stateDir, {
+      version: 1,
+      threads: {
+        "thread-legacy": {
+          session: legacySession,
+          name: "genie-11111111",
+          token: cfgDir,
+          configDir: cfgDir,
+          state: "parked",
+          pane: null,
+          launched: true,
+          buffer: [],
+          outstanding: [],
+          lastReply: null,
+          createdAt: 1000,
+          seq: 1,
+        },
+        "thread-forged": {
+          session: forgedSession,
+          name: "genie-66666666",
+          token: "/etc/shadow",
+          configDir: cfgDir,
+          state: "parked",
+          pane: null,
+          launched: true,
+          buffer: [],
+          outstanding: [],
+          lastReply: null,
+          createdAt: 1000,
+          seq: 1,
+        },
+      },
+      tokens: {
+        [cfgDir]: { state: "available" },
+      },
+    });
+
+    writeFileSync(
+      shimBin,
+      [
+        "import json, os, socket, stat, sys",
+        "sep = sys.argv.index('--')",
+        "head = sys.argv[1:sep]",
+        "tail = sys.argv[sep + 1:]",
+        "sock_path = head[1]",
+        "thread_id = head[3]",
+        "pane_cwd = head[5]",
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        "s.connect(sock_path)",
+        "msg, fds, _, _ = socket.recv_fds(s, 16, 1)",
+        "s.close()",
+        "fd = fds[0]",
+        "with os.fdopen(fd, 'rb', closefd=True) as f:",
+        "    tok = f.read().decode('utf-8').strip()",
+        `with open(${JSON.stringify(handoffOut)}, 'w', encoding='utf-8') as out:`,
+        "    json.dump({'thread_id': thread_id, 'pane_cwd': pane_cwd, 'tail': tail, 'tok': tok}, out)",
+      ].join("\n") + "\n",
+      { mode: 0o755 },
+    );
+
+    const selfNspids = readFileSync("/proc/self/status", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("NSpid:"))!
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+
+    const ok = (result: unknown) => JSON.stringify({ id: "cli", result });
+    const herdr = new CliHerdr({
+      session: "genie-trusted",
+      claude: shimBin,
+      cwdDir,
+      stateDir,
+      credentialsDir: credDir,
+      expectedNspidDepth: selfNspids.length,
+      run: async (argv) => {
+        const key = argv.slice(3, 5).join(" ");
+        if (key === "agent list") return ok({ agents: [] });
+        if (key === "pane list") return ok({ panes: [] });
+        if (key === "workspace create") return ok({ root_pane: { pane_id: "w1:p1" } });
+        if (key === "pane split") return ok({ pane: { pane_id: "w1:p2" } });
+        if (key === "pane close") return ok({ type: "ok" });
+        if (key === "agent start") {
+          const sep = argv.indexOf("--");
+          const cmd = argv[argv.indexOf("--command") + 1];
+          const shimArgs = argv.slice(sep + 1);
+          await new Promise<void>((resolve, reject) => {
+            const p = spawn("python3", ["-I", cmd, ...shimArgs], { cwd: cwdDir, stdio: "ignore" });
+            p.once("error", reject);
+            p.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`shim exited ${code}`))));
+          });
+          return ok({ type: "agent_started" });
+        }
+        throw new Error(`unexpected herdr command: ${argv.join(" ")}`);
+      },
+    });
+
+    const d = await Dispatcher.open({
+      stateDir,
+      herdr,
+      xmsg: { list: async () => [] },
+      pickToken: () => ({ id: "tier-token", configDir: cfgDir }),
+      cwd: cwdDir,
+    });
+
+    // 1. Legacy thread token id (equal to t.configDir) is rewritten to "tier-token" and saved on disk.
+    assert.equal(d.journal.threads["thread-legacy"].token, "tier-token");
+    assert.deepEqual(d.journal.tokens["tier-token"], { state: "available" });
+    assert.equal(cfgDir in d.journal.tokens, false);
+    const reloaded = loadJournal(stateDir);
+    assert.equal(reloaded.threads["thread-legacy"].token, "tier-token");
+    assert.deepEqual(reloaded.tokens["tier-token"], { state: "available" });
+    assert.equal(cfgDir in reloaded.tokens, false);
+
+    // 2. Escalating the migrated legacy thread through CliHerdr's token channel succeeds and resumes its uuid.
+    const resumed = await d.escalate("thread-legacy");
+    assert.equal(resumed.state, "live");
+    assert.equal(resumed.pane, "w1:p2");
+    const recorded = JSON.parse(readFileSync(handoffOut, "utf8"));
+    assert.equal(recorded.thread_id, "thread-legacy");
+    assert.deepEqual(recorded.tail, ["--resume", legacySession]);
+    assert.equal(recorded.tok, "canary-n1-migrated-token-0000");
+
+    // 3. Forged non-configDir token id is NOT rewritten by Dispatcher.open and fails closed on escalate.
+    assert.equal(d.journal.threads["thread-forged"].token, "/etc/shadow");
+    await assert.rejects(d.escalate("thread-forged"), /credential error: invalid token id/);
   },
 );
