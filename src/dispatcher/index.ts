@@ -5,10 +5,34 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import type { Herdr } from "./herdr.ts";
-import { loadJournal, saveJournal, type Journal, type Thread } from "./journal.ts";
+import {
+  AGENT_NAME_RE,
+  isValidConfigDir,
+  loadJournal,
+  saveJournal,
+  SESSION_UUID_RE,
+  THREAD_ID_RE,
+  TOKEN_ID_RE,
+  validateJournalEntry,
+  type Journal,
+  type Thread,
+} from "./journal.ts";
 
 export type { Herdr } from "./herdr.ts";
-export { loadJournal, saveJournal, type Buffered, type Journal, type Outstanding, type Thread } from "./journal.ts";
+export {
+  AGENT_NAME_RE,
+  isValidConfigDir,
+  loadJournal,
+  saveJournal,
+  SESSION_UUID_RE,
+  THREAD_ID_RE,
+  TOKEN_ID_RE,
+  validateJournalEntry,
+  type Buffered,
+  type Journal,
+  type Outstanding,
+  type Thread,
+} from "./journal.ts";
 export { Delivery, UNAVAILABLE, type DeliveryOptions } from "./delivery.ts";
 export {
   parseExpertReply,
@@ -117,6 +141,9 @@ export class Dispatcher {
   }
 
   workingCopyDir(threadId: string): string {
+    if (!THREAD_ID_RE.test(threadId)) {
+      throw new Error(`dispatcher: invalid threadId ${JSON.stringify(threadId)}`);
+    }
     return `${this.o.stateDir}/worktrees/${threadId}`;
   }
 
@@ -196,6 +223,9 @@ export class Dispatcher {
   }
 
   removeWorkingCopy(threadId: string): void {
+    if (!THREAD_ID_RE.test(threadId)) {
+      throw new Error(`dispatcher: invalid threadId ${JSON.stringify(threadId)}`);
+    }
     for (const dir of [this.workingCopyDir(threadId), `${this.o.stateDir}/claude-threads/${threadId}`]) {
       if (existsSync(dir)) {
         rmSync(dir, { recursive: true, force: true });
@@ -205,6 +235,9 @@ export class Dispatcher {
 
   // The thread's entry, created parked and unlaunched under a picked token and a minted uuid.
   thread(threadId: string, repos?: string | string[]): Thread {
+    if (!THREAD_ID_RE.test(threadId)) {
+      throw new Error(`dispatcher: invalid threadId ${JSON.stringify(threadId)}`);
+    }
     const requested = (typeof repos === "string" ? [repos] : repos ?? []).filter((r) => Boolean(r && r.trim()));
     let t = this.journal.threads[threadId];
     if (!t) {
@@ -242,7 +275,14 @@ export class Dispatcher {
   // Bring the thread's session up, launching a new thread under a minted uuid and resuming a
   // parked one under the uuid it was launched with. A live thread is returned as it is.
   async escalate(threadId: string, repos?: string | string[]): Promise<Thread> {
+    if (!THREAD_ID_RE.test(threadId)) {
+      throw new Error(`dispatcher: invalid threadId ${JSON.stringify(threadId)}`);
+    }
     const t = this.thread(threadId, repos);
+    const entryErr = validateJournalEntry(threadId, t);
+    if (entryErr !== null) {
+      throw new Error(`dispatcher: invalid journal entry for ${JSON.stringify(threadId)}: ${entryErr}`);
+    }
     if (t.state === "live") return t;
     const paneCwd = this.prepareWorkingCopy(threadId, t);
     const args = t.launched

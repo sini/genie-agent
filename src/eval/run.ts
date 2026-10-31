@@ -63,12 +63,17 @@ const which = (name: string): string => {
   throw new Error(`${name} not found on PATH`);
 };
 
-// The model writes the request; nothing in it may reach Nix as anything but a github coordinate.
+// The model writes the request; nothing in it may reach Nix as anything but a github coordinate
+// and a dotted attribute path (GX1 F2).
 const coordinate = /^[A-Za-z0-9._-]+$/;
+export const ATTR_PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_][A-Za-z0-9_-]*)*$/;
 
 // Generates a Nix wrapper expression to evaluate a NixOS configuration with agenix and sops-nix
 // secret paths overridden to placeholder store files and placeholder values substituted (plan E5, design §5.7).
 export function wrapperForNixOS(subpath: string): string {
+  if (subpath !== "" && !ATTR_PATH_RE.test(subpath)) {
+    throw new Error(`not an attr path: ${subpath}`);
+  }
   const targetAccess = subpath ? `extended.${subpath}` : "extended";
   return `host:
 let
@@ -161,6 +166,9 @@ in
 // The effective tier is the only thing that opens the trusted path; a public eval's argv is E1's.
 export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string[] {
   const { request } = launch;
+  if (!ATTR_PATH_RE.test(request.attr)) {
+    throw new Error(`not an attr path: ${request.attr}`);
+  }
   const trusted = effectiveTier(launch) === "trusted";
   const settings = {
     "pure-eval": "true",
@@ -256,6 +264,9 @@ export const JAIL_ENV: Record<string, string> = {
 
 export async function runEval(launch: Launch, options: RunOptions = {}): Promise<EvalResult> {
   const { request } = launch;
+  if (!ATTR_PATH_RE.test(request.attr)) {
+    throw new Error(`not an attr path: ${request.attr}`);
+  }
   const [owner, name, ...rest] = request.repo.split("/");
   if (!options.localFlake && !(rest.length === 0 && [owner, name, request.rev].every((s) => coordinate.test(s ?? "")))) {
     throw new Error(`not a github coordinate: ${request.repo}/${request.rev}`);

@@ -22,7 +22,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { Dispatcher, loadJournal, saveJournal, type Options } from "../src/dispatcher/index.ts";
+import {
+  Delivery,
+  Dispatcher,
+  DispatcherGc,
+  loadJournal,
+  saveJournal,
+  UNAVAILABLE,
+  type Inbound,
+  type Options,
+  type XmsgClient,
+} from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
 
 // A herdr server that outlives the dispatcher, recording every call.
@@ -1085,8 +1095,216 @@ test(
     assert.deepEqual(recorded.tail, ["--resume", legacySession]);
     assert.equal(recorded.tok, "canary-n1-migrated-token-0000");
 
-    // 3. Forged non-configDir token id is NOT rewritten by Dispatcher.open and fails closed on escalate.
-    assert.equal(d.journal.threads["thread-forged"].token, "/etc/shadow");
-    await assert.rejects(d.escalate("thread-forged"), /credential error: invalid token id/);
+    // 3. Forged non-configDir token id is refused at loadJournal (GX1 F5) and NOT migrated,
+    //    and if injected directly into journal.threads after load, still fails closed at the escalate/CliHerdr sink.
+    assert.equal(d.journal.threads["thread-forged"], undefined);
+    assert.equal(reloaded.threads["thread-forged"], undefined);
+    d.journal.threads["thread-forged"] = {
+      session: forgedSession,
+      name: "genie-66666666",
+      token: "/etc/shadow",
+      configDir: cfgDir,
+      state: "parked",
+      pane: null,
+      launched: true,
+      buffer: [],
+      outstanding: [],
+      lastReply: null,
+      createdAt: 1000,
+      seq: 1,
+    };
+    await assert.rejects(d.escalate("thread-forged"), /invalid token id/);
   },
 );
+
+test("oracle GX1 (F1): THREAD_ID_RE validated at packageThread boundary and at every fs/dispatcher sink", async () => {
+  const { herdr, o } = setup();
+  const dir = mkdtempSync(`${tmpdir()}/gx1-f1-`);
+  o.stateDir = `${dir}/state`;
+  mkdirSync(o.stateDir, { recursive: true });
+  // Plant a sibling directory outside worktrees/ that "../victim" would hit if unvalidated.
+  const victimDir = `${o.stateDir}/victim`;
+  mkdirSync(victimDir, { recursive: true });
+  writeFileSync(`${victimDir}/keep.txt`, "untouched");
+
+  const d = await Dispatcher.open(o);
+  const relayed: { id: string; text: string }[] = [];
+  const queue: Inbound[] = [];
+  const x: XmsgClient = {
+    poll: async () => queue[0] ?? null,
+    ack: async (id) => {
+      if (queue[0]?.id === id) queue.shift();
+    },
+    send: async () => "sent-1",
+    replies: async () => [],
+    reply: async (id, text) => {
+      relayed.push({ id, text });
+    },
+    list: async () => [...herdr.panes.values()],
+  };
+  const del = new Delivery(d, x, { readyPollMs: 5, replyTimeoutMs: 500 });
+
+  // Positive control: a valid thread_id passes boundary and sink, creating its worktree and launching herdr.
+  queue.push({ id: "m-valid", text: JSON.stringify({ thread_id: "thread-ok-1", cleaned_question: "q" }) });
+  assert.equal(await del.pump(0), true);
+  await del.settled();
+  assert.equal(herdr.starts.length, 1);
+  assert.equal(herdr.starts[0].threadId, "thread-ok-1");
+  assert.equal(existsSync(`${o.stateDir}/worktrees/thread-ok-1`), true);
+
+  // Malicious thread_ids are refused at the Delivery / packageThread boundary AND at every dispatcher/herdr sink.
+  const maliciousIds = ["../victim", "../../etc", "-leading-dash", ".", "..", "a/b", "a\\b", "bad space", "a..b"];
+  for (const [i, bad] of maliciousIds.entries()) {
+    const startsBefore = herdr.starts.length;
+    queue.push({ id: `m-bad-${i}`, text: JSON.stringify({ thread_id: bad, cleaned_question: "q" }) });
+    assert.equal(await del.pump(0), true);
+    assert.equal(relayed.at(-1)?.text, UNAVAILABLE, `boundary must refuse thread_id=${bad}`);
+    assert.equal(herdr.starts.length, startsBefore, `sink herdr.start must not be reached for ${bad}`);
+    assert.equal(d.journal.threads[bad], undefined, `nothing journalled for ${bad}`);
+
+    // Direct sink checks (never trusting upstream):
+    assert.throws(() => d.workingCopyDir(bad), /invalid threadId/);
+    assert.throws(() => d.removeWorkingCopy(bad), /invalid threadId/);
+    assert.throws(() => d.thread(bad), /invalid threadId/);
+    await assert.rejects(d.escalate(bad), /invalid threadId/);
+    assert.equal(herdr.starts.length, startsBefore, `d.escalate(${bad}) must not reach herdr.start`);
+
+    const cliCalls: string[][] = [];
+    const cliH = new CliHerdr({
+      session: "public",
+      stateDir: o.stateDir,
+      cwdDir: `${dir}/cwd`,
+      run: async (argv) => {
+        cliCalls.push(argv);
+        return JSON.stringify({ id: "cli", result: { panes: [{ pane_id: "w1:p1" }] } });
+      },
+    });
+    await assert.rejects(
+      cliH.start({ name: "genie-12345678", threadId: bad, configDir: "/cfg/a", cwd: "/cwd", args: [] }),
+      /invalid threadId/,
+    );
+    assert.deepEqual(cliCalls, [], `CliHerdr.start must refuse ${bad} before running herdr`);
+  }
+
+  // Victim directory outside worktrees/ was never deleted or modified.
+  assert.equal(readFileSync(`${victimDir}/keep.txt`, "utf8"), "untouched");
+  del.stop();
+});
+
+test("oracle GX1 (F5): loadJournal validates entries (after N1 migration) and GC/escalate sinks re-validate", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/gx1-f5-`);
+  const stateDir = `${dir}/state`;
+  const cfgDir = `${dir}/cfg`;
+  const outsideDir = `${dir}/outside`;
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(`${cfgDir}/transcripts`, { recursive: true });
+  mkdirSync(outsideDir, { recursive: true });
+
+  const validSession = "11111111-2222-4333-8444-555555555555";
+  const legacySession = "22222222-3333-4444-8555-666666666666";
+  const validTranscript = `${cfgDir}/transcripts/${validSession}.jsonl`;
+  const outsideCanary = `${outsideDir}/canary.jsonl`;
+  writeFileSync(validTranscript, '{"ok":true}\n');
+  writeFileSync(outsideCanary, '{"do_not_delete":true}\n');
+
+  // Seed journal with:
+  // - 1 valid entry ("thread-valid")
+  // - 1 N1 legacy entry ("thread-legacy", token === configDir)
+  // - 5 invalid entries (bad thread id, bad session uuid, bad agent name, bad configDir, bad token)
+  const makeEntry = (overrides: Record<string, unknown>) => ({
+    session: validSession,
+    name: "genie-11111111",
+    token: "tok-a",
+    configDir: cfgDir,
+    state: "parked",
+    pane: null,
+    launched: true,
+    buffer: [],
+    outstanding: [],
+    lastReply: 1000,
+    createdAt: 1000,
+    seq: 1,
+    ...overrides,
+  });
+
+  writeFileSync(
+    `${stateDir}/journal.json`,
+    JSON.stringify({
+      version: 1,
+      threads: {
+        "thread-valid": makeEntry({}),
+        "thread-legacy": makeEntry({ session: legacySession, name: "genie-22222222", token: cfgDir }),
+        "../thread-traversal": makeEntry({}),
+        "thread-bad-session": makeEntry({ session: "../../outside/canary" }),
+        "thread-bad-name": makeEntry({ name: "evil;rm -rf /" }),
+        "thread-bad-cfg": makeEntry({ configDir: `${cfgDir}/../outside` }),
+        "thread-bad-token": makeEntry({ token: "../outside/secret" }),
+      },
+      tokens: {
+        "tok-a": { state: "available" },
+        [cfgDir]: { state: "available" },
+      },
+    }),
+  );
+
+  // 1. Boundary: loadJournal keeps valid + N1-migrated legacy, logs and refuses all 5 invalid entries.
+  const loaded = loadJournal(stateDir);
+  assert.deepEqual(Object.keys(loaded.threads).sort(), ["thread-legacy", "thread-valid"]);
+  assert.equal(loaded.threads["thread-legacy"].token, "tier-token");
+
+  const herdr = new FakeHerdr();
+  const d = await Dispatcher.open({
+    stateDir,
+    herdr,
+    xmsg: { list: async () => [] },
+    pickToken: () => ({ id: "tok-a", configDir: cfgDir }),
+    cwd: `${dir}/cwd`,
+  });
+
+  // Positive control: valid thread escalates and can be collected by GC at 96h.
+  await d.escalate("thread-valid");
+  assert.equal(herdr.starts.length, 1);
+  await d.park("thread-valid");
+
+  // 2. Sink check on escalate: inject a tainted entry into memory after load; d.escalate refuses before herdr.start.
+  d.journal.threads["thread-injected"] = makeEntry({
+    session: "../../outside/canary",
+  }) as any;
+  const startsBefore = herdr.starts.length;
+  await assert.rejects(d.escalate("thread-injected"), /invalid session uuid/);
+  assert.equal(herdr.starts.length, startsBefore, "sink escalate must not call herdr.start on tainted entry");
+  delete d.journal.threads["thread-injected"];
+
+  // 3. Sink check on GC: inject a tainted expired entry pointing at outsideCanary; GC refuses before archive/rmSync.
+  const archived: string[] = [];
+  const del = new Delivery(
+    d,
+    {
+      poll: async () => null,
+      ack: async () => {},
+      send: async () => "s",
+      replies: async () => [],
+      reply: async () => {},
+      list: async () => [],
+    },
+    {
+      now: () => 1000 + 100 * 60 * 60 * 1000,
+      archive: async (th) => {
+        archived.push(th);
+      },
+    },
+  );
+  d.journal.threads["thread-gc-tainted"] = makeEntry({
+    session: "../outside/canary",
+    lastReply: 1000,
+  }) as any;
+
+  await del.sweep();
+  // Positive control: thread-valid and N1-migrated thread-legacy were archived and their transcripts removed.
+  assert.deepEqual(archived.sort(), ["thread-legacy", "thread-valid"]);
+  assert.equal(existsSync(validTranscript), false, "positive control transcript removed by GC");
+  // Tainted entry was refused before archive and before rmSync: outsideCanary is untouched.
+  assert.equal(existsSync(outsideCanary), true, "outside canary file must never be removed by GC");
+  del.stop();
+});
+

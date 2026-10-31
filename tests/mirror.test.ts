@@ -14,10 +14,15 @@ import {
   MirrorOverQuota,
   MirrorRefused,
   mirrorKey,
+  removeWorktrees,
   worktreeFor,
   type MirrorConfig,
   type Runner,
 } from "../src/mirror/index.ts";
+import { Lifecycle } from "../src/lifecycle/index.ts";
+import { parseMatrixForward } from "../src/root/io.ts";
+import { ThreadStateStore } from "../src/state/index.ts";
+import { Supervisor } from "../src/supervisor/index.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-mirror-test-`);
 const served = `${tmp}/served`;
@@ -375,4 +380,96 @@ test("oracle: diskBytes counts apparent file sizes, whether blocks are zero or e
   writeFileSync(`${dir}/sub/unallocated`, Buffer.alloc(65536));
   assert.equal(diskBytes(dir), 5 + 65536);
 });
+
+test("oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink", async () => {
+  fixture("f3repo");
+  const { cfg, run, calls } = setup();
+  const rootDir = dirname(cfg.worktreeRoot);
+  const victimDir = `${rootDir}/victim`;
+  mkdirSync(victimDir, { recursive: true });
+  writeFileSync(`${victimDir}/canary.txt`, "keep");
+
+  // Positive control: a valid thread ("$thread-ok:example.org") passes parseMatrixForward, worktreeFor, and lifecycle.close / removeWorktrees.
+  const validForward = [
+    "[matrix] room=#support:example.org thread=$thread-ok:example.org user=matrix bob at example.org (public)",
+    "",
+    "<request>",
+    JSON.stringify({
+      sender: "matrix bob at example.org",
+      sender_id: "@bob:example.org",
+      tier: "public",
+      addressed: true,
+      text: "hi",
+    }),
+    "</request>",
+  ].join("\n");
+  const parsedValid = parseMatrixForward(validForward);
+  assert.notEqual(parsedValid, null);
+  assert.equal(parsedValid?.thread, "$thread-ok:example.org");
+
+  const wt = await worktreeFor(cfg, `${base}/f3repo`, "$thread-ok:example.org", run);
+  assert.equal(statSync(wt.path).isDirectory(), true);
+
+  const store = new ThreadStateStore(`${rootDir}/state`, `${rootDir}/store`);
+  const now = new Date().toISOString();
+  store.write({
+    thread_id: "$thread-ok:example.org",
+    status: "active",
+    created: now,
+    last_active: now,
+    sender_tier: "public",
+  });
+  const supervisor = new Supervisor(
+    () => ({ command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] }),
+    () => {},
+  );
+  const lc = new Lifecycle({ supervisor, store, mirror: cfg, deeper: async () => {} });
+  await lc.close("$thread-ok:example.org");
+  assert.equal(store.read("$thread-ok:example.org")?.status, "closed");
+  assert.equal( statSync(victimDir).isDirectory(), true );
+
+  // Malicious thread names ("../victim", "..", ".", "-flag", "a/b", "$bad/../victim") are refused at:
+  // 1) parseMatrixForward boundary (returns null)
+  // 2) lifecycle.close (before any teardown or rm)
+  // 3) removeWorktrees sink (throws MirrorRefused before any git or rmSync call)
+  const maliciousThreads = ["../victim", "../../etc", "..", ".", "-flag", "a/b", "$bad/../victim"];
+  for (const bad of maliciousThreads) {
+    const badForward = [
+      `[matrix] room=#support:example.org thread=${bad} user=matrix bob at example.org (public)`,
+      "",
+      "<request>",
+      JSON.stringify({
+        sender: "matrix bob at example.org",
+        sender_id: "@bob:example.org",
+        tier: "public",
+        addressed: true,
+        text: "hi",
+      }),
+      "</request>",
+    ].join("\n");
+    assert.equal(parseMatrixForward(badForward), null, `parseMatrixForward envelope must refuse ${bad}`);
+    assert.equal(
+      parseMatrixForward(JSON.stringify({ control: "accept", thread: bad })),
+      null,
+      `parseMatrixForward control must refuse ${bad}`,
+    );
+
+    const callsBefore = calls.length;
+    await assert.rejects(
+      removeWorktrees(cfg, bad, run),
+      (e: unknown) => e instanceof MirrorRefused && /not a thread name/.test(e.reason),
+      `removeWorktrees must refuse ${bad}`,
+    );
+    await assert.rejects(
+      lc.close(bad),
+      (e: unknown) => e instanceof MirrorRefused && /not a thread name/.test(e.reason),
+      `lifecycle.close must refuse ${bad}`,
+    );
+    assert.equal(calls.length, callsBefore, `no git process may run for ${bad}`);
+  }
+  assert.equal(readFileSync(`${victimDir}/canary.txt`, "utf8"), "keep", "victim directory outside worktrees must remain intact");
+  lc.stop();
+  await supervisor.shutdown();
+});
+
 

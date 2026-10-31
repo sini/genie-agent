@@ -1603,3 +1603,42 @@ test("k8sRunner satisfies Runner interface and works with perThread lock", async
   assert.equal(res1.limit_hit, "none");
   assert.equal(res2.limit_hit, "none");
 });
+
+test("oracle GX1 (F6): renderJob sanitises thread at all three k8s sites (label genie.agent/thread, repo PVC claimName, thread-store PVC claimName)", () => {
+  const validLabelRe = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+  // Positive control: clean thread id "thread-clean-1" renders unchanged across all 3 sites.
+  const cleanJob = renderJob(sampleLaunch, { thread: "thread-clean-1" });
+  assertJobProperties(cleanJob, "thread-clean-1", "public");
+
+  // Unsanitised / malicious Matrix thread ids with "$", "!", ":", "/", "..", uppercase, spaces
+  // are sanitised at Job metadata.labels, Pod template metadata.labels, repo PVC claimName, and thread-store PVC claimName.
+  const rawThreads = [
+    "$event_id:matrix.org/../../evil",
+    "!Room_ID:Example.ORG/with spaces & $pecial!",
+    "---///...",
+  ];
+  for (const raw of rawThreads) {
+    const job = renderJob(sampleLaunch, { thread: raw });
+    const jobThreadLabel = job.metadata.labels?.["genie.agent/thread"] ?? "";
+    const podThreadLabel = job.spec.template.metadata?.labels?.["genie.agent/thread"] ?? "";
+    const volumes = job.spec.template.spec.volumes ?? [];
+    const repoClaim = volumes.find((v) => v.name === "repo")?.persistentVolumeClaim?.claimName ?? "";
+    const storeClaim = volumes.find((v) => v.name === "thread-store")?.persistentVolumeClaim?.claimName ?? "";
+
+    assert.equal(jobThreadLabel, podThreadLabel);
+    for (const [site, val] of [
+      ["job.metadata.name", job.metadata.name],
+      ["labels['genie.agent/thread']", jobThreadLabel],
+      ["repo PVC claimName", repoClaim],
+      ["thread-store PVC claimName", storeClaim],
+    ] as const) {
+      assert.match(val, validLabelRe, `${site} (${val}) must be a valid k8s RFC-1123 label for raw=${raw}`);
+      assert.ok(val.length <= 63, `${site} (${val}) must be <= 63 chars`);
+      assert.ok(!/[/:.$!\\A-Z\s]/.test(val), `${site} (${val}) must contain no unsanitised chars`);
+    }
+    assert.equal(repoClaim, `repo-${jobThreadLabel}`);
+    assert.equal(storeClaim, `thread-store-${jobThreadLabel}`);
+  }
+});
+

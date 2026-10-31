@@ -1,0 +1,10 @@
+{
+  "kind": "pr",
+  "repo": "alice/nix-config",
+  "branch": "-bad/../ref",
+  "files": {
+    "hosts/laptop.nix": "{ }\n"
+  },
+  "title": "Enable foo",
+  "body": "Thread: https://matrix.to/#/!abc:example.org"
+}

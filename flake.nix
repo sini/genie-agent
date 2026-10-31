@@ -355,7 +355,7 @@
                 rc=0
                 node --expose-gc --test --test-force-exit --test-reporter=tap tests/dispatcher.test.ts tests/delivery.test.ts tests/dispatcher-gc.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F1): THREAD_ID_RE validated at packageThread boundary and at every fs/dispatcher sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F5): loadJournal validates entries (after N1 migration) and GC/escalate sinks re-validate$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The verdict parser's gating oracle: any reply outside schemas/verdict.json, or breaking its
@@ -369,6 +369,7 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/guard
+                    ./src/mirror/index.ts
                     ./src/root/io.ts
                     ./src/root/index.ts
                     ./src/escalation/index.ts
@@ -426,6 +427,14 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/mirror
+                    ./src/lifecycle
+                    ./src/root/io.ts
+                    ./src/state
+                    ./src/supervisor
+                    ./src/tier
+                    ./src/dispatcher/xmsg.ts
+                    ./src/guard/verdict.ts
+                    ./prompts
                     ./tests/mirror.test.ts
                   ];
                 };
@@ -435,7 +444,7 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's
@@ -639,6 +648,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/tier1/schema.ts
+                    ./schemas/eval-request.json
                     ./tests/eval-argv.test.ts
                   ];
                 };
@@ -648,7 +659,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/eval-argv.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # limit_hit from typed observations (plan E2, E2.1): a deadline kill is timeout, an OOM kill oom,
@@ -699,7 +710,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/eval-k8s.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: snapshot plus property checks on the rendered Job spec$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: snapshot plus property checks on the rendered Job spec$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F6): renderJob sanitises thread at all three k8s sites (label genie.agent/thread, repo PVC claimName, thread-store PVC claimName)$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process
@@ -983,6 +994,7 @@
                   'the dispatching act routes a gist to the gist action and a pr to the PR action'; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -q '^ok [0-9]* - oracle GX1 (F4): repo coordinate, branch ref, file paths, and commits validated in schemas/proposal.json, broker, and pr sink$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The archive writer and replay-resume (plans P4, P5): one PUT per archive holding the

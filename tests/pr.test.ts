@@ -9,9 +9,10 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { broker, byKind } from "../src/broker/index.ts";
+import { broker, byKind, type Proposal } from "../src/broker/index.ts";
 import { gist } from "../src/broker/gist.ts";
 import { pr } from "../src/broker/pr.ts";
+import { errors, load } from "../src/tier1/schema.ts";
 
 interface Req {
   method: string;
@@ -183,3 +184,108 @@ test("a private repository is refused before the fork", async () => {
     gh.close();
   }
 });
+
+test("oracle GX1 (F4): repo coordinate, branch ref, file paths, and commits validated in schemas/proposal.json, broker, and pr sink", async () => {
+  const schema = load("proposal");
+  const gh = await github();
+  try {
+    // Positive control: valid proposal passes schema, broker, and pr(), reaching GitHub API.
+    const validObj: Proposal = {
+      kind: "pr",
+      repo: "alice/flake",
+      branch: "fix",
+      commits: ["0123456789abcdef0123456789abcdef01234567"],
+      files: { "flake.nix": "{ }\n" },
+      title: "Fix the eval",
+      body: "Imports the module.",
+    };
+    assert.deepEqual(errors(schema, validObj), []);
+    const { action: okAction } = await run(JSON.stringify(validObj), gh);
+    assert.equal(okAction.acted, true);
+    assert.equal(okAction.url, PR_URL);
+
+    // Malicious proposals (path traversal "..", leading "-", extra/disallowed "/" in repo, ".lock" in branch,
+    // empty files/commits, traversal in file path) are refused at schema/broker boundary AND at the pr() sink
+    // before any HTTP request is made to GitHub.
+    const badProposals: { label: string; p: Proposal; checkSchema: boolean }[] = [
+      {
+        label: "repo with .. traversal",
+        p: { ...validObj, repo: "alice/../victim" },
+        checkSchema: true,
+      },
+      {
+        label: "repo with leading dash",
+        p: { ...validObj, repo: "-alice/flake" },
+        checkSchema: true,
+      },
+      {
+        label: "repo with extra slash",
+        p: { ...validObj, repo: "alice/flake/extra" },
+        checkSchema: true,
+      },
+      {
+        label: "branch with ..",
+        p: { ...validObj, branch: "feat..evil" },
+        checkSchema: true,
+      },
+      {
+        label: "branch with ../ traversal",
+        p: { ...validObj, branch: "../heads/main" },
+        checkSchema: true,
+      },
+      {
+        label: "branch with leading dash",
+        p: { ...validObj, branch: "-upload-pack=evil" },
+        checkSchema: true,
+      },
+      {
+        label: "branch ending in .lock",
+        p: { ...validObj, branch: "feat/test.lock" },
+        checkSchema: false,
+      },
+      {
+        label: "empty commits array",
+        p: { ...validObj, commits: [] },
+        checkSchema: true,
+      },
+      {
+        label: "file path with ..",
+        p: { ...validObj, files: { "../etc/passwd": "x" } },
+        checkSchema: false,
+      },
+      {
+        label: "file path with leading slash",
+        p: { ...validObj, files: { "/etc/passwd": "x" } },
+        checkSchema: false,
+      },
+      {
+        label: "file path with leading dash",
+        p: { ...validObj, files: { "-n": "x" } },
+        checkSchema: false,
+      },
+    ];
+
+    const actSink = pr(link, gh.base, { pollMs: 10 });
+    for (const { label, p, checkSchema } of badProposals) {
+      const reqsBefore = gh.requests.length;
+      if (checkSchema) {
+        assert.ok(errors(schema, p).length > 0, `schema must refuse ${label}`);
+      }
+      const { action } = await run(JSON.stringify(p), gh);
+      assert.equal(action.acted, false, `broker must refuse ${label}`);
+      assert.match(action.reason, /^not a proposal:/, `broker reason for ${label}: ${action.reason}`);
+      assert.equal(gh.requests.length, reqsBefore, `broker must make 0 GitHub requests for ${label}`);
+
+      // Direct sink call on pr() without broker upstream:
+      await assert.rejects(
+        actSink(p, "tok-unused", THREAD),
+        /pr:/,
+        `pr() sink must refuse ${label} directly`,
+      );
+      assert.equal(gh.requests.length, reqsBefore, `pr() sink must make 0 GitHub requests for ${label}`);
+    }
+  } finally {
+    gh.close();
+  }
+});
+

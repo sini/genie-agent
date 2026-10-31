@@ -306,7 +306,18 @@ export interface CliOptions {
   run?: Run;
 }
 
-const TOKEN_ID_RE = /^[A-Za-z0-9._-]+$/;
+const THREAD_ID_RE = /^(?!-)(?!\.+$)(?!.*\.\.)[A-Za-z0-9_.:$!-]{1,128}$/;
+const TOKEN_ID_RE = /^(?!-)(?!\.+$)(?!.*\.\.)[A-Za-z0-9._-]+$/;
+
+function isValidConfigDir(p: unknown): p is string {
+  return (
+    typeof p === "string" &&
+    p.length > 0 &&
+    p.startsWith("/") &&
+    !p.includes("\0") &&
+    !p.split("/").includes("..")
+  );
+}
 
 export class CliHerdr implements Herdr {
   private readonly o: CliOptions;
@@ -464,9 +475,18 @@ export class CliHerdr implements Herdr {
     // K7: herdr workspace create & pane split always use cwd-${tier}, never the thread's worktree.
     const shellCwd = this.o.cwdDir ?? s.paneCwd ?? s.cwd;
     const threadId = s.threadId ?? s.name;
+    if (!THREAD_ID_RE.test(threadId)) {
+      throw new Error(`herdr: invalid threadId ${JSON.stringify(threadId)}`);
+    }
+    if (!isValidConfigDir(s.configDir)) {
+      throw new Error(`herdr: invalid configDir ${JSON.stringify(s.configDir)}`);
+    }
     const useTokenChannel = this.hasTokenChannel();
 
     if (!useTokenChannel) {
+      if (s.token !== undefined && !TOKEN_ID_RE.test(s.token)) {
+        throw new Error(`credential error: invalid token id ${JSON.stringify(s.token)}`);
+      }
       const basePane = await this.ensureBasePane(shellCwd);
       // The config directory is not a secret, so it rides --env; the token never does (GI-15).
       const split = await this.json([

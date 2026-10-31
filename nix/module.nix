@@ -238,7 +238,7 @@ let
 
         def main() -> None:
             sock_path, thread_id, pane_cwd, claude_args = parse_argv(sys.argv[1:])
-            if thread_id in (".", "..") or not re.match(r"^[A-Za-z0-9_.-]{1,128}$", thread_id):
+            if thread_id in (".", "..") or not re.match(r"^(?!-)(?!\.+$)(?!.*\.\.)[A-Za-z0-9_.:$!-]{1,128}$", thread_id):
                 die(f"invalid thread_id: {thread_id!r}")
 
             wt_root = f"{DISP_STATE_DIR}/worktrees/{thread_id}"

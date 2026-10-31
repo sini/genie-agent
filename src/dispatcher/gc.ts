@@ -5,7 +5,7 @@ import { existsSync, rmSync } from "node:fs";
 import { type Clock, systemClock } from "./clock.ts";
 import type { Dispatcher } from "./index.ts";
 import type { Delivery } from "./delivery.ts";
-import type { Thread } from "./journal.ts";
+import { validateJournalEntry, type Thread } from "./journal.ts";
 
 export const IDLE_TTL_MS = 96 * 60 * 60 * 1000;
 export const SWEEP_MS = 60 * 60 * 1000;
@@ -75,6 +75,12 @@ export class DispatcherGc {
   }
 
   private async collect(id: string, t: Thread): Promise<void> {
+    const err = validateJournalEntry(id, t);
+    if (err !== null) {
+      delete this.d.journal.threads[id];
+      this.d.save();
+      throw new Error(`dispatcher gc: refusing invalid journal entry ${JSON.stringify(id)}: ${err}`);
+    }
     if (t.state === "live" && t.pane !== null) {
       await this.d.park(id);
     }
@@ -82,9 +88,15 @@ export class DispatcherGc {
     // Re-check after the await in case a message arrived during the await
     const cur = this.d.journal.threads[id];
     if (!cur || !this.isExpired(cur)) return;
+    const curErr = validateJournalEntry(id, cur);
+    if (curErr !== null) {
+      delete this.d.journal.threads[id];
+      this.d.save();
+      throw new Error(`dispatcher gc: refusing invalid journal entry ${JSON.stringify(id)}: ${curErr}`);
+    }
 
     // Transcript and per-thread working copy leave the tier's home and state dir
-    const transcriptFile = `${t.configDir}/transcripts/${t.session}.jsonl`;
+    const transcriptFile = `${cur.configDir}/transcripts/${cur.session}.jsonl`;
     if (existsSync(transcriptFile)) {
       rmSync(transcriptFile, { recursive: true, force: true });
     }

@@ -5,7 +5,7 @@
 // parks idle threads, and 96h GC hands expired transcripts to the archiver (D3).
 import type { Dispatcher } from "./index.ts";
 import { XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
-import type { Outstanding, Thread } from "./journal.ts";
+import { THREAD_ID_RE, type Outstanding, type Thread } from "./journal.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import { DispatcherGc } from "./gc.ts";
 import { parseExpertReply } from "./reply.ts";
@@ -13,11 +13,11 @@ import { parseExpertReply } from "./reply.ts";
 export const UNAVAILABLE = "expert unavailable";
 
 // The thread an `escalation` package names, as the supervisor stamped it; null for a message that
-// does not parse as one.
+// does not parse as one or whose thread_id fails THREAD_ID_RE (GX1 F1).
 function packageThread(m: Inbound): string | null {
   try {
     const t = JSON.parse(m.text)?.thread_id;
-    return typeof t === "string" && t !== "" ? t : null;
+    return typeof t === "string" && THREAD_ID_RE.test(t) ? t : null;
   } catch {
     return null;
   }
@@ -221,8 +221,8 @@ export class Delivery {
     // still holds the session to one turn. Keep answered ids if that window matters.
     if (known) return;
     const threadId = this.o.threadOf(m);
-    // Not a package: answered and acknowledged, with no thread and nothing journalled.
-    if (threadId === null) {
+    // Not a package (or invalid threadId): answered and acknowledged, with no thread and nothing journalled.
+    if (threadId === null || !THREAD_ID_RE.test(threadId)) {
       await this.x.reply(m.id, UNAVAILABLE);
       return;
     }

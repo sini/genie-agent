@@ -19,11 +19,21 @@
     },
     "repo": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*\\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*$"
     },
     "branch": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*(?:\\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*)*$"
+    },
+    "commits": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      }
     },
     "files": {
       "description": "path to full file content",

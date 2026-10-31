@@ -162,8 +162,13 @@ export interface RenderJobOptions {
 
 const tail = (s: string) => s.slice(-TAIL_CHARS);
 
-const sanitise = (s: string): string =>
-  s.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
+export const sanitise = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "") || "t";
 
 // Default guaranteed resource bounds: 12Gi memory and 2 cores (requests = limits).
 export const DEFAULT_RESOURCES: K8sResourceRequirements = {
@@ -175,8 +180,9 @@ export const DEFAULT_RESOURCES: K8sResourceRequirements = {
 export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJob {
   const { request } = launch;
   const thread = options.thread ?? "t";
+  const safeThread = sanitise(thread);
   const name =
-    options.name ?? `eval-${sanitise(thread)}-${randomUUID().slice(0, 8)}`;
+    options.name ?? `eval-${safeThread}-${randomUUID().slice(0, 8)}`;
   const namespace = options.namespace ?? "genie-eval";
   const flakeRef = options.localFlake
     ? "path:/src"
@@ -185,7 +191,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
   const labels: Record<string, string> = {
     "app.kubernetes.io/name": "genie-eval",
     "app.kubernetes.io/component": "eval",
-    "genie.agent/thread": thread,
+    "genie.agent/thread": safeThread,
     "genie.agent/tier": launch.sender_tier,
     ...options.labels,
   };
@@ -238,14 +244,14 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
     {
       name: repoVolumeName,
       persistentVolumeClaim: {
-        claimName: options.repoClaimName ?? `repo-${thread}`,
+        claimName: options.repoClaimName ?? `repo-${safeThread}`,
         readOnly: true,
       },
     },
     {
       name: storeVolumeName,
       persistentVolumeClaim: {
-        claimName: options.storeClaimName ?? `thread-store-${thread}`,
+        claimName: options.storeClaimName ?? `thread-store-${safeThread}`,
       },
     },
     {

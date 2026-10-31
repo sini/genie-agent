@@ -150,7 +150,7 @@ export const normalise = (url: string): string =>
 
 export const mirrorKey = (url: string): string => createHash("sha256").update(normalise(url)).digest("hex");
 
-const threadName = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+export const threadName = /^(?!.*\.\.)[A-Za-z0-9_$!][A-Za-z0-9._:$!-]*$/;
 
 // Runs git while measuring watched on disk, killing git once it passes cap. Measured during the
 // fetch, never from a size the remote declares, and once more after it for a runner that ignores
@@ -282,6 +282,7 @@ function locked<T>(key: string, f: () => Promise<T>): Promise<T> {
 // which unpins the mirror for eviction. Keyed as worktreeFor keys them: <worktreeRoot>/<thread>/<key>
 // from the mirror <mirrorRoot>/<key>. Shared by C4's close and P3's collection.
 export async function removeWorktrees(cfg: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">, thread: string, run: Runner = git): Promise<void> {
+  if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
   const dir = `${cfg.worktreeRoot}/${thread}`;
   for (const key of existsSync(dir) ? readdirSync(dir) : []) {
     const m = `${cfg.mirrorRoot}/${key}`;

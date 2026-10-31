@@ -67,12 +67,76 @@ export interface Journal {
 
 const file = (dir: string) => `${dir}/journal.json`;
 
+// Boundary and sink taint patterns (GX1 F1, F5):
+// - THREAD_ID_RE allows Matrix room/event IDs (!room:thread-1, $event) and plain thread names,
+//   while rejecting ".", "..", any ".." segment, leading "-", "/", "\\", whitespace, and control chars.
+export const THREAD_ID_RE = /^(?!-)(?!\.+$)(?!.*\.\.)[A-Za-z0-9_.:$!-]{1,128}$/;
+export const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const AGENT_NAME_RE = /^genie-[A-Za-z0-9_.-]{1,64}$/;
+export const TOKEN_ID_RE = /^(?!-)(?!\.+$)(?!.*\.\.)[A-Za-z0-9._-]+$/;
+
+export function isValidConfigDir(p: unknown): p is string {
+  return (
+    typeof p === "string" &&
+    p.length > 0 &&
+    p.startsWith("/") &&
+    !p.includes("\0") &&
+    !p.split("/").includes("..")
+  );
+}
+
+export function validateJournalEntry(id: string, t: Thread): string | null {
+  if (!THREAD_ID_RE.test(id)) return `invalid thread id ${JSON.stringify(id)}`;
+  if (!t || typeof t !== "object") return "entry is not an object";
+  if (typeof t.session !== "string" || !SESSION_UUID_RE.test(t.session)) {
+    return `invalid session uuid ${JSON.stringify(t.session)}`;
+  }
+  if (typeof t.name !== "string" || !AGENT_NAME_RE.test(t.name)) {
+    return `invalid agent name ${JSON.stringify(t.name)}`;
+  }
+  if (!isValidConfigDir(t.configDir)) {
+    return `invalid configDir ${JSON.stringify(t.configDir)}`;
+  }
+  if (typeof t.token !== "string" || !TOKEN_ID_RE.test(t.token)) {
+    return `invalid token id ${JSON.stringify(t.token)}`;
+  }
+  return null;
+}
+
 // A missing journal is a first start. An unreadable one throws: an empty map would relaunch every
 // known thread fresh.
 export function loadJournal(dir: string): Journal {
   if (!existsSync(file(dir))) return { version: 1, threads: {}, tokens: {} };
   const j = JSON.parse(readFileSync(file(dir), "utf8")) as Journal;
   if (j.version !== 1) throw new Error(`${file(dir)}: unknown journal version ${j.version}`);
+  if (j.threads && typeof j.threads === "object") {
+    for (const [id, t] of Object.entries(j.threads)) {
+      // N1 legacy migration runs before validation so pre-GT3 journals (t.token === t.configDir)
+      // migrate cleanly to "tier-token" before TOKEN_ID_RE is checked.
+      if (
+        t &&
+        typeof t === "object" &&
+        t.token &&
+        t.token === t.configDir &&
+        typeof t.configDir === "string" &&
+        t.configDir.startsWith("/")
+      ) {
+        const legacyId = t.token;
+        t.token = "tier-token";
+        if (j.tokens && legacyId in j.tokens) {
+          j.tokens["tier-token"] ??= j.tokens[legacyId];
+          delete j.tokens[legacyId];
+        } else if (j.tokens) {
+          j.tokens["tier-token"] ??= { state: "available" };
+        }
+      }
+      const err = validateJournalEntry(id, t);
+      if (err !== null) {
+        console.error(`journal: refusing invalid thread entry ${JSON.stringify(id)}: ${err}`);
+        delete j.threads[id];
+      }
+    }
+  }
   return j;
 }
 

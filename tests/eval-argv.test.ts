@@ -3,7 +3,8 @@
 // Run with `node --test tests/eval-argv.test.ts`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nixArgv, type Tier } from "../src/eval/run.ts";
+import { ATTR_PATH_RE, nixArgv, runEval, wrapperForNixOS, type Tier } from "../src/eval/run.ts";
+import { errors, load } from "../src/tier1/schema.ts";
 
 // A remote builder in Nix's `builders` syntax, as the launcher's config names uplink (I8). No key.
 const BUILDERS = "ssh-ng://nix-remote-build@uplink x86_64-linux";
@@ -50,4 +51,68 @@ test("secrets: stub adds --apply wrapper expression to argv", () => {
   assert.ok(a.includes("--apply"));
   assert.ok(a.includes("github:a/b/main#nixosConfigurations.laptop"));
 });
+
+test("oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks", async () => {
+  const schema = load("eval-request");
+
+  // Positive control: valid dotted attribute paths pass schema, nixArgv, and wrapperForNixOS.
+  const validAttrs = [
+    "checks",
+    "packages.x86_64-linux.default",
+    "nixosConfigurations.laptop.config.services.db.password",
+    "_private_attr.sub_1.val-2",
+  ];
+  for (const attr of validAttrs) {
+    assert.equal(ATTR_PATH_RE.test(attr), true, `valid attr ${attr} must match ATTR_PATH_RE`);
+    assert.deepEqual(
+      errors(schema, { repo: "a/b", rev: "main", attr, trusted: "no" }),
+      [],
+      `valid attr ${attr} must pass schemas/eval-request.json`,
+    );
+    const outArgv = nixArgv(
+      { request: { repo: "a/b", rev: "main", attr, trusted: "no", secrets: "stub" }, sender_tier: "public" },
+      "github:a/b/main",
+    );
+    assert.ok(Array.isArray(outArgv) && outArgv.length > 0);
+  }
+  assert.match(wrapperForNixOS("config.services.db.password"), /extended\.config\.services\.db\.password$/);
+
+  // Malicious attribute paths (Nix expression injection, flags, path traversal, quotes, semicolons)
+  // are refused at schemas/eval-request.json AND at wrapperForNixOS, nixArgv, and runEval before Nix starts.
+  const maliciousAttrs = [
+    'nixosConfigurations.laptop."); builtins.readFile "/etc/passwd',
+    "nixosConfigurations.laptop.config; builtins.trace 1 2",
+    "nixosConfigurations.laptop.${builtins.currentSystem}",
+    "-option",
+    "..attr",
+    "a..b",
+    ".leadingDot",
+    "trailingDot.",
+    "attr/with/slash",
+    "attr with space",
+  ];
+  for (const bad of maliciousAttrs) {
+    assert.equal(ATTR_PATH_RE.test(bad), false, `malicious attr ${bad} must fail ATTR_PATH_RE`);
+    assert.ok(
+      errors(schema, { repo: "a/b", rev: "main", attr: bad, trusted: "no" }).length > 0,
+      `malicious attr ${bad} must fail schemas/eval-request.json`,
+    );
+    assert.throws(() => wrapperForNixOS(bad), /not an attr path/, `wrapperForNixOS must refuse ${bad}`);
+    assert.throws(
+      () =>
+        nixArgv(
+          { request: { repo: "a/b", rev: "main", attr: bad, trusted: "no", secrets: "stub" }, sender_tier: "public" },
+          "github:a/b/main",
+        ),
+      /not an attr path/,
+      `nixArgv must refuse ${bad}`,
+    );
+    await assert.rejects(
+      runEval({ request: { repo: "a/b", rev: "main", attr: bad, trusted: "no" }, sender_tier: "public" }),
+      /not an attr path/,
+      `runEval must refuse ${bad} before spawning bwrap/nix`,
+    );
+  }
+});
+
 

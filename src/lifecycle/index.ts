@@ -13,7 +13,7 @@
 // before its reply would be lost. Every message is persisted as pending before it is sent and
 // cleared when pi's turn settles; a resume replays what is pending ahead of the new message.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { type MirrorConfig, removeWorktrees } from "../mirror/index.ts";
+import { type MirrorConfig, MirrorRefused, removeWorktrees, threadName } from "../mirror/index.ts";
 import type { ThreadStateStore } from "../state/index.ts";
 import type { Record, Supervisor } from "../supervisor/index.ts";
 
@@ -469,6 +469,8 @@ export class Lifecycle {
   // Accept or 24 hours idle. On a failure the status stays open, and the next `start` retries.
   async close(thread: string): Promise<void> {
     const { store, supervisor, mirror } = this.o;
+    if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
+    const st = store.read(thread);
     this.removeQueued(thread);
     this.dispatching.delete(thread);
     this.turns.settle(thread);
@@ -476,7 +478,6 @@ export class Lifecycle {
     this.timers.delete(thread);
     await supervisor.teardown(thread);
     await removeWorktrees(mirror, thread);
-    const st = store.read(thread);
     if (st) store.write({ ...st, status: "closed" });
   }
 

@@ -16,9 +16,91 @@ export interface Proposal {
   kind: "gist" | "pr";
   repo?: string;
   branch?: string;
+  commits?: string[];
   files: Record<string, string>;
   title: string;
   body: string;
+}
+
+export const REPO_COORD_RE =
+  /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
+export const BRANCH_REF_RE =
+  /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*(?:\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)*$/;
+export const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
+
+export function isValidRepoCoord(repo: unknown): repo is string {
+  if (typeof repo !== "string" || !REPO_COORD_RE.test(repo) || repo.includes("..")) return false;
+  const parts = repo.split("/");
+  return (
+    parts.length === 2 &&
+    parts.every((seg) => seg.length > 0 && seg !== "." && seg !== ".." && !seg.startsWith("-") && !seg.endsWith(".lock"))
+  );
+}
+
+export function isValidBranchRef(branch: unknown): branch is string {
+  if (typeof branch !== "string" || !BRANCH_REF_RE.test(branch) || branch.includes("..")) return false;
+  const parts = branch.split("/");
+  return (
+    parts.length >= 1 &&
+    parts.every(
+      (seg) =>
+        seg.length > 0 &&
+        seg !== "." &&
+        seg !== ".." &&
+        !seg.startsWith("-") &&
+        !seg.startsWith(".") &&
+        !seg.endsWith(".") &&
+        !seg.endsWith(".lock"),
+    )
+  );
+}
+
+export function isValidProposalFilePath(path: unknown, kind: "gist" | "pr"): path is string {
+  if (
+    typeof path !== "string" ||
+    path.length === 0 ||
+    path.includes("\0") ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.startsWith("-")
+  ) {
+    return false;
+  }
+  if (kind === "gist" && path.includes("/")) return false;
+  const parts = path.split("/");
+  return parts.every((seg) => seg.length > 0 && seg !== "." && seg !== ".." && !seg.startsWith("-"));
+}
+
+export function validateProposalFields(p: Proposal): string | null {
+  if (!p.files || typeof p.files !== "object" || Object.keys(p.files).length < 1) {
+    return "$.files must have at least 1 file";
+  }
+  for (const k of Object.keys(p.files)) {
+    if (!isValidProposalFilePath(k, p.kind)) {
+      return `$.files[${JSON.stringify(k)}] is not a valid file path`;
+    }
+  }
+  if (p.repo !== undefined && !isValidRepoCoord(p.repo)) {
+    return `$.repo is not a valid owner/repo coordinate: ${JSON.stringify(p.repo)}`;
+  }
+  if (p.branch !== undefined && !isValidBranchRef(p.branch)) {
+    return `$.branch is not a valid git branch ref: ${JSON.stringify(p.branch)}`;
+  }
+  if (p.kind === "pr") {
+    if (!isValidRepoCoord(p.repo)) {
+      return `$.repo is not a valid owner/repo coordinate: ${JSON.stringify(p.repo)}`;
+    }
+    if (!isValidBranchRef(p.branch)) {
+      return `$.branch is not a valid git branch ref: ${JSON.stringify(p.branch)}`;
+    }
+  }
+  if (p.commits !== undefined) {
+    if (!Array.isArray(p.commits) || p.commits.length < 1 || !p.commits.every((c) => typeof c === "string" && COMMIT_SHA_RE.test(c))) {
+      return "$.commits must be a non-empty array of 40-hex commit SHAs";
+    }
+  }
+  return null;
 }
 
 // The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read and the
@@ -102,12 +184,15 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   if (bad.length) return done(false, `not a proposal: ${bad.join("; ")}`);
 
   const v = value as Proposal;
+  const fieldErr = validateProposalFields(v);
+  if (fieldErr !== null) return done(false, `not a proposal: ${fieldErr}`);
   const out = await outbound(
     `genie-bot is about to publish this ${v.kind} on GitHub.`,
     (scrub): Proposal => ({
       kind: v.kind,
       ...(v.repo === undefined ? {} : { repo: scrub(v.repo) }),
       ...(v.branch === undefined ? {} : { branch: scrub(v.branch) }),
+      ...(v.commits === undefined ? {} : { commits: v.commits.map(scrub) }),
       files: Object.fromEntries(Object.entries(v.files).map(([k, f]) => [scrub(k), scrub(f)])),
       title: scrub(v.title),
       body: scrub(v.body),
@@ -118,6 +203,8 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   redactions.push(...out.redactions);
   if (!("value" in out)) return done(false, out.reason);
   const p = out.value;
+  const postScrubErr = validateProposalFields(p);
+  if (postScrubErr !== null) return done(false, `not a proposal: ${postScrubErr}`);
 
   let token: string;
   try {

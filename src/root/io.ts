@@ -188,6 +188,7 @@ export function parseGuardVerdictReply(
   return v;
 }
 
+import { threadName } from "../mirror/index.ts";
 import type { Tier } from "../state/index.ts";
 import { parseEnvelope } from "../tier/index.ts";
 
@@ -212,6 +213,7 @@ export function parseMatrixForward(
     const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=.+\s+\((trusted|public)\)$/.exec(header);
     if (!m) return null;
     const thread = m[1];
+    if (!threadName.test(thread)) return null;
     let tier: Tier;
     try {
       tier = parseEnvelope(trimmed).request.tier;
@@ -239,12 +241,14 @@ export function parseMatrixForward(
       return null;
     }
 
-    const thread =
-      typeof obj.thread_id === "string" && obj.thread_id
+    const rawThread =
+      typeof obj.thread_id === "string"
         ? obj.thread_id
-        : typeof obj.thread === "string" && obj.thread
+        : typeof obj.thread === "string"
           ? obj.thread
           : undefined;
+    if (rawThread !== undefined && !threadName.test(rawThread)) return null;
+    const thread = rawThread;
 
     if (obj.control === "trust") {
       if (

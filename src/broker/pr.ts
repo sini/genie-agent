@@ -20,11 +20,26 @@
 // can be opened again. The fork stays: it is genie-bot's public fork and the next PR reuses it.
 // An unreferenced tree or commit is GitHub's to collect. The act throws and the broker records
 // it as not acted, with the token scrubbed from the reason.
-import type { Act } from "./index.ts";
+import {
+  isValidBranchRef,
+  isValidProposalFilePath,
+  isValidRepoCoord,
+  validateProposalFields,
+  type Act,
+} from "./index.ts";
 
 export function pr(link: (thread: string) => string, base = "https://api.github.com", { forkWaitMs = 60_000, pollMs = 2_000, timeoutMs = 30_000 } = {}): Act {
   return async (p, token, thread) => {
     if (p.kind !== "pr" || !p.repo || !p.branch) throw new Error(`pr: cannot act on a ${p.kind} proposal without a repo and branch`);
+    if (!isValidRepoCoord(p.repo)) throw new Error(`pr: invalid repo coordinate ${JSON.stringify(p.repo)}`);
+    if (!isValidBranchRef(p.branch)) throw new Error(`pr: invalid branch ref ${JSON.stringify(p.branch)}`);
+    for (const filePath of Object.keys(p.files ?? {})) {
+      if (!isValidProposalFilePath(filePath, "pr")) {
+        throw new Error(`pr: invalid file path ${JSON.stringify(filePath)}`);
+      }
+    }
+    const fieldErr = validateProposalFields(p);
+    if (fieldErr !== null) throw new Error(`pr: ${fieldErr}`);
     const body = `${p.body}\n\nThread: ${link(thread)}`;
     const call = async (method: string, route: string, payload?: unknown) => {
       const res = await fetch(`${base}${route}`, {
@@ -52,7 +67,9 @@ export function pr(link: (thread: string) => string, base = "https://api.github.
     const upstream = await call("GET", `/repos/${p.repo}`);
     if (upstream.private !== false) throw new Error(`pr: ${p.repo} is not public`);
     const into: string = upstream.default_branch;
+    if (!isValidBranchRef(into)) throw new Error(`pr: invalid upstream default_branch ${JSON.stringify(into)}`);
     const fork = await call("POST", `/repos/${p.repo}/forks`);
+    if (!isValidRepoCoord(fork.full_name)) throw new Error(`pr: invalid fork full_name ${JSON.stringify(fork.full_name)}`);
     const deadline = Date.now() + forkWaitMs;
     for (;;) {
       try {

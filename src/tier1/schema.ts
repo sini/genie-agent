@@ -11,7 +11,7 @@ export type Schema = { [k: string]: any };
 // this validator would silently ignore never reads as a pass.
 const known = new Set([
   "$schema", "title", "description", "type", "required", "properties", "additionalProperties",
-  "items", "enum", "const", "minLength", "minimum", "maximum", "minProperties", "$ref", "if", "then",
+  "items", "enum", "const", "minLength", "minimum", "maximum", "minProperties", "minItems", "pattern", "$ref", "if", "then",
 ]);
 
 const dir = process.env.GENIE_REPO_ROOT
@@ -28,7 +28,7 @@ export function load(name: string): Schema {
     for (const [k, sub] of Object.entries(v)) {
       if (!known.has(k)) throw new Error(`schemas/${name}.json: unsupported keyword ${k}`);
       if (k === "properties") Object.values(sub as object).forEach(check);
-      else if (k !== "enum" && k !== "const" && k !== "required") check(sub);
+      else if (k !== "enum" && k !== "const" && k !== "required" && k !== "pattern") check(sub);
     }
   };
   check(s);
@@ -54,8 +54,12 @@ export function errors(s: Schema, value: unknown, at = "$"): string[] {
   if (s.enum && !s.enum.includes(value)) out.push(`${at} not in ${s.enum.join("|")}`);
   if ("const" in s && value !== s.const) out.push(`${at} is not ${JSON.stringify(s.const)}`);
   if (typeof value === "string" && value.length < (s.minLength ?? 0)) out.push(`${at} is shorter than ${s.minLength}`);
+  if (typeof value === "string" && typeof s.pattern === "string" && !new RegExp(s.pattern).test(value)) {
+    out.push(`${at} does not match ${s.pattern}`);
+  }
   if (typeof value === "number" && value < (s.minimum ?? -Infinity)) out.push(`${at} is below ${s.minimum}`);
   if (typeof value === "number" && value > (s.maximum ?? Infinity)) out.push(`${at} is above ${s.maximum}`);
+  if (Array.isArray(value) && value.length < (s.minItems ?? 0)) out.push(`${at} has fewer than ${s.minItems} items`);
   if (Array.isArray(value) && s.items) value.forEach((v, i) => out.push(...errors(s.items, v, `${at}[${i}]`)));
   if (obj) {
     const v = value as Record<string, unknown>;
