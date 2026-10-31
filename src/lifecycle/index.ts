@@ -191,7 +191,6 @@ export interface LifecycleOptions {
   checkinPrompt?: string;
   maxConcurrentTurns?: number;
   maxQueueWaitSecs?: number;
-  queueOrder?: "fifo" | "lifo";
   onDeadline?: (thread: string) => Promise<unknown> | unknown;
   onQueueTimeout?: (thread: string) => Promise<unknown> | unknown;
   replayResume?: (thread: string) => Promise<unknown>;
@@ -386,7 +385,7 @@ export class Lifecycle {
   private async releaseSlot(thread: string): Promise<void> {
     this.activeSlots.delete(thread);
     while (this.activeSlots.size < this.maxConcurrentTurns && this.queue.length > 0) {
-      const next = this.o.queueOrder === "lifo" ? this.queue.pop()! : this.queue.shift()!;
+      const next = this.queue.shift()!;
       if (next.timer !== undefined) {
         this.clock.clearTimeout(next.timer);
         next.timer = undefined;

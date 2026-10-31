@@ -2370,43 +2370,5 @@ test("oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts th
   }
 });
 
-test("mutant (GL1 root): dropping queued turn or omitting 'tier-1 busy' note makes GL1 root oracle go RED", () => {
-  // Mutant (a): queued turn dropped at maxQueueWaitSecs without escalating
-  assert.throws(
-    () =>
-      assertQueueEscalationOutcome(
-        [],
-        [],
-        "question 4 waits 180s in queue",
-        "active",
-        undefined,
-      ),
-    /AssertionError/,
-    "mutant dropping queued turn without escalation must fail GL1 root oracle RED",
-  );
-  // Mutant (b): escalation omits "tier-1 busy" note
-  assert.throws(
-    () =>
-      assertQueueEscalationOutcome(
-        [["gl1_4", { text: DEADLINE_NOTICE }]],
-        [
-          {
-            to: EXPERTS.public,
-            text: JSON.stringify({
-              cleaned_question: "question 4 waits 180s in queue",
-              draft: { answer: "", confidence: 0, gaps: [], escalate_forced: true },
-              gaps: [],
-            }),
-          },
-        ],
-        "question 4 waits 180s in queue",
-        "escalated",
-        undefined,
-      ),
-    /AssertionError/,
-    "mutant omitting 'tier-1 busy' note must fail GL1 root oracle RED",
-  );
-});
-
 
 

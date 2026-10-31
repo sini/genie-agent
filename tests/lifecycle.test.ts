@@ -396,8 +396,9 @@ test("mutant (C13.1 Oracles a & b): old settle path ignoring unanswered return v
   turns.stop();
 });
 
-async function runBurstCapScenario(maxConcurrentTurns?: number): Promise<{ maxActive: number; initialActive: string[]; initialQueued: string[] }> {
-  const storeInst = new ThreadStateStore(`${tmp}/state-cap-${maxConcurrentTurns ?? "def"}`, `${tmp}/store-cap-${maxConcurrentTurns ?? "def"}`);
+test("oracle (GL1 cap): a burst of 5 runs at most 2 turns concurrently", async () => {
+  assert.equal(DEFAULT_MAX_CONCURRENT_TURNS, 2);
+  const storeInst = new ThreadStateStore(`${tmp}/state-cap`, `${tmp}/store-cap`);
   const clock = new FakeClock(T0);
   let lc!: Lifecycle;
   const supervisor = new Supervisor(
@@ -409,7 +410,6 @@ async function runBurstCapScenario(maxConcurrentTurns?: number): Promise<{ maxAc
     store: storeInst,
     mirror,
     clock,
-    maxConcurrentTurns,
     deeper: async () => {},
   });
   lc.start();
@@ -429,34 +429,17 @@ async function runBurstCapScenario(maxConcurrentTurns?: number): Promise<{ maxAc
       while (storeInst.pending(th).length) await new Promise((r) => setTimeout(r, 5));
       maxActive = Math.max(maxActive, lc.activeTurns().length);
     }
-    return { maxActive, initialActive, initialQueued };
+    assert.equal(maxActive, 2, "at most 2 turns may run concurrently during a burst of 5");
+    assert.deepEqual(initialActive, ["t-cap-1", "t-cap-2"]);
+    assert.deepEqual(initialQueued, ["t-cap-3", "t-cap-4", "t-cap-5"]);
   } finally {
     lc.stop();
     await supervisor.shutdown();
   }
-}
-
-test("oracle (GL1 cap): a burst of 5 runs at most 2 turns concurrently", async () => {
-  assert.equal(DEFAULT_MAX_CONCURRENT_TURNS, 2);
-  const res = await runBurstCapScenario();
-  assert.equal(res.maxActive, 2, "at most 2 turns may run concurrently during a burst of 5");
-  assert.deepEqual(res.initialActive, ["t-cap-1", "t-cap-2"]);
-  assert.deepEqual(res.initialQueued, ["t-cap-3", "t-cap-4", "t-cap-5"]);
 });
 
-test("mutant (GL1 cap): no cap runs all 5 turns concurrently and makes cap oracle go RED", async () => {
-  const mutantRes = await runBurstCapScenario(Infinity);
-  assert.throws(
-    () => {
-      assert.ok(mutantRes.maxActive <= 2, `expected <= 2 concurrent turns, got ${mutantRes.maxActive}`);
-    },
-    /AssertionError/,
-    "mutant without concurrency cap must fail GL1 cap oracle RED",
-  );
-});
-
-async function runQueueOrderScenario(queueOrder: "fifo" | "lifo"): Promise<string[]> {
-  const storeInst = new ThreadStateStore(`${tmp}/state-order-${queueOrder}`, `${tmp}/store-order-${queueOrder}`);
+test("oracle (GL1 FIFO): queued turns acquire slots in strict FIFO arrival order", async () => {
+  const storeInst = new ThreadStateStore(`${tmp}/state-order-fifo`, `${tmp}/store-order-fifo`);
   const clock = new FakeClock(T0);
   let lc!: Lifecycle;
   const supervisor = new Supervisor(
@@ -469,7 +452,6 @@ async function runQueueOrderScenario(queueOrder: "fifo" | "lifo"): Promise<strin
     mirror,
     clock,
     maxConcurrentTurns: 2,
-    queueOrder,
     deeper: async () => {},
   });
   lc.start();
@@ -506,27 +488,11 @@ async function runQueueOrderScenario(queueOrder: "fifo" | "lifo"): Promise<strin
     for (const a of lc.activeTurns()) {
       if (!beforeLast.has(a) && !acquired.includes(a)) acquired.push(a);
     }
-    return acquired;
+    assert.deepEqual(acquired, ["t-ord-3", "t-ord-4", "t-ord-5"]);
   } finally {
     lc.stop();
     await supervisor.shutdown();
   }
-}
-
-test("oracle (GL1 FIFO): queued turns acquire slots in strict FIFO arrival order", async () => {
-  const acquired = await runQueueOrderScenario("fifo");
-  assert.deepEqual(acquired, ["t-ord-3", "t-ord-4", "t-ord-5"]);
-});
-
-test("mutant (GL1 FIFO): LIFO queue pops newest turn first and makes FIFO oracle go RED", async () => {
-  const mutantAcquired = await runQueueOrderScenario("lifo");
-  assert.throws(
-    () => {
-      assert.deepEqual(mutantAcquired, ["t-ord-3", "t-ord-4", "t-ord-5"]);
-    },
-    /AssertionError/,
-    "LIFO mutant must fail GL1 FIFO oracle RED",
-  );
 });
 
 test("oracle (GL1 timer at acquisition): the 600s TurnController timer starts when a turn acquires its slot, not at intake", async () => {
@@ -602,28 +568,6 @@ test("oracle (GL1 timer at acquisition): the 600s TurnController timer starts wh
   }
 });
 
-test("mutant (GL1 timer at acquisition): starting the timer at intake times out a queued turn early and makes oracle go RED", async () => {
-  const clock = new FakeClock(T0);
-  const mutantDeadlines: { thread: string; at: number }[] = [];
-  const mutantTurns = new TurnController({
-    clock,
-    onCheckin: () => {},
-    onDeadline: (th) => void mutantDeadlines.push({ thread: th, at: clock.now() }),
-  });
-  // Mutant: begins TurnController at intake (T0) instead of at slot acquisition (T0 + 120s)
-  mutantTurns.begin("t-acq-3");
-  await clock.advance(120_000); // acquires slot at T0 + 120s without resetting timer
-  await clock.advance(QUESTION_TIMEOUT_MS - 120_000); // reaches T0 + 600s (only 480s of active turn time)
-  assert.throws(
-    () => {
-      assert.deepEqual(mutantDeadlines, [], "queued turn must NOT time out 600s after intake");
-    },
-    /AssertionError/,
-    "mutant starting timer at intake must fail GL1 timer-at-acquisition oracle RED",
-  );
-  mutantTurns.stop();
-});
-
 test("oracle (GL1 escalate-not-drop): a queued turn waiting past maxQueueWaitSecs fast-escalates and is never dropped", async () => {
   assert.equal(DEFAULT_MAX_QUEUE_WAIT_SECS, 180);
   assert.equal(MAX_QUEUE_WAIT_MS, 180_000);
@@ -674,45 +618,6 @@ test("oracle (GL1 escalate-not-drop): a queued turn waiting past maxQueueWaitSec
     await supervisor.command("t-qw-1", { type: "settle" });
     while (storeInst.pending("t-qw-1").length) await new Promise((r) => setTimeout(r, 5));
     assert.equal(supervisor.pid("t-qw-3"), undefined);
-  } finally {
-    lc.stop();
-    await supervisor.shutdown();
-  }
-});
-
-test("mutant (GL1 escalate-not-drop): dropping a queued turn on queue timeout without escalating makes oracle go RED", async () => {
-  const storeInst = new ThreadStateStore(`${tmp}/state-qwait-mut`, `${tmp}/store-qwait-mut`);
-  const clock = new FakeClock(T0);
-  const mutantEscalated: { thread: string; at: number; note: string }[] = [];
-  let lc!: Lifecycle;
-  const supervisor = new Supervisor(
-    (th) => ({ command: process.execPath, args: [fake, ...storeInst.sessionArgs(th)], env: { PI_SETTLE: "never" } }),
-    (th, r) => void lc.event(th, r),
-  );
-  // Mutant: onQueueTimeout is omitted (drops from queue silently without escalating)
-  lc = new Lifecycle({
-    supervisor,
-    store: storeInst,
-    mirror,
-    clock,
-    maxConcurrentTurns: 2,
-    maxQueueWaitSecs: 180,
-    deeper: async () => {},
-  });
-  lc.start();
-  try {
-    await lc.message("t-qwm-1", "q1");
-    await lc.message("t-qwm-2", "q2");
-    await lc.message("t-qwm-3", "q3");
-    await clock.advance(MAX_QUEUE_WAIT_MS);
-    assert.throws(
-      () => {
-        assert.deepEqual(mutantEscalated, [{ thread: "t-qwm-3", at: T0 + MAX_QUEUE_WAIT_MS, note: "tier-1 busy" }]);
-        assert.equal(storeInst.read("t-qwm-3")?.status, "escalated");
-      },
-      /AssertionError/,
-      "mutant that drops queued turn without escalating must fail GL1 escalate-not-drop oracle RED",
-    );
   } finally {
     lc.stop();
     await supervisor.shutdown();

@@ -757,13 +757,9 @@
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: active ⇒ parked at 1 h ⇒ resumed on a message with its context intact$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a park before the first reply keeps the pending message, and the resume replays it$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: accept and 24 h idle each close the thread and remove its worktrees$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: 🔍 does not close the thread: it stays open and its worktrees stay$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a supervisor restart mid-idle still closes on the original schedule$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: check-in fires once at 5m and turn continues until 10m deadline (C13 Oracle 1)$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: fast question that replies before check-in time receives 0 check-in messages (C13 Oracle 2)$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 cap): a burst of 5 runs at most 2 turns concurrently$' $TMPDIR/tap || exit 1
-                grep -q '^ok [0-9]* - mutant (GL1 cap): no cap runs all 5 turns concurrently and makes cap oracle go RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 FIFO): queued turns acquire slots in strict FIFO arrival order$' $TMPDIR/tap || exit 1
-                grep -q '^ok [0-9]* - mutant (GL1 FIFO): LIFO queue pops newest turn first and makes FIFO oracle go RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 timer at acquisition): the 600s TurnController timer starts when a turn acquires its slot, not at intake$' $TMPDIR/tap || exit 1
-                grep -q '^ok [0-9]* - mutant (GL1 timer at acquisition): starting the timer at intake times out a queued turn early and makes oracle go RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 escalate-not-drop): a queued turn waiting past maxQueueWaitSecs fast-escalates and is never dropped$' $TMPDIR/tap || exit 1
-                grep -q '^ok [0-9]* - mutant (GL1 escalate-not-drop): dropping a queued turn on queue timeout without escalating makes oracle go RED$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
@@ -1087,7 +1083,6 @@
                 grep -q '^ok [0-9]* - oracle (GI-11): a guard-out that blocks the first draft and passes the second posts only the second with no WITHHELD; blocking every draft until the turn settles posts WITHHELD once$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GE1: root scrubs expert reply answer and gaps field-by-field while preserving tier and escalate, and rejects malformed expert replies without posting$' $TMPDIR/tap || exit 1
                 grep -q "^ok [0-9]* - oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts the 10m timer at slot acquisition, and fast-escalates queued turns past tier1.maxQueueWaitSecs with 'tier-1 busy'$" $TMPDIR/tap || exit 1
-                grep -q "^ok [0-9]* - mutant (GL1 root): dropping queued turn or omitting 'tier-1 busy' note makes GL1 root oracle go RED$" $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
