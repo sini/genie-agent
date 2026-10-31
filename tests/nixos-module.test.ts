@@ -396,10 +396,15 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
     assert.ok(shimText.includes('*(["--ro-bind", XMSG_SOCKET, XMSG_SOCKET] if XMSG_SOCKET else [])'));
     assert.ok(!shimText.includes('"--bind", XMSG_SOCKET'));
 
-    // 8. genie-dispatcher@<tier> has LoadCredential, PrivatePIDs == false, and bootstrap does not install settings.json / .claude.json
+    // 8. genie-dispatcher@<tier> has LoadCredential, PrivatePIDs == false, K9 SystemCallFilter = [ "~perf_event_open" ], and bootstrap does not install settings.json / .claude.json
     assert.equal(dispSc.EnvironmentFile, null);
     assert.deepEqual(dispSc.LoadCredential, [`tier-token:/run/agenix/genie-expert-${tier}-token`]);
     assert.equal(dispSc.PrivatePIDs, false, `genie-dispatcher@${tier} must set PrivatePIDs = false for SO_PEERPIDFD`);
+    assert.ok(
+      dispSc.SystemCallFilter.includes("~perf_event_open"),
+      `genie-dispatcher@${tier} SystemCallFilter must include ~perf_event_open (K9/GH1)`,
+    );
+    assert.equal(dispSc.SystemCallErrorNumber, "EPERM");
     const bootstrap = readFileSync(dispSc.ExecStartPre, "utf8");
     assert.ok(!bootstrap.includes("settings.json"), "bootstrap must not install settings.json");
     assert.ok(!bootstrap.includes(".claude.json"), "bootstrap must not install .claude.json");

@@ -506,6 +506,8 @@ let
             # PrivatePIDs = false so genie-dispatcher runs in the ancestor (host) PID namespace
             # and SO_PEERPIDFD resolves peers in genie-herdr@<tier>'s child PID namespace.
             PrivatePIDs = false;
+            SystemCallFilter = [ "~perf_event_open" ];
+            SystemCallErrorNumber = "EPERM";
             LoadCredential = lib.optional (
               tierCfg.tokenEnvironmentFile != null
             ) "tier-token:${toString tierCfg.tokenEnvironmentFile}";

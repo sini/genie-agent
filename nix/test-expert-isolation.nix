@@ -2135,11 +2135,13 @@ pkgs.testers.runNixOSTest {
       real.wait_for_unit("genie-stub-api.service")
       time.sleep(10)
 
-      # V0: genie-herdr@<tier> is still the running main process 10 s after boot.
+      # V0: genie-herdr@<tier> and genie-dispatcher@<tier> are still the running main processes 10 s after boot.
       for m in (probe, real):
           for tier in ("public", "trusted"):
               st = m.execute(f"systemctl is-active genie-herdr@{tier}")[1].strip()
               cell(f"V0 {m.name} {tier}", st == "active", f"genie-herdr@{tier} is {st}")
+              dst = m.execute(f"systemctl is-active genie-dispatcher@{tier}")[1].strip()
+              cell(f"V0-dispatcher {m.name} {tier}", dst == "active", f"genie-dispatcher@{tier} is {dst}")
 
       # Probe node: GI-13 V1, V1b, V2, V4, V5
       c = "${claudeHome}"
