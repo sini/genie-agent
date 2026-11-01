@@ -1200,7 +1200,7 @@
           expert-isolation = import ./nix/test-expert-isolation.nix {
             inherit pkgs nixpkgs;
             self = {
-              inherit nixosModules;
+              inherit packages nixosModules;
             };
           };
           image =

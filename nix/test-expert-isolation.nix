@@ -252,31 +252,359 @@ let
         time.sleep(60)
   '';
 
+  gv1ClaudeStub = pkgs.writeScriptBin "claude" ''
+    #!${pkgs.python3}/bin/python3 -I
+    import hashlib, json, os, socket, stat, sys, time
+
+    fd_str = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "")
+    tok_bytes = b""
+    tok_is_sock = False
+    if fd_str:
+        fd = int(fd_str)
+        st = os.fstat(fd)
+        tok_is_sock = stat.S_ISSOCK(st.st_mode)
+        with os.fdopen(fd, "rb", closefd=True) as f:
+            tok_bytes = f.read().strip()
+
+    tok_hash = hashlib.sha256(tok_bytes).hexdigest() if tok_bytes else "unset"
+    cfg_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    cwd = os.getcwd()
+    argv = list(sys.argv)
+
+    session_id = ""
+    is_resume = False
+    for i, arg in enumerate(argv):
+        if arg == "--session-id" and i + 1 < len(argv):
+            session_id = argv[i + 1]
+        elif arg == "--resume" and i + 1 < len(argv):
+            session_id = argv[i + 1]
+            is_resume = True
+
+    if cfg_dir:
+        probe_data = {
+            "tok_hash": tok_hash,
+            "tok_is_sock": tok_is_sock,
+            "cwd": cwd,
+            "cfg_dir": cfg_dir,
+            "argv": argv,
+            "session_id": session_id,
+            "is_resume": is_resume,
+        }
+        tmp = os.path.join(cfg_dir, "gv1-probe.json.tmp")
+        dst = os.path.join(cfg_dir, "gv1-probe.json")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(probe_data, f)
+        os.replace(tmp, dst)
+
+    sys.stdout.write("\x1b]0;✳ Claude Code\x07\n" + "─" * 40 + "\n❯ \n" + "─" * 40 + "\n")
+    sys.stdout.flush()
+
+    reg_sock_path = "/run/user/1000/xmsg/register.sock"
+    if session_id and os.path.exists(reg_sock_path):
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(reg_sock_path)
+            rf = s.makefile("r", encoding="utf-8")
+            def call(obj):
+                s.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+                line = rf.readline()
+                return json.loads(line) if line else {}
+            call({"harness": "claude", "name": session_id})
+            while True:
+                r = call({"action": "poll", "waitSecs": 30})
+                if not r:
+                    break
+                if r.get("action") == "timeout":
+                    continue
+                if r.get("action") == "deliver":
+                    mid = r["messageId"]
+                    text = r.get("text", "")
+                    call({"action": "ack", "messageId": mid})
+                    try:
+                        pkg = json.loads(text)
+                        tid = pkg.get("thread_id", "unknown")
+                    except Exception:
+                        tid = "raw"
+                    reply_payload = json.dumps({
+                        "answer": f"gv1-ok:{tid}:resume={is_resume}:cwd={cwd}",
+                        "confidence": 0.95,
+                        "gaps": [],
+                        "tier": "expert",
+                    })
+                    call({"action": "reply", "messageId": mid, "text": reply_payload})
+        except Exception:
+            pass
+
+    while True:
+        time.sleep(60)
+  '';
+
   tokens = {
     public = "canary-public-token-0000";
     trusted = "canary-trusted-token-0000";
   };
 
   gi15TestScripts = pkgs.writeTextDir "stub_api.py" ''
-    import http.server, json, os, socket, sys, threading, time
+    import http.server, json, os, socket, socketserver, sys, threading, time, urllib.parse
 
     LOG_PATH = "/tmp/gi15-api-log.jsonl"
     V68_PATH = "/tmp/v68-results.json"
-    XMSG_SOCK = "/run/user/1000/xmsg/agent.sock"
+    XMSG_DIR = "/run/user/1000/xmsg"
+    XMSG_SOCK = f"{XMSG_DIR}/agent.sock"
+    REG_SOCK = f"{XMSG_DIR}/register.sock"
+    HTTP_SOCK = f"{XMSG_DIR}/http.sock"
 
-    # Set up host xmsg listener at /run/user/1000/xmsg/agent.sock owned by sini:users (1000:100)
-    os.makedirs("/run/user/1000/xmsg", mode=0o700, exist_ok=True)
+    os.makedirs(XMSG_DIR, mode=0o700, exist_ok=True)
     os.chown("/run/user/1000", 1000, 100)
-    os.chown("/run/user/1000/xmsg", 1000, 100)
+    os.chown(XMSG_DIR, 1000, 100)
+
+    def bind_unix_sock(path: str) -> socket.socket:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(path)
+        os.chown(path, 1000, 100)
+        os.chmod(path, 0o600)
+        s.listen(16)
+        return s
+
+    xmsg_srv = bind_unix_sock(XMSG_SOCK)
+    reg_srv = bind_unix_sock(REG_SOCK)
+
+    xmsg_cond = threading.Condition()
+    reg_queues: dict[str, list[dict]] = {}
+    reg_alive: set[str] = set()
+    reg_gen: dict[str, int] = {}
+    reg_polling: dict[str, int] = {}
+    msg_sender: dict[str, str] = {}
+    msg_replies: dict[str, list[dict]] = {}
+    idem_map: dict[str, str] = {}
+    msg_seq = 0
+
+    def next_msg_id() -> str:
+        global msg_seq
+        msg_seq += 1
+        return f"msg-{msg_seq}"
+
+    def handle_reg_conn(conn: socket.socket):
+        me = ""
+        my_gen = 0
+        try:
+            rf = conn.makefile("r", encoding="utf-8")
+            first = rf.readline()
+            if not first:
+                return
+            init = json.loads(first)
+            me = init.get("name") or init.get("session_id") or ""
+            harness = init.get("harness", "svc")
+            if me.startswith("genie-expert-"):
+                tier = me.split("genie-expert-", 1)[1]
+                hsock = f"/var/lib/genie-agent/herdr-session-{tier}/herdr.sock"
+                t0 = time.monotonic()
+                while not os.path.exists(hsock) and time.monotonic() - t0 < 5.0:
+                    time.sleep(0.05)
+            with xmsg_cond:
+                my_gen = reg_gen.get(me, 0) + 1
+                reg_gen[me] = my_gen
+                reg_alive.add(me)
+                reg_queues.setdefault(me, [])
+                xmsg_cond.notify_all()
+            addr = f"svc:{me}@test" if harness == "svc" else f"{me}@test"
+            conn.sendall((json.dumps({"address": addr, "node": "test"}) + "\n").encode("utf-8"))
+
+            while True:
+                line = rf.readline()
+                if not line:
+                    break
+                req = json.loads(line)
+                act = req.get("action")
+                if act == "poll":
+                    wait_s = min(float(req.get("waitSecs", 5)), 1.5)
+                    deadline = time.monotonic() + wait_s
+                    delivered = None
+                    with xmsg_cond:
+                        reg_polling[me] = my_gen
+                        xmsg_cond.notify_all()
+                        while True:
+                            if reg_gen.get(me) != my_gen:
+                                break
+                            q = reg_queues.get(me, [])
+                            if q:
+                                delivered = dict(q[0])
+                                break
+                            rem = deadline - time.monotonic()
+                            if rem <= 0:
+                                break
+                            xmsg_cond.wait(rem)
+                    if delivered is not None:
+                        conn.sendall((json.dumps({"action": "deliver", **delivered}) + "\n").encode("utf-8"))
+                    else:
+                        conn.sendall((json.dumps({"action": "timeout"}) + "\n").encode("utf-8"))
+                elif act == "ack":
+                    mid = req.get("messageId", "")
+                    with xmsg_cond:
+                        q = reg_queues.get(me, [])
+                        reg_queues[me] = [m for m in q if m.get("messageId") != mid]
+                        xmsg_cond.notify_all()
+                    conn.sendall((json.dumps({"status": "ok"}) + "\n").encode("utf-8"))
+                elif act == "reply":
+                    orig_id = req.get("messageId", "")
+                    text = req.get("text", "")
+                    with xmsg_cond:
+                        rep_id = next_msg_id()
+                        sender = msg_sender.get(orig_id, "supervisor")
+                        if sender == "supervisor":
+                            msg_replies.setdefault(orig_id, []).append({"text": text, "messageId": rep_id})
+                        else:
+                            reg_queues.setdefault(sender, []).append({
+                                "messageId": rep_id,
+                                "inReplyTo": orig_id,
+                                "text": text,
+                            })
+                        xmsg_cond.notify_all()
+                    conn.sendall((json.dumps({"messageId": rep_id}) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        finally:
+            if me:
+                with xmsg_cond:
+                    if reg_gen.get(me) == my_gen:
+                        reg_alive.discard(me)
+                        xmsg_cond.notify_all()
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def serve_reg():
+        while True:
+            try:
+                c, _ = reg_srv.accept()
+                threading.Thread(target=handle_reg_conn, args=(c,), daemon=True).start()
+            except Exception:
+                time.sleep(0.05)
+
+    def handle_agent_conn(conn: socket.socket):
+        try:
+            rf = conn.makefile("r", encoding="utf-8")
+            while True:
+                line = rf.readline()
+                if not line:
+                    break
+                req = json.loads(line)
+                act = req.get("action")
+                if act == "send":
+                    raw_to = req.get("to", "")
+                    to = raw_to.removeprefix("svc:").split("@")[0]
+                    text = req.get("text", "")
+                    key = req.get("idempotency_key", "")
+                    with xmsg_cond:
+                        if key and key in idem_map:
+                            mid = idem_map[key]
+                        else:
+                            if not to.startswith("genie-expert-") and to not in reg_alive:
+                                conn.sendall((json.dumps({
+                                    "status": "error",
+                                    "error": "not_found",
+                                    "detail": f"{to} is not registered",
+                                }) + "\n").encode("utf-8"))
+                                continue
+                            mid = next_msg_id()
+                            if key:
+                                idem_map[key] = mid
+                            msg_sender[mid] = "supervisor" if to.startswith("genie-expert-") else "genie-expert-public"
+                            reg_queues.setdefault(to, []).append({"messageId": mid, "text": text})
+                            xmsg_cond.notify_all()
+                    conn.sendall((json.dumps({"address": f"{to}@test", "message_id": mid}) + "\n").encode("utf-8"))
+                elif act == "status":
+                    name = req.get("name", "")
+                    with xmsg_cond:
+                        st = {
+                            "gen": reg_gen.get(name, 0),
+                            "polling": reg_polling.get(name, 0),
+                            "alive": name in reg_alive,
+                        }
+                    conn.sendall((json.dumps(st) + "\n").encode("utf-8"))
+                elif act == "reset":
+                    name = req.get("name", "")
+                    with xmsg_cond:
+                        reg_queues[name] = []
+                        xmsg_cond.notify_all()
+                    conn.sendall((json.dumps({"status": "ok"}) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def serve_agent():
+        while True:
+            try:
+                c, _ = xmsg_srv.accept()
+                threading.Thread(target=handle_agent_conn, args=(c,), daemon=True).start()
+            except Exception:
+                time.sleep(0.05)
+
+    class UnixHttpServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        address_family = socket.AF_UNIX
+        daemon_threads = True
+
+    class XmsgHttpHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            if parsed.path == "/v1/recipients":
+                with xmsg_cond:
+                    recs = [
+                        {"address": f"{r}@test"}
+                        for r in sorted(reg_alive)
+                        if not r.startswith("genie-expert-")
+                    ]
+                body = json.dumps({"recipients": recs}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif parsed.path.startswith("/v1/messages/") and parsed.path.endswith("/replies"):
+                parts = parsed.path.split("/")
+                mid = urllib.parse.unquote(parts[3]) if len(parts) >= 5 else ""
+                wait_s = min(float(qs.get("wait", ["5"])[0]), 30.0)
+                deadline = time.monotonic() + wait_s
+                with xmsg_cond:
+                    while not msg_replies.get(mid):
+                        rem = deadline - time.monotonic()
+                        if rem <= 0:
+                            break
+                        xmsg_cond.wait(rem)
+                    reps = list(msg_replies.get(mid, []))
+                body = json.dumps(reps).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
     try:
-        os.unlink(XMSG_SOCK)
+        os.unlink(HTTP_SOCK)
     except FileNotFoundError:
         pass
-    xmsg_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    xmsg_srv.bind(XMSG_SOCK)
-    os.chown(XMSG_SOCK, 1000, 100)
-    os.chmod(XMSG_SOCK, 0o600)
-    xmsg_srv.listen(8)
+    http_unix_srv = UnixHttpServer(HTTP_SOCK, XmsgHttpHandler)
+    os.chown(HTTP_SOCK, 1000, 100)
+    os.chmod(HTTP_SOCK, 0o600)
+    threading.Thread(target=serve_reg, daemon=True).start()
+    threading.Thread(target=serve_agent, daemon=True).start()
+    threading.Thread(target=http_unix_srv.serve_forever, daemon=True).start()
 
     v68_step = 0
     lock = threading.Lock()
@@ -2385,6 +2713,12 @@ let
             ], capture_output=True, text=True)
         finally:
             shutil.rmtree(sessions_dir, ignore_errors=True)
+            os.makedirs(sessions_dir, mode=0o700, exist_ok=True)
+            os.chown(sessions_dir, 1000, 100)
+            for tier in ("public", "trusted"):
+                t_dir = f"{sessions_dir}/genie-{tier}"
+                os.makedirs(t_dir, mode=0o700, exist_ok=True)
+                os.chown(t_dir, 1000, 100)
         if r_node.returncode != 0:
             return False, f"node rc={r_node.returncode} stderr={r_node.stderr.strip()} stdout={r_node.stdout.strip()}"
 
@@ -2507,6 +2841,372 @@ let
     cell("V6.8", *eval_v6_8())
 
     # =========================================================================
+    # 7b. GV1: End-to-End Packaged genie-dispatcher@public VM Cell + N1 Migration
+    # =========================================================================
+    def scan_disp_pid_mem(target_pid: int, needles: list[bytes]) -> dict:
+        with open(f"/proc/{target_pid}/maps", "r", encoding="utf-8") as mf:
+            maps_lines = mf.readlines()
+        mem_fd = os.open(f"/proc/{target_pid}/mem", os.O_RDONLY)
+        chunk_sz = 4 * 1024 * 1024
+        max_ov = max(max(0, len(nd) - 1) for nd in needles)
+        hits = [0] * len(needles)
+        regions = 0
+        empty_reads = 0
+        try:
+            for line in maps_lines:
+                parts = line.split()
+                if len(parts) < 2 or not parts[1].startswith("r"):
+                    continue
+                pathname = " ".join(parts[5:]) if len(parts) >= 6 else ""
+                if pathname in ("[vvar]", "[vvar_vclock]", "[vdso]", "[vsyscall]"):
+                    continue
+                if pathname.startswith("/nix/store/") and "w" not in parts[1]:
+                    continue
+                start_s, end_s = parts[0].split("-")
+                start, end = int(start_s, 16), int(end_s, 16)
+                pos = start
+                actual_ov = 0
+                while pos < end:
+                    to_read = min(chunk_sz, end - pos)
+                    if to_read <= 0:
+                        break
+                    try:
+                        chunk = os.pread(mem_fd, to_read, pos)
+                    except OSError:
+                        break
+                    n = len(chunk)
+                    if n <= 0:
+                        empty_reads += 1
+                        break
+                    regions += 1
+                    for i, nd in enumerate(needles):
+                        ov = max(0, len(nd) - 1)
+                        hits[i] += chunk.count(nd, max(0, actual_ov - ov))
+                    if pos + n >= end:
+                        break
+                    adv = max(1, n - max_ov)
+                    actual_ov = n - adv
+                    pos += adv
+        finally:
+            os.close(mem_fd)
+        return {"regions": regions, "empty_reads": empty_reads, "hits": hits}
+
+    def xmsg_agent_call(obj: dict) -> dict:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(10.0)
+        try:
+            s.connect("/run/user/1000/xmsg/agent.sock")
+            s.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+            line = s.makefile("r", encoding="utf-8").readline()
+            return json.loads(line) if line else {}
+        finally:
+            s.close()
+
+    def xmsg_wait_replies(msg_id: str, wait_s: int = 25) -> list[dict]:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(float(wait_s + 5))
+        try:
+            s.connect("/run/user/1000/xmsg/http.sock")
+            req = (
+                f"GET /v1/messages/{msg_id}/replies?wait={wait_s} HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Connection: close\r\n\r\n"
+            )
+            s.sendall(req.encode("utf-8"))
+            raw = b""
+            while True:
+                b = s.recv(4096)
+                if not b:
+                    break
+                raw += b
+            body = raw.split(b"\r\n\r\n", 1)[1].decode("utf-8", "replace") if b"\r\n\r\n" in raw else "[]"
+            return json.loads(body)
+        finally:
+            s.close()
+
+    def validate_journal_via_gx1(journal_path: str, tid: str) -> dict:
+        r = subprocess.run([
+            "${pkgs.nodejs}/bin/node",
+            "--input-type=module",
+            "-e",
+            """
+            import { readFileSync } from "node:fs";
+            import { validateJournalEntry } from "/etc/genie-gi15-test/dispatcher/journal.ts";
+            const [jPath, tid] = process.argv.slice(1);
+            const j = JSON.parse(readFileSync(jPath, "utf8"));
+            const entry = j.threads?.[tid] ?? null;
+            const err = entry ? validateJournalEntry(tid, entry) : "missing_entry";
+            console.log(JSON.stringify({ err, entry, tokens: j.tokens ?? {} }));
+            """,
+            journal_path,
+            tid,
+        ], capture_output=True, text=True, check=True)
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    def eval_gv1(mutant: str = "") -> tuple[bool, str]:
+        tag = mutant or "clean"
+        disp_dir = f"{STATE_DIR}/dispatcher-public"
+        journal_path = f"{disp_dir}/journal.json"
+        dropin_dir = "/run/systemd/system/genie-dispatcher@public.service.d"
+        dropin_file = f"{dropin_dir}/m-gv1.conf"
+        mutant_src_dir = f"{disp_dir}/mutant-no-n1"
+
+        shim_path = get_unit_shim("public")
+        gv1_shim = make_custom_shim("public", f"gv1-{tag}", real_claude_bin="${gv1ClaudeStub}/bin/claude")
+        cat_out = subprocess.check_output(["systemctl", "cat", "genie-dispatcher@public"], text=True)
+        m_exec = re.search(r"ExecStart=(\S+)\s+(--state-dir\s+.*)", cat_out)
+        assert m_exec, "missing ExecStart in genie-dispatcher@public"
+        orig_disp_bin = m_exec.group(1).strip()
+        orig_flags = m_exec.group(2).strip()
+        gv1_flags = re.sub(r"--claude-bin\s+\S+", f"--claude-bin {gv1_shim}", orig_flags)
+
+        def close_extra_panes():
+            try:
+                panes = herdr_cmd("public", ["pane", "list"])["result"]["panes"]
+                for p in panes[1:]:
+                    herdr_cmd("public", ["pane", "close", p["pane_id"]])
+            except Exception:
+                pass
+
+        def restart_and_wait_dispatcher() -> bool:
+            prev_poll = xmsg_agent_call({"action": "status", "name": "genie-expert-public"}).get("polling", 0)
+            xmsg_agent_call({"action": "reset", "name": "genie-expert-public"})
+            subprocess.run(["systemctl", "restart", "genie-dispatcher@public"], check=True)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 12.0:
+                st = xmsg_agent_call({"action": "status", "name": "genie-expert-public"})
+                if st.get("polling", 0) > prev_poll and st.get("alive"):
+                    return True
+                time.sleep(0.1)
+            return False
+
+        try:
+            subprocess.run(["systemctl", "stop", "genie-dispatcher@public"], check=True)
+            close_extra_panes()
+            os.makedirs(dropin_dir, exist_ok=True)
+            if os.path.exists(dropin_file):
+                os.unlink(dropin_file)
+
+            if mutant == "M-no-load-credential":
+                with open(dropin_file, "w", encoding="utf-8") as f:
+                    f.write(f"[Service]\nLoadCredential=\nExecStart=\nExecStart={orig_disp_bin} {gv1_flags}\n")
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+            elif mutant == "M-no-n1-migration":
+                shutil.rmtree(mutant_src_dir, ignore_errors=True)
+                shutil.copytree("/etc/genie-gi15-test/dispatcher", mutant_src_dir)
+                for fn_mut in ("index.ts", "journal.ts"):
+                    p_mut = f"{mutant_src_dir}/{fn_mut}"
+                    txt_mut = open(p_mut, "r", encoding="utf-8").read()
+                    assert "t.token === t.configDir" in txt_mut, f"N1 migration target not found in {fn_mut}"
+                    txt_mut = re.sub(
+                        r"if\s*\(\s*(?:t\s*&&\s*typeof\s+t\s*===\s*\"object\"\s*&&\s*)?t\.token\s*&&\s*t\.token\s*===\s*t\.configDir[\s\S]*?\)\s*\{",
+                        "if (false) {",
+                        txt_mut,
+                        count=1,
+                    )
+                    with open(p_mut, "w", encoding="utf-8") as f:
+                        f.write(txt_mut)
+                for dp, dns, fns in os.walk(mutant_src_dir):
+                    os.chown(dp, 1000, 100)
+                    os.chmod(dp, 0o755)
+                    for fn in fns:
+                        fp = os.path.join(dp, fn)
+                        os.chown(fp, 1000, 100)
+                        os.chmod(fp, 0o644)
+                with open(dropin_file, "w", encoding="utf-8") as f:
+                    f.write(f"[Service]\nExecStart=\nExecStart=${pkgs.nodejs}/bin/node {mutant_src_dir}/main.ts {gv1_flags}\n")
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+            else:
+                with open(dropin_file, "w", encoding="utf-8") as f:
+                    f.write(f"[Service]\nExecStart=\nExecStart={orig_disp_bin} {gv1_flags}\n")
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+
+            if mutant != "M-no-n1-migration":
+                # Step A: Fresh escalation over real xmsg socket
+                tid1 = f"thread-gv1-1-{tag}"
+                ctrl_q = f"gv1-positive-control-{tag}-0000"
+                for p in (journal_path, f"{disp_dir}/worktrees/{tid1}", f"{disp_dir}/claude-threads/{tid1}"):
+                    shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else (os.unlink(p) if os.path.exists(p) else None)
+
+                if not restart_and_wait_dispatcher():
+                    return False, "dispatcher failed to register and poll on step A"
+
+                send1 = xmsg_agent_call({
+                    "action": "send",
+                    "to": "svc:genie-expert-public",
+                    "text": json.dumps({"thread_id": tid1, "cleaned_question": ctrl_q}),
+                })
+                reps1 = xmsg_wait_replies(send1["message_id"], wait_s=8 if mutant == "M-no-load-credential" else 20)
+                rep1_text = reps1[0]["text"] if reps1 else ""
+                try:
+                    rep1_json = json.loads(rep1_text)
+                except Exception:
+                    rep1_json = {}
+
+                exp_cwd1 = f"{disp_dir}/worktrees/{tid1}"
+                exp_ans1 = f"gv1-ok:{tid1}:resume=False:cwd={exp_cwd1}"
+                reply1_ok = rep1_json.get("answer") == exp_ans1 and rep1_json.get("tier") == "expert"
+
+                probe1_path = f"{disp_dir}/claude-threads/{tid1}/gv1-probe.json"
+                probe1 = json.loads(open(probe1_path, "r", encoding="utf-8").read()) if os.path.exists(probe1_path) else {}
+                probe1_ok = (
+                    probe1.get("tok_is_sock") is True
+                    and probe1.get("tok_hash") == HASH_PUB
+                    and probe1.get("cwd") == exp_cwd1
+                    and probe1.get("is_resume") is False
+                )
+
+                gx1_1 = validate_journal_via_gx1(journal_path, tid1) if os.path.exists(journal_path) else {"err": "no_journal", "entry": None}
+                journal1_ok = (
+                    gx1_1["err"] is None
+                    and gx1_1["entry"] is not None
+                    and gx1_1["entry"].get("token") == "tier-token"
+                    and gx1_1["entry"].get("state") == "live"
+                    and gx1_1["entry"].get("launched") is True
+                )
+
+                disp_pid = int(subprocess.check_output(
+                    ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@public"],
+                    text=True,
+                ).strip())
+                mem_scan = scan_disp_pid_mem(
+                    disp_pid,
+                    [
+                        TOK_PUB.encode("utf-8"),
+                        TOK_TRU.encode("utf-8"),
+                        ctrl_q.encode("utf-8"),
+                    ],
+                )
+                disp_tok_hits = mem_scan["hits"][0] + mem_scan["hits"][1]
+                disp_ctrl_hits = mem_scan["hits"][2]
+                mem_ok = (
+                    disp_tok_hits == 0
+                    and disp_ctrl_hits >= 1
+                    and mem_scan["regions"] >= 20
+                    and mem_scan["empty_reads"] == 0
+                )
+                step_a_ok = reply1_ok and probe1_ok and journal1_ok and mem_ok
+                if not step_a_ok:
+                    return False, (
+                        f"stepA failed: reply1_ok={reply1_ok} probe1_ok={probe1_ok} "
+                        f"journal1_ok={journal1_ok} disp_tok_hits={disp_tok_hits} "
+                        f"disp_ctrl_hits={disp_ctrl_hits} rep1={rep1_text!r}"
+                    )
+                if mutant == "M-no-load-credential":
+                    return True, "stepA unexpectedly succeeded under M-no-load-credential"
+                subprocess.run(["systemctl", "stop", "genie-dispatcher@public"], check=True)
+                close_extra_panes()
+            else:
+                reply1_ok = probe1_ok = journal1_ok = mem_ok = True
+                disp_tok_hits = 0
+                disp_ctrl_hits = 1
+                mem_scan = {"regions": 0}
+                rep1_text = "skipped-stepA-for-n1-mutant"
+
+            # Step B: Seed a legacy (2a86671-shaped) journal, restart the unit, and assert N1 migration resumes it
+
+            tid_leg = f"thread-gv1-leg-{tag}"
+            leg_uuid = "22222222-3333-4444-8555-666666666666"
+            for p in (f"{disp_dir}/worktrees/{tid_leg}", f"{disp_dir}/claude-threads/{tid_leg}"):
+                shutil.rmtree(p, ignore_errors=True)
+            legacy_journal = {
+                "version": 1,
+                "threads": {
+                    tid_leg: {
+                        "session": leg_uuid,
+                        "name": "genie-22222222",
+                        "token": f"{STATE_DIR}/claude-public",
+                        "configDir": f"{STATE_DIR}/claude-public",
+                        "state": "parked",
+                        "pane": None,
+                        "launched": True,
+                        "buffer": [],
+                        "outstanding": [],
+                        "lastReply": None,
+                        "createdAt": 1700000000000,
+                        "seq": 0,
+                    }
+                },
+                "tokens": {
+                    f"{STATE_DIR}/claude-public": {
+                        "state": "available"
+                    }
+                },
+            }
+            with open(journal_path, "w", encoding="utf-8") as jf:
+                json.dump(legacy_journal, jf)
+            os.chown(journal_path, 1000, 100)
+            os.chmod(journal_path, 0o600)
+
+            if not restart_and_wait_dispatcher():
+                return False, "dispatcher failed to register and poll on step B"
+
+            send2 = xmsg_agent_call({
+                "action": "send",
+                "to": "svc:genie-expert-public",
+                "text": json.dumps({"thread_id": tid_leg, "cleaned_question": "gv1-legacy-resume"}),
+            })
+            reps2 = xmsg_wait_replies(send2["message_id"], wait_s=8 if mutant else 20)
+            rep2_text = reps2[0]["text"] if reps2 else ""
+            try:
+                rep2_json = json.loads(rep2_text)
+            except Exception:
+                rep2_json = {}
+
+            exp_cwd2 = f"{disp_dir}/worktrees/{tid_leg}"
+            exp_ans2 = f"gv1-ok:{tid_leg}:resume=True:cwd={exp_cwd2}"
+            reply2_ok = rep2_json.get("answer") == exp_ans2 and rep2_json.get("tier") == "expert"
+
+            probe2_path = f"{disp_dir}/claude-threads/{tid_leg}/gv1-probe.json"
+            probe2 = json.loads(open(probe2_path, "r", encoding="utf-8").read()) if os.path.exists(probe2_path) else {}
+            probe2_ok = (
+                probe2.get("tok_is_sock") is True
+                and probe2.get("tok_hash") == HASH_PUB
+                and probe2.get("cwd") == exp_cwd2
+                and probe2.get("is_resume") is True
+                and probe2.get("session_id") == leg_uuid
+            )
+
+            gx1_2 = validate_journal_via_gx1(journal_path, tid_leg) if os.path.exists(journal_path) else {"err": "no_journal", "entry": None, "tokens": {}}
+            n1_migrated_ok = (
+                gx1_2["err"] is None
+                and gx1_2["entry"] is not None
+                and gx1_2["entry"].get("token") == "tier-token"
+                and gx1_2["entry"].get("session") == leg_uuid
+                and f"{STATE_DIR}/claude-public" not in gx1_2.get("tokens", {})
+                and "tier-token" in gx1_2.get("tokens", {})
+            )
+
+            ok = (
+                reply1_ok
+                and probe1_ok
+                and journal1_ok
+                and mem_ok
+                and reply2_ok
+                and probe2_ok
+                and n1_migrated_ok
+            )
+            return ok, (
+                f"reply1_ok={reply1_ok} probe1_ok={probe1_ok} journal1_ok={journal1_ok} "
+                f"disp_tok_hits={disp_tok_hits} disp_ctrl_hits={disp_ctrl_hits} regions={mem_scan['regions']} "
+                f"reply2_ok={reply2_ok} probe2_ok={probe2_ok} n1_migrated_ok={n1_migrated_ok} "
+                f"rep1={rep1_text!r} rep2={rep2_text!r}"
+            )
+        finally:
+            if os.path.exists(dropin_file):
+                os.unlink(dropin_file)
+                subprocess.run(["systemctl", "daemon-reload"], check=False)
+            shutil.rmtree(mutant_src_dir, ignore_errors=True)
+            subprocess.run(["systemctl", "stop", "genie-dispatcher@public"], check=False)
+            if os.path.exists(journal_path):
+                os.unlink(journal_path)
+            if os.path.exists(gv1_shim):
+                os.unlink(gv1_shim)
+            close_extra_panes()
+
+    cell("GV1", *eval_gv1())
+
+    # =========================================================================
     # 8. MUTANT VERIFICATION (all 12 GI-15 mutants must turn their target cell RED)
     # =========================================================================
     def check_mutant(m_name: str, target_cell: str, ok: bool, detail: str):
@@ -2612,6 +3312,8 @@ let
     ino_a = os.stat("/run/user/1000/xmsg/agent.sock").st_ino
     j_xr = json.loads(open(rep_xr, "r", encoding="utf-8").read())
     check_mutant("M-xmsg-rw", "V6.11", *eval_v6_11_from(j_xr["v611"], ino_b, ino_a))
+    subprocess.run(["systemctl", "restart", "genie-stub-api"], check=True)
+    time.sleep(0.5)
 
     # 8.13 M-node-readfile -> V6.6b
     check_mutant("M-node-readfile", "V6.6b", *eval_v6_6b(mutant="M-node-readfile"))
@@ -2624,6 +3326,12 @@ let
 
     # 8.16 M-cred-outside-dir -> V6.6b
     check_mutant("M-cred-outside-dir", "V6.6b", *eval_v6_6b(mutant="M-cred-outside-dir"))
+
+    # 8.17 M-no-n1-migration -> GV1
+    check_mutant("M-no-n1-migration", "GV1", *eval_gv1(mutant="M-no-n1-migration"))
+
+    # 8.18 M-no-load-credential -> GV1
+    check_mutant("M-no-load-credential", "GV1", *eval_gv1(mutant="M-no-load-credential"))
 
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)
@@ -2706,10 +3414,13 @@ pkgs.testers.runNixOSTest {
       claudePackage = null; # Uses real pkgs.claude-code via module.nix defaultClaudePackage
       memorySize = 4096;
       extraConfig = {
+        services.genie-agent.experts.dispatcherPackage =
+          self.packages.${pkgs.stdenv.hostPlatform.system}.genie-dispatcher;
         environment.etc."genie-gi15-test/stub_api.py".source = "${gi15TestScripts}/stub_api.py";
         environment.etc."genie-gi15-test/jail_suite.py".source = jailSuitePy;
         environment.etc."genie-gi15-test/setup_v610_repo.py".source = setupV610RepoPy;
         environment.etc."genie-gi15-test/herdr.ts".source = ../src/dispatcher/herdr.ts;
+        environment.etc."genie-gi15-test/dispatcher".source = ../src/dispatcher;
         environment.etc."genie-gi15-test/driver.py".source = driverPy;
         systemd.services.genie-stub-api = {
           description = "GI-15 local stub Anthropic Messages API & host xmsg socket listener";
@@ -2717,6 +3428,8 @@ pkgs.testers.runNixOSTest {
           before = [
             "genie-herdr@public.service"
             "genie-herdr@trusted.service"
+            "genie-dispatcher@public.service"
+            "genie-dispatcher@trusted.service"
           ];
           serviceConfig = {
             ExecStart = "${pkgs.python3}/bin/python3 -I /etc/genie-gi15-test/stub_api.py";
