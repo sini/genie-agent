@@ -1623,8 +1623,16 @@ let
                     os.unlink(fp)
                 except FileNotFoundError:
                     pass
+        def wait_herdr_sockets(tier: str = "public"):
+            sdir = f"{STATE_DIR}/herdr-session-{tier}"
+            for _ in range(120):
+                if os.path.exists(f"{sdir}/herdr.sock") and os.path.exists(f"{sdir}/herdr-client.sock"):
+                    return
+                time.sleep(0.05)
+            raise RuntimeError(f"herdr-{tier} sockets did not appear within 6s")
+
         subprocess.run(["systemctl", "start", "genie-herdr@public"], check=True)
-        time.sleep(1.5)
+        wait_herdr_sockets("public")
         # Clear any stale workspace session state before starting first thread
         wt_a = f"{STATE_DIR}/dispatcher-public/worktrees/thread-v610"
         shutil.rmtree(wt_a, ignore_errors=True)
@@ -1701,13 +1709,18 @@ let
         # Preserve session.json across systemctl stop so KillMode=control-group killing child shells
         # during shutdown does not cause save_session_on_shutdown() to clear session.json.
         subprocess.run(["systemctl", "stop", "genie-herdr@public"], check=True)
+        for sock_fn in ("herdr.sock", "herdr-client.sock"):
+            try:
+                os.unlink(f"{STATE_DIR}/herdr-session-public/{sock_fn}")
+            except FileNotFoundError:
+                pass
         if saved_session_bytes:
             with open(session_json_host, "wb") as f:
                 f.write(saved_session_bytes)
             os.chown(session_json_host, 1000, 100)
             os.chmod(session_json_host, 0o600)
         subprocess.run(["systemctl", "start", "genie-herdr@public"], check=True)
-        time.sleep(1.0)
+        wait_herdr_sockets("public")
         attach_herdr_client_and_wait(3.2, wait_for_session_json=False)
 
         mark_present = os.path.exists(mark_host)
@@ -2212,49 +2225,84 @@ let
         # C5 Part 2 live measurement: verify inside genie-dispatcher@public's mount namespace that
         # /run/credentials/genie-dispatcher@public.service/tier-token is readable by sini, whereas
         # /run/credentials/genie-dispatcher@trusted.service/tier-token is inaccessible (EACCES/ENOENT).
-        for tier in ("public", "trusted"):
-            pid_chk = subprocess.check_output(
-                ["systemctl", "show", "-p", "MainPID", "--value", f"genie-dispatcher@{tier}"],
-                text=True,
-            ).strip()
-            if not pid_chk or pid_chk == "0":
-                subprocess.run(["systemctl", "start", f"genie-dispatcher@{tier}"], check=True)
-        disp_pub_pid = subprocess.check_output(
-            ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@public"],
-            text=True,
-        ).strip()
-        disp_tru_pid = subprocess.check_output(
-            ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@trusted"],
-            text=True,
-        ).strip()
-        # Wait for (sd-executor) to complete setup_namespace()/exec_setup_credentials() and execve
-        for pid_s in (disp_pub_pid, disp_tru_pid):
-            for _ in range(50):
-                try:
-                    comm = open(f"/proc/{pid_s}/comm", "r", encoding="utf-8").read().strip()
-                except OSError:
-                    comm = "(sd-executor)"
-                if comm != "(sd-executor)":
-                    break
+        host_mnt_ns = os.readlink("/proc/1/ns/mnt")
+
+        def wait_for_dispatcher_ready(tier: str) -> str:
+            unit = f"genie-dispatcher@{tier}"
+            cred_rel = f"/run/credentials/{unit}.service/tier-token"
+            last_diag = "none"
+            for _ in range(200):
+                pid_s = subprocess.check_output(
+                    ["systemctl", "show", "-p", "MainPID", "--value", unit],
+                    text=True,
+                ).strip()
+                if pid_s and pid_s != "0":
+                    try:
+                        mnt_ns = os.readlink(f"/proc/{pid_s}/ns/mnt")
+                        exe = os.readlink(f"/proc/{pid_s}/exe")
+                        comm = open(f"/proc/{pid_s}/comm", "r", encoding="utf-8").read().strip()
+                        has_cred = os.path.exists(f"/proc/{pid_s}/root{cred_rel}")
+                        last_diag = f"pid={pid_s} ns_diff={mnt_ns != host_mnt_ns} exe={exe} comm={comm} has_cred={has_cred}"
+                        if (
+                            mnt_ns != host_mnt_ns
+                            and exe.endswith("/genie-dispatcher")
+                            and has_cred
+                        ):
+                            return pid_s
+                    except OSError as ex:
+                        last_diag = f"pid={pid_s} err={ex}"
                 time.sleep(0.05)
-        c5_probe = subprocess.run([
-            "nsenter", "-t", disp_pub_pid, "-m",
-            "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
-            "${pkgs.python3}/bin/python3", "-I", "-c",
-            "\n".join([
-                "import errno, json, os",
-                "res = {}",
-                "for k, p in (('own', '/run/credentials/genie-dispatcher@public.service/tier-token'), ('other', '/run/credentials/genie-dispatcher@trusted.service/tier-token')):",
-                "    try:",
-                "        fd = os.open(p, os.O_RDONLY)",
-                "        os.close(fd)",
-                "        res[k] = 'OK'",
-                "    except OSError as ex:",
-                "        res[k] = errno.errorcode.get(ex.errno, str(ex.errno))",
-                "print(json.dumps(res))",
-            ]),
-        ], capture_output=True, text=True, check=True)
-        c5_cross_tier = json.loads(c5_probe.stdout.strip())
+            raise RuntimeError(f"{unit} did not enter mount namespace and exec genie-dispatcher within 10s ({last_diag})")
+
+        def probe_c5_ns(target_pid: str) -> dict:
+            c5_probe = subprocess.run([
+                "nsenter", "-t", target_pid, "-m",
+                "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
+                "${pkgs.python3}/bin/python3", "-I", "-c",
+                "\n".join([
+                    "import errno, json, os",
+                    "res = {}",
+                    "for k, p in (('own', '/run/credentials/genie-dispatcher@public.service/tier-token'), ('other', '/run/credentials/genie-dispatcher@trusted.service/tier-token')):",
+                    "    try:",
+                    "        fd = os.open(p, os.O_RDONLY)",
+                    "        os.close(fd)",
+                    "        res[k] = 'OK'",
+                    "    except OSError as ex:",
+                    "        res[k] = errno.errorcode.get(ex.errno, str(ex.errno))",
+                    "print(json.dumps(res))",
+                ]),
+            ], capture_output=True, text=True, check=True)
+            return json.loads(c5_probe.stdout.strip())
+
+        if not mutant:
+            # Order 1: trusted already running, public stopped then started (the exact post-V2.3 order).
+            subprocess.run(["systemctl", "start", "genie-dispatcher@trusted"], check=True)
+            disp_tru_pid = wait_for_dispatcher_ready("trusted")
+            subprocess.run(["systemctl", "stop", "genie-dispatcher@public"], check=True)
+            subprocess.run(["systemctl", "start", "genie-dispatcher@public"], check=True)
+            disp_pub_pid = wait_for_dispatcher_ready("public")
+            c5_order1 = probe_c5_ns(disp_pub_pid)
+            # Order 2: public already running in its mount namespace while trusted restarts on the host.
+            subprocess.run(["systemctl", "restart", "genie-dispatcher@trusted"], check=True)
+            disp_tru_pid = wait_for_dispatcher_ready("trusted")
+            c5_order2 = probe_c5_ns(disp_pub_pid)
+            c5_cross_tier = {
+                "own": c5_order1.get("own") if c5_order1 == c5_order2 else f"{c5_order1.get('own')}/{c5_order2.get('own')}",
+                "other": c5_order1.get("other") if c5_order1 == c5_order2 else f"{c5_order1.get('other')}/{c5_order2.get('other')}",
+            }
+        else:
+            for tier in ("public", "trusted"):
+                pid_chk = subprocess.check_output(
+                    ["systemctl", "show", "-p", "MainPID", "--value", f"genie-dispatcher@{tier}"],
+                    text=True,
+                ).strip()
+                if not pid_chk or pid_chk == "0":
+                    subprocess.run(["systemctl", "start", f"genie-dispatcher@{tier}"], check=True)
+            disp_pub_pid = wait_for_dispatcher_ready("public")
+            disp_tru_pid = wait_for_dispatcher_ready("trusted")
+            # M-c5-pre-ns-race forces the pre-apply_mount_namespace host mount namespace (what the old
+            # `comm != "(sd-executor)"` loop entered when systemd-executor was still in PID 1's mount ns).
+            c5_cross_tier = probe_c5_ns("1" if mutant == "M-c5-pre-ns-race" else disp_pub_pid)
 
         # Copy both tier-token credential files into cred_dir (`tier-token-public` & `tier-token-trusted`).
         cred_pub_copy = f"{cred_dir}/tier-token-public"
@@ -3336,6 +3384,9 @@ let
 
     # 8.16 M-cred-outside-dir -> V6.6b
     check_mutant("M-cred-outside-dir", "V6.6b", *eval_v6_6b(mutant="M-cred-outside-dir"))
+
+    # 8.16b M-c5-pre-ns-race -> V6.6b
+    check_mutant("M-c5-pre-ns-race", "V6.6b", *eval_v6_6b(mutant="M-c5-pre-ns-race"))
 
     # 8.17 M-no-n1-migration -> GV1
     check_mutant("M-no-n1-migration", "GV1", *eval_gv1(mutant="M-no-n1-migration"))
