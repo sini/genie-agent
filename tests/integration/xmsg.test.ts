@@ -8,8 +8,9 @@
 // Run with:
 //   XMSG_BIN=<path> GENIE_GUARD_BIN=<path> node --test tests/xmsg-integration.test.ts
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -112,7 +113,22 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
     rmSync(registerSock, { force: true });
   };
 
+  const canConnectUnix = (sockPath: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      const s = createConnection(sockPath);
+      const done = (ok: boolean) => {
+        s.removeAllListeners();
+        s.destroy();
+        resolve(ok);
+      };
+      s.once("connect", () => done(true));
+      s.once("error", () => done(false));
+    });
+
   const spawnServer = async () => {
+    rmSync(httpSock, { force: true });
+    rmSync(agentSock, { force: true });
+    rmSync(registerSock, { force: true });
     const c = spawn(XMSG_BIN!, args, {
       env: { ...process.env, XDG_RUNTIME_DIR: runDir, HOME: dir },
       stdio: ["ignore", "pipe", "pipe"],
@@ -120,7 +136,11 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
     currentChild = c;
     node.child = c;
     for (let i = 0; i < 200; i++) {
-      if (existsSync(httpSock) && existsSync(agentSock) && existsSync(registerSock)) {
+      if (
+        (await canConnectUnix(httpSock)) &&
+        (await canConnectUnix(agentSock)) &&
+        (await canConnectUnix(registerSock))
+      ) {
         return;
       }
       if (c.exitCode !== null) {
@@ -128,7 +148,7 @@ async function startXmsg(svcExes: Record<string, string>): Promise<XmsgNode> {
       }
       await sleep(25);
     }
-    throw new Error("timed out waiting for xmsg sockets to appear");
+    throw new Error("timed out waiting for xmsg sockets to accept connections");
   };
 
   const stop = async () => {
@@ -2070,6 +2090,40 @@ process.stdin.on("end", () => process.exit(0));
     }
   },
 );
+
+test(
+  "XR4: spawnServer unlinks stale socket files and waits for connect() rather than existsSync()",
+  async () => {
+    const node = await startXmsg({});
+    try {
+      // Simulate a crashed server leaving stale socket files on disk without unlinking them
+      node.child.kill("SIGKILL");
+      await new Promise<void>((r) => {
+        node.child.on("exit", () => r());
+        setTimeout(() => r(), 3000);
+      });
+
+      // Under the old existsSync() check, all three socket files still exist on disk while dead:
+      assert.equal(
+        existsSync(node.httpSock) && existsSync(node.agentSock) && existsSync(node.registerSock),
+        true,
+        "stale socket files still exist on disk after SIGKILL",
+      );
+      await assert.rejects(
+        () => unixHttp(node.httpSock, "GET", "/v1/recipients"),
+        "HTTP request against stale un-unlinked socket must fail before spawnServer()",
+      );
+
+      // spawnServer() unlinks stale sockets and polls connect() until the new server is listening
+      await node.spawnServer();
+      const res = await unixHttp(node.httpSock, "GET", "/v1/recipients");
+      assert.equal(res.status, 200, `GET /v1/recipients immediately after spawnServer() must return 200: ${res.body}`);
+    } finally {
+      await node.stop();
+    }
+  },
+);
+
 
 
 

@@ -1315,11 +1315,73 @@ let
         assert m, f"missing ExecStart herdr in genie-herdr@{tier}"
         return m.group(1).strip("'\"")
 
+    def can_connect_unix(sock_path: str) -> bool:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.settimeout(0.2)
+            s.connect(sock_path)
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
+    def wait_for_herdr_ready(tier: str = "public", timeout_s: float = 10.0) -> str:
+        host_mnt_ns = os.readlink("/proc/1/ns/mnt")
+        sdir = f"{STATE_DIR}/herdr-session-{tier}"
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout_s:
+            try:
+                pid_s = subprocess.check_output(
+                    ["systemctl", "show", "-p", "MainPID", "--value", f"genie-herdr@{tier}"],
+                    text=True,
+                ).strip()
+                if pid_s.isdigit() and int(pid_s) > 0:
+                    mnt_ns = os.readlink(f"/proc/{pid_s}/ns/mnt")
+                    exe = os.readlink(f"/proc/{pid_s}/exe")
+                    if (
+                        mnt_ns != host_mnt_ns
+                        and exe.endswith("/herdr")
+                        and can_connect_unix(f"{sdir}/herdr.sock")
+                        and can_connect_unix(f"{sdir}/herdr-client.sock")
+                    ):
+                        return pid_s
+            except (OSError, subprocess.CalledProcessError):
+                pass
+            time.sleep(0.05)
+        raise RuntimeError(f"genie-herdr@{tier} did not become ready within {timeout_s}s")
+
+    def restart_herdr_and_wait(tier: str = "public") -> str:
+        sdir = f"{STATE_DIR}/herdr-session-{tier}"
+        subprocess.run(["systemctl", "stop", f"genie-herdr@{tier}"], check=True)
+        for sock_fn in ("herdr.sock", "herdr-client.sock"):
+            try:
+                os.unlink(f"{sdir}/{sock_fn}")
+            except FileNotFoundError:
+                pass
+        subprocess.run(["systemctl", "start", f"genie-herdr@{tier}"], check=True)
+        return wait_for_herdr_ready(tier)
+
+    def restart_stub_api_and_wait(timeout_s: float = 10.0) -> None:
+        subprocess.run(["systemctl", "stop", "genie-stub-api"], check=True)
+        for sock_fn in ("register.sock", "agent.sock", "http.sock"):
+            try:
+                os.unlink(f"/run/user/1000/xmsg/{sock_fn}")
+            except FileNotFoundError:
+                pass
+        subprocess.run(["systemctl", "start", "genie-stub-api"], check=True)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout_s:
+            if all(
+                can_connect_unix(f"/run/user/1000/xmsg/{s}")
+                for s in ("register.sock", "agent.sock", "http.sock")
+            ):
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"genie-stub-api sockets did not accept connections within {timeout_s}s")
+
     def get_herdr_pid(tier: str) -> str:
-        return subprocess.check_output(
-            ["systemctl", "show", "-p", "MainPID", "--value", f"genie-herdr@{tier}"],
-            text=True,
-        ).strip()
+        return wait_for_herdr_ready(tier)
 
     def herdr_cmd(tier: str, args: list[str], parse_json: bool = True):
         herdr_bin = get_herdr_bin(tier)
@@ -1593,10 +1655,7 @@ let
         return dst
 
     def run_in_herdr_ns(tier: str, py_code: str) -> dict:
-        pid = subprocess.check_output(
-            ["systemctl", "show", "-p", "MainPID", "--value", f"genie-herdr@{tier}"],
-            text=True,
-        ).strip()
+        pid = wait_for_herdr_ready(tier)
         r = subprocess.run([
             "nsenter", "-t", pid, "-m", "-p", "-n",
             "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
@@ -1623,34 +1682,44 @@ let
                     os.unlink(fp)
                 except FileNotFoundError:
                     pass
-        def wait_herdr_sockets(tier: str = "public"):
-            sdir = f"{STATE_DIR}/herdr-session-{tier}"
-            for _ in range(120):
-                if os.path.exists(f"{sdir}/herdr.sock") and os.path.exists(f"{sdir}/herdr-client.sock"):
-                    return
-                time.sleep(0.05)
-            raise RuntimeError(f"herdr-{tier} sockets did not appear within 6s")
-
         subprocess.run(["systemctl", "start", "genie-herdr@public"], check=True)
-        wait_herdr_sockets("public")
+        wait_for_herdr_ready("public")
         # Clear any stale workspace session state before starting first thread
         wt_a = f"{STATE_DIR}/dispatcher-public/worktrees/thread-v610"
         shutil.rmtree(wt_a, ignore_errors=True)
         os.makedirs(wt_a, mode=0o700, exist_ok=True)
         os.chown(wt_a, 1000, 100)
+        v610_sess_id = str(uuid.uuid4())
         pane_id, srv_res = launch_in_herdr(
             "public",
             "thread-v610",
-            ["-n", "genie-v610", "--session-id", str(uuid.uuid4()), "-p", "v610-git"],
+            ["-n", "genie-v610", "--session-id", v610_sess_id, "-p", "v610-git"],
             split_cwd_override=(wt_a if mutant_root_in_worktree else None),
             timeout_ms=6000,
         )
-        # Wait for real claude to finish planting the repo in wt_a and exit cleanly
-        for _ in range(80):
-            if os.path.exists(os.path.join(wt_a, ".git", "refs", "remotes", "origin", "main")):
+        # Wait for real claude to finish planting the repo in wt_a, send tu_v610 tool_result, and exit cleanly
+        def v610_claude_proc_alive() -> bool:
+            needle = v610_sess_id.encode("utf-8")
+            for p_entry in os.listdir("/proc"):
+                if not p_entry.isdigit():
+                    continue
+                try:
+                    if needle in open(f"/proc/{p_entry}/cmdline", "rb").read():
+                        return True
+                except OSError:
+                    pass
+            return False
+
+        t_v610 = time.monotonic()
+        while time.monotonic() - t_v610 < 15.0:
+            repo_ready = os.path.exists(os.path.join(wt_a, ".git", "refs", "remotes", "origin", "main"))
+            log_done = (
+                os.path.exists(f"{STATE_DIR}/stub-api.log")
+                and '"tu_v610"' in open(f"{STATE_DIR}/stub-api.log", "r", encoding="utf-8", errors="replace").read()
+            )
+            if repo_ready and log_done and not v610_claude_proc_alive():
                 break
-            time.sleep(0.1)
-        time.sleep(1.0)
+            time.sleep(0.05)
 
         # Attach a herdr client in a PTY and wait >= 3 s (and until herdr's 5s session autosave writes session.json)
         session_json_host = f"{STATE_DIR}/herdr-session-public/session.json"
@@ -1720,7 +1789,7 @@ let
             os.chown(session_json_host, 1000, 100)
             os.chmod(session_json_host, 0o600)
         subprocess.run(["systemctl", "start", "genie-herdr@public"], check=True)
-        wait_herdr_sockets("public")
+        wait_for_herdr_ready("public")
         attach_herdr_client_and_wait(3.2, wait_for_session_json=False)
 
         mark_present = os.path.exists(mark_host)
@@ -1754,7 +1823,7 @@ let
             except FileNotFoundError:
                 pass
     subprocess.run(["systemctl", "start", "genie-herdr@public"], check=True)
-    time.sleep(1.5)
+    wait_for_herdr_ready("public")
 
     for tier, prompt_tag in (("public", "v3-public"), ("trusted", "v3-trusted")):
         launch_in_herdr(
@@ -2084,7 +2153,9 @@ let
         tw2 = threading.Thread(target=run_herdr_watcher, daemon=True)
         tw1.start()
         tw2.start()
-        time.sleep(0.05)
+        t_w_start = time.monotonic()
+        while (jail_watch["samples"] == 0 or herdr_watch["samples"] == 0) and time.monotonic() - t_w_start < 5.0:
+            time.sleep(0.005)
 
         shim_b = None
         verify_peer = True
@@ -2120,7 +2191,10 @@ let
             ["-n", "genie-c", "--session-id", str(uuid.uuid4()), "-p", "v3-trusted"],
             timeout_ms=5000,
         )
-        time.sleep(0.05)
+        t_post = time.time_ns()
+        t_w_end = time.monotonic()
+        while (jail_watch["t_last"] < t_post or herdr_watch["t_last"] < t_post) and time.monotonic() - t_w_end < 5.0:
+            time.sleep(0.005)
         stop_evt.set()
         tw1.join(timeout=2.0)
         tw2.join(timeout=2.0)
@@ -3271,19 +3345,17 @@ let
         print(f"MUTANT {m_name} -> CELL {target_cell} {'GREEN (FAILED TO REDDEN!)' if ok else 'RED'}: {detail}", flush=True)
         cell(f"mutant {m_name}", not ok, f"{m_name} turned {target_cell} RED ({detail})")
 
-    # 8.1 M-env -> V6.1
+    # 8.1 M-env -> V6.1 (with ExecStartPre sleep 1.5s > old fixed 1.0s sleep to prove XR4 readiness observation)
     os.makedirs("/run/systemd/system/genie-herdr@public.service.d", exist_ok=True)
     with open("/run/systemd/system/genie-herdr@public.service.d/m-env.conf", "w", encoding="utf-8") as f:
-        f.write("[Service]\nEnvironmentFile=/run/genie-secrets/public.env\n")
+        f.write("[Service]\nExecStartPre=${pkgs.coreutils}/bin/sleep 1.5\nEnvironmentFile=/run/genie-secrets/public.env\n")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
     m_env_sweep = herdr_v61_v62_sweep()
     check_mutant("M-env", "V6.1", *eval_v6_1_from(m_env_sweep["v61"], jail_rep["v61"]))
     os.unlink("/run/systemd/system/genie-herdr@public.service.d/m-env.conf")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
 
     # 8.2 M-shim-envp -> V6.1
     shim_envp = make_custom_shim("public", "m-shim-envp", pass_token_in_env=True)
@@ -3322,13 +3394,11 @@ let
     with open("/run/systemd/system/genie-herdr@public.service.d/m-perf.conf", "w", encoding="utf-8") as f:
         f.write("[Service]\nSystemCallFilter=\n")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
     check_mutant("M-perf-allowed", "V6.6", *eval_v6_6("m-perf"))
     os.unlink("/run/systemd/system/genie-herdr@public.service.d/m-perf.conf")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
 
     # 8.8 M-no-outer-bwrap -> V6.7 & V6.9
     shim_nobwrap = make_custom_shim("public", "m-no-bwrap", no_outer_bwrap=True)
@@ -3346,14 +3416,12 @@ let
     with open("/run/systemd/system/genie-herdr@public.service.d/m-creds.conf", "w", encoding="utf-8") as f:
         f.write("[Service]\nInaccessiblePaths=\n")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
     check_mutant("M-no-inaccessible-creds", "V6.3", *eval_v6_3())
     os.unlink("/run/credentials/m-cred-leak")
     os.unlink("/run/systemd/system/genie-herdr@public.service.d/m-creds.conf")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "restart", "genie-herdr@public"], check=True)
-    time.sleep(1.0)
+    restart_herdr_and_wait("public")
 
     # 8.10 M-writable-policy -> V6.8
     shim_wp = make_custom_shim("public", "m-writable-policy", writable_policy=True)
@@ -3370,8 +3438,7 @@ let
     ino_a = os.stat("/run/user/1000/xmsg/agent.sock").st_ino
     j_xr = json.loads(open(rep_xr, "r", encoding="utf-8").read())
     check_mutant("M-xmsg-rw", "V6.11", *eval_v6_11_from(j_xr["v611"], ino_b, ino_a))
-    subprocess.run(["systemctl", "restart", "genie-stub-api"], check=True)
-    time.sleep(0.5)
+    restart_stub_api_and_wait()
 
     # 8.13 M-node-readfile -> V6.6b
     check_mutant("M-node-readfile", "V6.6b", *eval_v6_6b(mutant="M-node-readfile"))
@@ -3530,19 +3597,53 @@ pkgs.testers.runNixOSTest {
       def has(m, line, f):
           return m.execute(f"grep -q -F -- '{line}' {f}")[0] == 0
 
+      def check_unit_ns_and_exe(m, unit, exe_suffix):
+          cmd = (
+              f"pid=$(systemctl show -p MainPID --value {unit}) && "
+              f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
+              f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
+              f"case \"$(readlink /proc/$pid/exe)\" in *{exe_suffix}) true ;; *) false ;; esac"
+          )
+          return m.execute(cmd)[0] == 0
+
       start_all()
       for m in (probe, real):
           m.wait_for_unit("multi-user.target")
+          for tier in ("public", "trusted"):
+              m.wait_until_succeeds(
+                  f"pid=$(systemctl show -p MainPID --value genie-herdr@{tier}) && "
+                  f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
+                  f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
+                  f"case \"$(readlink /proc/$pid/exe)\" in */herdr) true ;; *) false ;; esac && "
+                  f"${pkgs.python3}/bin/python3 -I -c 'import socket; "
+                  f"s1=socket.socket(socket.AF_UNIX); s1.connect(\"${stateDir}/herdr-session-{tier}/herdr.sock\"); s1.close(); "
+                  f"s2=socket.socket(socket.AF_UNIX); s2.connect(\"${stateDir}/herdr-session-{tier}/herdr-client.sock\"); s2.close()'",
+                  timeout=30,
+              )
+              m.wait_until_succeeds(
+                  f"pid=$(systemctl show -p MainPID --value genie-dispatcher@{tier}) && "
+                  f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
+                  f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
+                  f"case \"$(readlink /proc/$pid/exe)\" in */genie-dispatcher) true ;; *) false ;; esac",
+                  timeout=30,
+              )
       real.wait_for_unit("genie-stub-api.service")
+      real.wait_until_succeeds(
+          "${pkgs.python3}/bin/python3 -I -c 'import socket; "
+          "[ (s:=socket.socket(socket.AF_UNIX), s.connect(f\"/run/user/1000/xmsg/{n}.sock\"), s.close()) for n in (\"register\",\"agent\",\"http\") ]'",
+          timeout=30,
+      )
       time.sleep(10)
 
       # V0: genie-herdr@<tier> and genie-dispatcher@<tier> are still the running main processes 10 s after boot.
       for m in (probe, real):
           for tier in ("public", "trusted"):
               st = m.execute(f"systemctl is-active genie-herdr@{tier}")[1].strip()
-              cell(f"V0 {m.name} {tier}", st == "active", f"genie-herdr@{tier} is {st}")
+              h_ready = check_unit_ns_and_exe(m, f"genie-herdr@{tier}", "/herdr")
+              cell(f"V0 {m.name} {tier}", st == "active" and h_ready, f"genie-herdr@{tier} is {st}, ns_and_exe={h_ready}")
               dst = m.execute(f"systemctl is-active genie-dispatcher@{tier}")[1].strip()
-              cell(f"V0-dispatcher {m.name} {tier}", dst == "active", f"genie-dispatcher@{tier} is {dst}")
+              d_ready = check_unit_ns_and_exe(m, f"genie-dispatcher@{tier}", "/genie-dispatcher")
+              cell(f"V0-dispatcher {m.name} {tier}", dst == "active" and d_ready, f"genie-dispatcher@{tier} is {dst}, ns_and_exe={d_ready}")
 
       # Probe node: GI-13 V1, V1b, V2, V4, V5
       c = "${claudeHome}"
