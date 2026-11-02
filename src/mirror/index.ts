@@ -1,8 +1,10 @@
 // The mirror fetcher (design §6, Git mirror cache): bare mirrors keyed by repository URL, and a
 // worktree per thread checked out from them. It is what tier 1's `clone` asks for; tier 1 never
-// runs git. Only https:// and git:// URLs are fetched, and never with credentials.
+// runs git. Only https:// URLs are fetched, after resolving and refusing private or cluster
+// addresses, and never with credentials.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import {
   existsSync,
   lstatSync,
@@ -15,6 +17,60 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { BlockList, isIP } from "node:net";
+
+export type Address = { address: string; family: number };
+export type Resolver = (hostname: string) => Promise<Address[]>;
+
+export const systemResolver: Resolver = (hostname) => lookup(hostname, { all: true, verbatim: true });
+
+// Loopback, this-network (0.0.0.0), RFC1918, CGNAT (the tailnet), link-local, ULA.
+const refusedRanges = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "::/128",
+  "::1/128",
+  "fc00::/7",
+  "fe80::/10",
+];
+
+const addressFamily = (ip: string): "ipv4" | "ipv6" => (isIP(ip) === 6 ? "ipv6" : "ipv4");
+
+// The refused addresses, plus the cluster's CIDRs. An IPv4-mapped IPv6 address is checked as its
+// IPv4 address (BlockList does this).
+export function refusedList(cluster: string[]): BlockList {
+  const b = new BlockList();
+  for (const cidr of [...refusedRanges, ...cluster]) {
+    const [net, bits] = cidr.split("/");
+    if (!isIP(net) || !/^\d+$/.test(bits ?? "")) throw new Error(`not a CIDR: ${cidr}`);
+    b.addSubnet(net, Number(bits), addressFamily(net));
+  }
+  return b;
+}
+
+export interface PinOptions {
+  resolve: Resolver;
+  refused: BlockList;
+  // Addresses let through the refusal. Tests only: production leaves it empty.
+  exempt?: string[];
+}
+
+// The checked address the request connects to.
+export async function pin(u: URL, o: PinOptions): Promise<Address> {
+  const host = u.hostname.replace(/^\[(.*)\]$/, "$1");
+  const addrs = isIP(host) ? [{ address: host, family: isIP(host) }] : await o.resolve(host);
+  if (addrs.length === 0) throw new Error(`${host} does not resolve`);
+  for (const a of addrs) {
+    if (!o.exempt?.includes(a.address) && o.refused.check(a.address, addressFamily(a.address)))
+      throw new Error(`refused: ${host} resolves to ${a.address}, a private or cluster address`);
+  }
+  return addrs[0];
+}
 
 export interface MirrorConfig {
   mirrorRoot: string;
@@ -24,6 +80,12 @@ export interface MirrorConfig {
   fetchCap?: number;
   // Bytes all mirrors together may hold once a fetch is done; least-recently-used ones are evicted.
   quota?: number;
+  // Cluster CIDRs refused by pin() before fetching.
+  cluster?: string[];
+  resolve?: Resolver;
+  refused?: BlockList;
+  // Addresses let through the refusal. Tests only: production leaves it empty.
+  exempt?: string[];
 }
 
 // 2 GiB: above the bare mirror of any ordinary project (and of every gen library), below the
@@ -72,6 +134,31 @@ export type Runner = (args: string[], signal?: AbortSignal) => Promise<string>;
 
 let emptyHome: string | undefined;
 
+// Sanitises git stderr before surfacing it in an Error: drops remote sideband lines, strips URL
+// userinfo/query/fragment tokens and control characters, and bounds the result to one line.
+export function sanitizeGitStderr(stderr: string): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((l) => l.replace(/[\x00-\x1f\x7f]+/g, " ").trim())
+    .filter((l) => l.length > 0 && !/^remote:/i.test(l));
+  if (lines.length === 0) return "";
+  const cleaned = lines[0]
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, (rawUrl) => {
+      try {
+        const parsed = new URL(rawUrl);
+        parsed.username = "";
+        parsed.password = "";
+        parsed.search = "";
+        parsed.hash = "";
+        return parsed.toString();
+      } catch {
+        return "<redacted-url>";
+      }
+    })
+    .slice(0, 200);
+  return cleaned;
+}
+
 export const git: Runner = (args, signal) => {
   emptyHome ??= mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-mirror-home-`);
   const env = {
@@ -84,7 +171,7 @@ export const git: Runner = (args, signal) => {
   const config = [
     "protocol.allow=never",
     "protocol.https.allow=always",
-    "protocol.git.allow=always",
+    "protocol.git.allow=never",
     "protocol.file.allow=never",
     "credential.helper=",
   ].flatMap((c) => ["-c", c]);
@@ -108,7 +195,7 @@ export const git: Runner = (args, signal) => {
     child.on("close", (code) => {
       signal?.removeEventListener("abort", kill);
       if (code === 0) resolve(stdout);
-      else reject(new Error(`git ${args.join(" ")}: ${stderr.trim() || `exit ${code ?? "killed"}`}`));
+      else reject(new Error(`git ${args.join(" ")}: ${sanitizeGitStderr(stderr) || `exit ${code ?? "killed"}`}`));
     });
   });
 };
@@ -127,9 +214,9 @@ export function diskBytes(dir: string): number {
   return n;
 }
 
-// Raises MirrorRefused unless url is an https:// or git:// URL with a host and no userinfo.
+// Raises MirrorRefused unless url is an https:// URL with a host and no userinfo.
 export function checkUrl(url: string): URL {
-  if (!/^(https|git):\/\//i.test(url)) throw new MirrorRefused("only https:// and git:// URLs are fetched", url);
+  if (!/^https:\/\//i.test(url)) throw new MirrorRefused("only https:// URLs are fetched", url);
   if (/[\s\x00-\x1f\x7f]/.test(url)) throw new MirrorRefused("whitespace or a control character", url);
   let u: URL;
   try {
@@ -137,7 +224,7 @@ export function checkUrl(url: string): URL {
   } catch {
     throw new MirrorRefused("not a URL", url);
   }
-  if (u.protocol !== "https:" && u.protocol !== "git:") throw new MirrorRefused("only https:// and git:// URLs are fetched", url);
+  if (u.protocol !== "https:") throw new MirrorRefused("only https:// URLs are fetched", url);
   if (u.username || u.password) throw new MirrorRefused("credentials in the URL", url);
   if (!u.hostname) throw new MirrorRefused("no host", url);
   if (u.search || u.hash) throw new MirrorRefused("a query or fragment", url);
@@ -299,10 +386,19 @@ export async function worktreeFor(
   thread: string,
   run: Runner = git,
 ): Promise<{ path: string; rev: string }> {
-  checkUrl(url);
+  const u = checkUrl(url);
   if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
   for (const root of [cfg.mirrorRoot, cfg.worktreeRoot]) {
     if (!root.startsWith("/")) throw new MirrorRefused("not an absolute path", root);
+  }
+  try {
+    await pin(u, {
+      resolve: cfg.resolve ?? systemResolver,
+      refused: cfg.refused ?? refusedList(cfg.cluster ?? []),
+      exempt: cfg.exempt,
+    });
+  } catch (e) {
+    throw new MirrorRefused(e instanceof Error ? e.message : String(e), url);
   }
   const key = mirrorKey(url);
   const dir = `${cfg.mirrorRoot}/${key}`;

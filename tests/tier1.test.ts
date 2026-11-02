@@ -98,6 +98,7 @@ const names: Record<string, string> = {
   "mapped.test": "::ffff:127.0.0.1",
   "pod.test": "10.244.3.4",
   "ok.test": "127.0.0.2",
+  "example.org": "93.184.216.34",
 };
 const resolver = async (h: string) => (names[h] ? [{ address: names[h], family: names[h].includes(":") ? 6 : 4 }] : []);
 
@@ -131,7 +132,7 @@ function host(
     },
     async clone(url) {
       calls.push({ tool: "clone", arg: url });
-      return worktreeFor({ mirrorRoot: `${tmp}/mirrors`, worktreeRoot }, url, "t1", async (args) => {
+      return worktreeFor({ mirrorRoot: `${tmp}/mirrors`, worktreeRoot, resolve: resolver }, url, "t1", async (args) => {
         if (args[0] === "clone") mkdirSync(args[args.length - 1], { recursive: true });
         if (args.includes("worktree")) mkdirSync(args[args.length - 2], { recursive: true });
         return args.includes("rev-parse") ? "abc123\n" : "";

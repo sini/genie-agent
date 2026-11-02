@@ -16,6 +16,7 @@ import type { GcOptions } from "../gc/index.ts";
 import type { BlockedExpertReply, ThreadStateStore, Tier } from "../state/index.ts";
 import type { Supervisor } from "../supervisor/index.ts";
 import { seedSession, type SeedGuard } from "../supervisor/seed.ts";
+import { nextTier } from "../tier/index.ts";
 
 export interface S3Config {
   endpoint: string; // e.g. http://garage:3900
@@ -135,9 +136,9 @@ async function get(s3: S3Config, key: string): Promise<string | null> {
 }
 
 // Read an archived thread from Garage S3 (plan P5, design §6).
-// Tries the given tier or checks public then trusted. Returns null if not found.
+// Tries the given tier or falls back to public. Returns null if not found.
 export async function readArchive(s3: S3Config, thread: string, tier?: Tier): Promise<ArchivedThread | null> {
-  const tiers: Tier[] = tier ? [tier] : ["public", "trusted"];
+  const tiers: Tier[] = tier ? [tier] : ["public"];
   for (const t of tiers) {
     const text = await get(s3, objectKey(t, thread));
     if (text !== null) {
@@ -159,7 +160,7 @@ export interface ReplayResumeOptions {
 // Replay-resume of an expired thread from the archive (plan P5, design §6).
 // Restores the transcript by reading the archive and routing through S6's seedSession.
 // Every replayed turn passes through the seed guard before the session sees it (S6).
-// If store is supplied, restores the thread state directory.
+// If store is supplied, restores the thread state directory with the tier clamped by nextTier (C7).
 export async function replayResume(
   supervisorOrOptions: Supervisor | ReplayResumeOptions,
   threadOrUndefined?: string,
@@ -174,8 +175,12 @@ export async function replayResume(
 
   if (!guard) throw new Error("replayResume: guard is required");
 
-  const archived = await readArchive(s3, thread, tier);
+  const priorTier = store?.read(thread)?.sender_tier;
+  const lookupTier = tier ?? store?.tombstone?.(thread)?.tier;
+  const archived = await readArchive(s3, thread, lookupTier);
   if (!archived) return null;
+
+  const clampedTier = nextTier(priorTier ?? tier, archived.tier);
 
   if (archived.transcript) {
     if (store) {
@@ -191,9 +196,9 @@ export async function replayResume(
       status: "active",
       created: archived.created,
       last_active: new Date().toISOString(),
-      sender_tier: archived.tier,
+      sender_tier: clampedTier,
     });
   }
 
-  return archived;
+  return { ...archived, tier: clampedTier };
 }

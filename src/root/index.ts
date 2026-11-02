@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
 import { gist } from "../broker/gist.ts";
-import { broker, byKind, outbound } from "../broker/index.ts";
+import { broker, byKind, isRepoAllowed, outbound, type Proposal, validateProposalFields } from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
 import { parseExpertReply, type ExpertReply } from "../dispatcher/reply.ts";
 import { escalationGuard } from "../escalation/guard.ts";
@@ -24,7 +24,8 @@ import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
 import { type Clock, Lifecycle } from "../lifecycle/index.ts";
-import { type MirrorConfig, worktreeFor } from "../mirror/index.ts";
+import { type MirrorConfig, type Runner as GitRunner, worktreeFor } from "../mirror/index.ts";
+import { redact } from "../redactor/index.ts";
 import { ThreadStateStore, type PendingAction, type Tier } from "../state/index.ts";
 import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
 import { Supervisor } from "../supervisor/index.ts";
@@ -32,6 +33,7 @@ import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
 import { tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
+import { errors, load } from "../tier1/schema.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 
 export interface ApproveControl {
@@ -79,6 +81,7 @@ export interface Io {
   guard?: GuardClient;
   xmsg: XmsgSend;
   request?: (thread: string, payload: unknown) => Promise<string>;
+  git?: GitRunner;
 }
 
 // Every secret is a file path, read at start or at use, never argv or the environment.
@@ -101,6 +104,7 @@ export interface Config {
     tokenFile?: string | null;
     githubApi?: string;
     threadLink?: string;
+    allowedRepos?: string[];
     guardOut?: { enable?: boolean; base?: string; model?: string; keyFile?: string };
   };
   // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
@@ -122,13 +126,16 @@ const repo = process.env.GENIE_REPO_ROOT
     : pathToFileURL(`${process.cwd()}/`);
 const secret = (file: string) => readFileSync(file, "utf8").trim();
 
+const evalRequestSchema = load("eval-request");
+const proposalSchema = load("proposal");
+
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
 export const WITHHELD = "I drafted an answer, but my output check held it back. I've flagged this for review.";
 export const DEADLINE_NOTICE = readFileSync(new URL("prompts/tier1-deadline.md", repo).pathname, "utf8").trim();
 export const approvalNotice = (action: string, params: unknown): PostEnvelope & { approval: true } => ({
   approval: true,
-  text: `Approval requested: ${action} ${JSON.stringify(params)}`,
+  text: redact(`Approval requested: ${action} ${JSON.stringify(params)}`).text,
 });
 export const approvalRequest = approvalNotice;
 
@@ -331,11 +338,31 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       // tool result names it, the supervisor records the pending action with params fixed, and the bot
       // posts an approval request (C9, design row 24).
       eval: async (request) => {
+        const bad = errors(evalRequestSchema, request);
+        if (bad.length) throw new Error(`invalid eval arguments: ${bad.join("; ")}`);
         const req = request as EvalRequest;
         const tier = store.read(t)?.sender_tier ?? "public";
         if (req.trusted === "yes" && tier !== "trusted") {
+          if (store.pendingActions(t).length >= 1) {
+            const result = {
+              refused: "trusted eval",
+              error: "refused: a pending action is already awaiting approval on this thread",
+            };
+            setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
+            return result;
+          }
           const action = "eval";
-          const sentEventId = (await postEnvelope(t, approvalNotice(action, req))) ?? undefined;
+          const rawNotice = approvalNotice(action, req);
+          const out = await outbound(context(t).cleaned_question, (scrub) => scrub(rawNotice.text), guardOut);
+          if (!("value" in out)) {
+            const result = {
+              refused: "trusted eval",
+              error: `refused: ${out.reason}`,
+            };
+            setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
+            return result;
+          }
+          const sentEventId = (await postEnvelope(t, { approval: true, text: out.value })) ?? undefined;
           const pendingAction: PendingAction = {
             action,
             params: JSON.parse(JSON.stringify(req)),
@@ -403,9 +430,68 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
             redactions: [],
           };
         }
-        return broker(t, JSON.stringify(p), { tokenFile: c.broker.tokenFile, guard: guardOut, act });
+        const bad = errors(proposalSchema, p);
+        if (bad.length) {
+          return { thread: t, acted: false, reason: `not a proposal: ${bad.join("; ")}`, redactions: [] };
+        }
+        const prop = p as Proposal;
+        const fieldErr = validateProposalFields(prop);
+        if (fieldErr !== null) {
+          return { thread: t, acted: false, reason: `not a proposal: ${fieldErr}`, redactions: [] };
+        }
+        if (prop.kind === "pr" || prop.repo !== undefined) {
+          if (!isRepoAllowed(prop.repo, c.broker.allowedRepos ?? [])) {
+            return { thread: t, acted: false, reason: `repo not in broker.allowedRepos: ${prop.repo}`, redactions: [] };
+          }
+        }
+        const tier = store.read(t)?.sender_tier ?? "public";
+        if (tier !== "trusted") {
+          if (store.pendingActions(t).length >= 1) {
+            return {
+              thread: t,
+              acted: false,
+              refused: "propose",
+              reason: "refused: a pending action is already awaiting approval on this thread",
+              redactions: [],
+            };
+          }
+          const action = "propose";
+          const rawNotice = approvalNotice(action, prop);
+          const out = await outbound(context(t).cleaned_question, (scrub) => scrub(rawNotice.text), guardOut);
+          if (!("value" in out)) {
+            return {
+              thread: t,
+              acted: false,
+              refused: "propose",
+              reason: out.reason,
+              redactions: out.redactions,
+            };
+          }
+          const sentEventId = (await postEnvelope(t, { approval: true, text: out.value })) ?? undefined;
+          const pendingAction: PendingAction = {
+            action,
+            params: JSON.parse(JSON.stringify(prop)),
+            thread: t,
+            requested_at: new Date().toISOString(),
+            posted_event_id: typeof sentEventId === "string" ? sentEventId : undefined,
+          };
+          store.addPendingAction(pendingAction);
+          return {
+            thread: t,
+            acted: false,
+            refused: "propose",
+            reason: "refused: propose on a public thread",
+            redactions: out.redactions,
+          };
+        }
+        return broker(t, JSON.stringify(p), {
+          tokenFile: c.broker.tokenFile,
+          allowedRepos: c.broker.allowedRepos,
+          guard: guardOut,
+          act,
+        });
       },
-      clone: (url) => worktreeFor(c.mirror, url, t),
+      clone: (url) => worktreeFor({ ...c.mirror, cluster: c.mirror.cluster ?? c.tier1.cluster }, url, t, io.git),
       screen,
       room_context: async (request) => {
         if (!io.request) {
@@ -559,6 +645,15 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
           : JSON.stringify(evalResult);
         await postEnvelope(pending.thread, postContent);
         setContext(pending.thread, { eval_transcript: [...context(pending.thread).eval_transcript, { request: evalReq, result: evalResult }] });
+      } else if (pending.action === "propose") {
+        if (!c.broker.tokenFile) return;
+        const res = await broker(pending.thread, JSON.stringify(pending.params), {
+          tokenFile: c.broker.tokenFile,
+          allowedRepos: c.broker.allowedRepos,
+          guard: guardOut,
+          act,
+        });
+        await postEnvelope(pending.thread, JSON.stringify(res));
       }
     } else if (i.control === "accept" || i.control === "deeper") {
       await lifecycle.control(i.thread, i.control);

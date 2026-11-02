@@ -205,7 +205,10 @@ export class ThreadStateStore {
 
   addPendingAction(action: PendingAction): void {
     const current = this.pendingActions(action.thread);
-    writeAtomic(this.dir(action.thread), "pending_actions.json", JSON.stringify([...current, action]));
+    if (current.length >= 1) {
+      throw new Error(`refused: thread ${action.thread} already has a pending action`);
+    }
+    writeAtomic(this.dir(action.thread), "pending_actions.json", JSON.stringify([action]));
   }
 
   pendingAction(thread: string): PendingAction | undefined {

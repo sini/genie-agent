@@ -87,6 +87,12 @@ export function parseEnvelope(raw: string): Envelope {
   return { ...env, request };
 }
 
+// Monotone tier clamp (plan C7): once either tier is public, the resulting tier is public.
+export function nextTier(prior: Tier | undefined, incoming: Tier): Tier {
+  if (prior === "public" || incoming === "public") return "public";
+  return "trusted";
+}
+
 // The tier after one envelope or control. prev is undefined for a thread's first envelope.
 export function step(prev: TierState | undefined, input: Envelope | TrustControl): TierState {
   if ("control" in input) {
@@ -100,7 +106,7 @@ export function step(prev: TierState | undefined, input: Envelope | TrustControl
   const s: TierState = prev ? { ...prev } : { tier: input.request.tier, initiator: input.request.tier, participants: [], sanctioned: [] };
   const counted = [...(input.bootstrap && s.initiator === "trusted" ? [] : input.background), ...input.thread, input.request];
   for (const l of counted) {
-    if (l.tier === "public" && !s.sanctioned.includes(l.sender_id)) s.tier = "public";
+    if (!s.sanctioned.includes(l.sender_id)) s.tier = nextTier(s.tier, l.tier);
     if (!s.participants.includes(l.sender_id)) s.participants = [...s.participants, l.sender_id];
   }
   return s;

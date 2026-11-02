@@ -2,46 +2,21 @@
 // cluster or the host's networks, and connects to exactly the address it checked, so a second
 // resolution cannot rebind it. Every result is screened by guard-in before the model sees it, on
 // the supervisor's side of the bridge (Host.screen).
-import { lookup } from "node:dns/promises";
 import { get as httpGet, type IncomingMessage } from "node:http";
 import { get as httpsGet } from "node:https";
-import { BlockList, isIP } from "node:net";
+import type { BlockList } from "node:net";
+import {
+  type Address,
+  type PinOptions,
+  type Resolver,
+  pin,
+  refusedList,
+  systemResolver,
+} from "../mirror/index.ts";
 
-export type Address = { address: string; family: number };
-export type Resolver = (hostname: string) => Promise<Address[]>;
+export { type Address, type PinOptions, type Resolver, pin, refusedList, systemResolver };
 
-export const systemResolver: Resolver = (hostname) => lookup(hostname, { all: true, verbatim: true });
-
-// Loopback, this-network (0.0.0.0), RFC1918, CGNAT (the tailnet), link-local, ULA.
-const refusedRanges = [
-  "0.0.0.0/8",
-  "10.0.0.0/8",
-  "100.64.0.0/10",
-  "127.0.0.0/8",
-  "169.254.0.0/16",
-  "172.16.0.0/12",
-  "192.168.0.0/16",
-  "::/128",
-  "::1/128",
-  "fc00::/7",
-  "fe80::/10",
-];
-
-const family = (ip: string): "ipv4" | "ipv6" => (isIP(ip) === 6 ? "ipv6" : "ipv4");
-
-// The refused addresses, plus the cluster's CIDRs. An IPv4-mapped IPv6 address is checked as its
-// IPv4 address (BlockList does this).
-export function refusedList(cluster: string[]): BlockList {
-  const b = new BlockList();
-  for (const cidr of [...refusedRanges, ...cluster]) {
-    const [net, bits] = cidr.split("/");
-    if (!isIP(net) || !/^\d+$/.test(bits ?? "")) throw new Error(`not a CIDR: ${cidr}`);
-    b.addSubnet(net, Number(bits), family(net));
-  }
-  return b;
-}
-
-export interface FetchOptions {
+export interface FetchOptions extends PinOptions {
   resolve: Resolver;
   refused: BlockList;
   // Addresses let through the refusal. Tests only: production leaves it empty.
@@ -51,18 +26,6 @@ export interface FetchOptions {
 }
 
 const MAX_REDIRECTS = 3;
-
-// The checked address the request connects to.
-async function pin(u: URL, o: FetchOptions): Promise<Address> {
-  const host = u.hostname.replace(/^\[(.*)\]$/, "$1");
-  const addrs = isIP(host) ? [{ address: host, family: isIP(host) }] : await o.resolve(host);
-  if (addrs.length === 0) throw new Error(`${host} does not resolve`);
-  for (const a of addrs) {
-    if (!o.exempt?.includes(a.address) && o.refused.check(a.address, family(a.address)))
-      throw new Error(`refused: ${host} resolves to ${a.address}, a private or cluster address`);
-  }
-  return addrs[0];
-}
 
 const textual = (type: string) => /^text\//.test(type) || /^application\/([\w.+-]*\+)?json$/.test(type);
 

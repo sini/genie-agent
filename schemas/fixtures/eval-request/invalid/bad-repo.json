@@ -1,0 +1,6 @@
+{
+  "repo": "https://example.org/alice/nix-config",
+  "rev": "4f2a9c1",
+  "attr": "packages.x86_64-linux.default",
+  "trusted": "no"
+}

@@ -193,7 +193,7 @@ const pkgWith = (stdout: string, answer = "Set `services.foo.enable = true;`."):
   draft: { ...draft(0.2), answer },
   eval_transcript: [
     {
-      request: { repo: "github:alice/cfg", rev: "abc123", attr: "nixosConfigurations.h.config.services.foo", trusted: "no" },
+      request: { repo: "alice/cfg", rev: "abc123", attr: "nixosConfigurations.h.config.services.foo", trusted: "no" },
       result: { exit: 1, stdout_tail: stdout, stderr_tail: "error: services.foo does not exist", limit_hit: "none" },
     },
   ],

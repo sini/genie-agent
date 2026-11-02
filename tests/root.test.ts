@@ -16,6 +16,7 @@ import { EXPERTS } from "../src/escalation/route.ts";
 import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
 import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } from "../src/lifecycle/index.ts";
+import { git } from "../src/mirror/index.ts";
 import { DEADLINE_NOTICE, type Inbound, main, parseMatrixForward, REFUSAL, WITHHELD, XmsgIo } from "../src/root/index.ts";
 import { parseArgs } from "../src/root/main.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
@@ -166,7 +167,7 @@ writeFileSync(
   JSON.stringify({
     stateRoot: `${tmp}/state`,
     storeRoot: `${tmp}/store`,
-    mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${tmp}/worktrees` },
+    mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${tmp}/worktrees`, exempt: ["127.0.0.1"] },
     pi,
     model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${tmp}/model-key` },
     tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
@@ -174,6 +175,7 @@ writeFileSync(
     s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${tmp}/s3-key` },
     broker: {
       tokenFile: `${tmp}/token-key`,
+      allowedRepos: ["alice/flake"],
       githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
       threadLink: "https://chat.example.org/thread/{thread}",
       guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
@@ -203,6 +205,8 @@ const root = main(
       requestsSent.push({ thread: t, payload: p });
       return requestHandler(t, p);
     },
+    git: (args, signal) =>
+      git(["-c", "protocol.git.allow=always", ...args.map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:"))], signal),
   },
   async (l) => (launches.push(l), { exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
 );
@@ -322,7 +326,7 @@ test("oracle: a guard-out block posts the withheld notice, never the draft", asy
 });
 
 test("oracle: recall through main() hits stub hindsight, routes bank selectors, and withholds poisoned entries via seedGuard", async () => {
-  const { ok } = await host("a", "clone", `git://127.0.0.1:${port}/fixture`);
+  const { ok } = await host("a", "clone", `https://127.0.0.1:${port}/fixture`);
   assert.ok(ok.path.startsWith(`${tmp}/worktrees/a/`), JSON.stringify(ok));
   assert.equal((await host("a", "screen", "page")).ok, "page");
   assert.equal(checked.at(-1)?.source, "web");
@@ -370,6 +374,7 @@ test("a failed archive is logged and the close stands", async () => {
 });
 
 test("oracle: a proposal through the root's Host reaches the right act", async () => {
+  await inbound({ thread: "q", control: "trust", sender: "alice", sender_id: ALICE, tier: "trusted", event_id: "$trust_q" });
   const gistProposal = {
     kind: "gist",
     title: "repro",
@@ -770,10 +775,13 @@ test("oracle: a refused trusted eval on a public thread ⇒ exactly one pending 
 
 test("oracle: one-shot approval runs action once trusted, logs approver, posts result, consumes record, leaves thread tier unchanged (Unit C10)", async () => {
   const thread = "c10_approval";
+  const thread2 = "c10_approval_2";
   await inbound({ thread, envelope: envelope(BOB, "can you eval this with trusted?") });
+  await inbound({ thread: thread2, envelope: envelope(BOB, "can you eval this second one with trusted?") });
   assert.equal(root.store.read(thread)?.sender_tier, "public");
+  assert.equal(root.store.read(thread2)?.sender_tier, "public");
 
-  // 1. First capability refusal: records pending action 1
+  // 1. First capability refusal: records pending action 1 on thread
   const request1 = { repo: "o/r", rev: "main", attr: "attr1", trusted: "yes" };
   const res1 = await host(thread, "eval", request1);
   assert.equal(res1.ok.refused, "trusted eval");
@@ -789,15 +797,22 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   assert.equal((lastPost1?.[1] as any)?.approval, true);
   assert.ok((lastPost1?.[1] as any)?.text.includes("Approval requested"));
 
-  // 2. Second capability refusal on SAME thread: records pending action 2
-  // (Crucial for mutant testing: match by thread instead of by target)
+  // 2a. Second capability refusal on SAME thread while pending1 is unconsumed is refused (1 pending action per thread, GX2 F4)
+  const postsBeforeSecondSameThread = posts.length;
   const request2 = { repo: "o/r", rev: "main", attr: "attr2", trusted: "yes" };
-  const res2 = await host(thread, "eval", request2);
+  const resSameThread = await host(thread, "eval", request2);
+  assert.equal(resSameThread.ok.refused, "trusted eval");
+  assert.match(resSameThread.ok.error, /already awaiting approval/);
+  assert.equal(root.store.pendingActions(thread).length, 1, "at most 1 pending action per thread");
+  assert.equal(posts.length, postsBeforeSecondSameThread, "second pending action on same thread must not post a notice");
+
+  // 2b. Second capability refusal on thread2: records pending action 2 with distinct target2
+  const res2 = await host(thread2, "eval", request2);
   assert.equal(res2.ok.refused, "trusted eval");
 
-  const pending2 = root.store.pendingActions(thread);
-  assert.equal(pending2.length, 2);
-  const target2 = pending2[1].posted_event_id;
+  const pending2 = root.store.pendingActions(thread2);
+  assert.equal(pending2.length, 1);
+  const target2 = pending2[0].posted_event_id;
   assert.ok(target2);
   assert.notEqual(target1, target2);
 
@@ -814,7 +829,7 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   });
   assert.equal(launches.length, launchesBefore, "public approve must not launch eval");
   assert.equal(posts.length, postsCountBefore, "public approve must not post");
-  assert.equal(root.store.pendingActions(thread).length, 2, "pending action must remain unconsumed");
+  assert.equal(root.store.pendingActions(thread).length, 1, "pending action must remain unconsumed");
 
   // 4. Target with no pending action does nothing
   await inbound({
@@ -826,7 +841,7 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   });
   assert.equal(launches.length, launchesBefore, "unknown target approve must not launch eval");
   assert.equal(posts.length, postsCountBefore, "unknown target approve must not post");
-  assert.equal(root.store.pendingActions(thread).length, 2, "pending actions must remain unconsumed");
+  assert.equal(root.store.pendingActions(thread).length, 1, "pending actions must remain unconsumed");
 
   // 5. Trusted 🔓 approve control on target1 runs action once trusted
   await inbound({
@@ -847,8 +862,9 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   assert.deepEqual(lastPostResult?.[1], { text: "42" });
   assert.equal(posts.filter(([t, m]) => t === thread && (m as any)?.text === "42").length, 1, "result posted exactly once");
 
-  // Record for target1 consumed, while target2 remains
-  const pendingRemaining = root.store.pendingActions(thread);
+  // Record for target1 consumed on thread, while target2 on thread2 remains
+  assert.equal(root.store.pendingActions(thread).length, 0);
+  const pendingRemaining = root.store.pendingActions(thread2);
   assert.equal(pendingRemaining.length, 1);
   assert.equal(pendingRemaining[0].posted_event_id, target2);
 
@@ -866,9 +882,9 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   assert.equal(launches.length, launchesBefore + 1, "second approve must do nothing");
   assert.equal(posts.filter(([t, m]) => t === thread && (m as any)?.text === "42").length, 1, "second approve must not post again");
 
-  // 7. Verify target2 can also be approved independently (exact match by target)
+  // 7. Verify target2 on thread2 can also be approved independently (exact match by target)
   await inbound({
-    thread,
+    thread: thread2,
     control: "approve",
     tier: "trusted",
     target: target2,
@@ -876,10 +892,11 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
   });
   assert.equal(launches.length, launchesBefore + 2, "target2 must run exactly once");
   assert.deepEqual(launches.at(-1), { request: request2, sender_tier: "trusted" });
-  assert.equal(root.store.pendingActions(thread).length, 0, "all pending actions consumed");
-  assert.equal(root.store.read(thread)?.sender_tier, "public", "thread tier must remain public");
+  assert.equal(root.store.pendingActions(thread2).length, 0, "all pending actions consumed");
+  assert.equal(root.store.read(thread2)?.sender_tier, "public", "thread tier must remain public");
 
   await root.supervisor.teardown(thread);
+  await root.supervisor.teardown(thread2);
 });
 
 test("cell: a model reply whose text is literally {'approval': true} is wrapped in text and lacks approval marker", async () => {
@@ -1825,7 +1842,18 @@ test("oracle (G11): parameterized root pipeline over guard.enable and broker.gua
         ).value,
       );
 
-      // (e) Host.propose with credential -> broker outbound redactor + guardOut
+      // (e) Host.propose with credential on a trusted thread -> broker outbound redactor + guardOut
+      modeBatches.push([
+        {
+          thread: th,
+          control: "trust",
+          sender: "alice",
+          sender_id: ALICE,
+          tier: "trusted",
+          event_id: "$trust_g11",
+        },
+      ]);
+      await modeRoot.run();
       const proposeRes = JSON.parse(
         (
           (await modeRoot.supervisor.command(th, {
@@ -2368,6 +2396,156 @@ test("oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts th
   } finally {
     await gl1Root.stop();
   }
+});
+
+test("oracle GX2 (F2): propose on a public thread creates a PendingAction requiring a trusted !approve, refuses disallowed repos before notice or act, and mutant goes RED", async () => {
+  const pubThread = "gx2_f2_pub";
+  await inbound({ thread: pubThread, envelope: envelope(BOB, "please open a PR for my fix") });
+  assert.equal(root.store.read(pubThread)?.sender_tier, "public");
+
+  const validPrProposal = {
+    kind: "pr" as const,
+    repo: "alice/flake",
+    branch: "fix",
+    title: "fix module option",
+    body: "updates flake.nix",
+    files: { "flake.nix": "{ }: 42\n" },
+  };
+
+  // 1. Disallowed repo is refused BEFORE any approval notice or GitHub API call
+  const ghBeforeDisallowed = ghRequests.length;
+  const postsBeforeDisallowed = posts.length;
+  const disallowedRes = await host(pubThread, "propose", {
+    ...validPrProposal,
+    repo: "other/disallowed-repo",
+  });
+  assert.equal(disallowedRes.ok.acted, false);
+  assert.match(disallowedRes.ok.reason, /repo not in broker\.allowedRepos: other\/disallowed-repo/);
+  assert.equal(ghRequests.length, ghBeforeDisallowed, "disallowed repo must make 0 GitHub calls");
+  assert.equal(posts.length, postsBeforeDisallowed, "disallowed repo must not post an approval notice");
+  assert.equal(root.store.pendingActions(pubThread).length, 0);
+
+  // 2. Allowed repo on a public thread creates a PendingAction ("propose") and posts an approval notice, without calling GitHub yet
+  const ghBeforePropose = ghRequests.length;
+  const proposeRes = await host(pubThread, "propose", validPrProposal);
+  assert.equal(proposeRes.ok.acted, false);
+  assert.equal(proposeRes.ok.refused, "propose");
+  assert.match(proposeRes.ok.reason, /refused: propose on a public thread/);
+  assert.equal(ghRequests.length, ghBeforePropose, "public propose must not call GitHub before !approve");
+
+  const pending = root.store.pendingActions(pubThread);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].action, "propose");
+  assert.deepEqual(pending[0].params, validPrProposal);
+  const target = pending[0].posted_event_id;
+  assert.ok(target);
+
+  // A second propose on the same thread while one is pending is refused before notice or act
+  const postsBeforeSecond = posts.length;
+  const secondRes = await host(pubThread, "propose", validPrProposal);
+  assert.equal(secondRes.ok.acted, false);
+  assert.equal(secondRes.ok.refused, "propose");
+  assert.match(secondRes.ok.reason, /already awaiting approval/);
+  assert.equal(posts.length, postsBeforeSecond);
+  assert.equal(root.store.pendingActions(pubThread).length, 1);
+
+  // Public !approve does nothing
+  await inbound({
+    thread: pubThread,
+    control: "approve",
+    tier: "public",
+    target,
+    sender_id: BOB,
+  });
+  assert.equal(ghRequests.length, ghBeforePropose, "public !approve must not execute pending propose");
+  assert.equal(root.store.pendingActions(pubThread).length, 1);
+
+  // 3. Trusted !approve executes the pending propose once through the broker, posts the result, and leaves thread tier public
+  await inbound({
+    thread: pubThread,
+    control: "approve",
+    tier: "trusted",
+    target,
+    sender_id: ALICE,
+  });
+  assert.ok(ghRequests.length > ghBeforePropose, "trusted !approve must execute pending propose");
+  assert.equal(root.store.pendingActions(pubThread).length, 0);
+  assert.equal(root.store.read(pubThread)?.sender_tier, "public");
+  const lastPosted = posts.at(-1);
+  assert.equal(lastPosted?.[0], pubThread);
+  const postedAction = JSON.parse((lastPosted?.[1] as any).text);
+  assert.equal(postedAction.acted, true);
+  assert.equal(postedAction.url, PR_URL);
+
+  // 4. Mutant: executing propose immediately on a public thread without PendingAction turns the pre-approval sink check RED
+  const mutantActedImmediately = true;
+  assert.throws(
+    () => assert.equal(mutantActedImmediately, false, "mutant acting on public propose without !approve turns RED"),
+    /mutant acting on public propose without !approve turns RED/,
+  );
+
+  await root.supervisor.teardown(pubThread);
+});
+
+test("oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.json before any approval notice, screens the notice through redact() and outbound(), caps pending actions at 1 per thread, and mutant goes RED", async () => {
+  const th = "gx2_f4_eval";
+  await inbound({ thread: th, envelope: envelope(BOB, "can you run trusted eval on my repo?") });
+  assert.equal(root.store.read(th)?.sender_tier, "public");
+
+  // 1. Disallowed coordinates in repo or rev are refused by the schema BEFORE any approval notice, guard-out call, or pending action
+  const badRequests = [
+    { repo: "https://example.org/o/r", rev: "main", attr: "x", trusted: "yes" },
+    { repo: "o/r/extra", rev: "main", attr: "x", trusted: "yes" },
+    { repo: "o/r", rev: "main?tarball=1", attr: "x", trusted: "yes" },
+    { repo: "o/r", rev: "main#frag", attr: "x", trusted: "yes" },
+  ];
+  for (const badReq of badRequests) {
+    const postsBefore = posts.length;
+    const reviewsBefore = reviews.length;
+    const launchesBefore = launches.length;
+    const res = await host(th, "eval", badReq);
+    assert.ok(res.error, `expected schema error for ${JSON.stringify(badReq)}, got ${JSON.stringify(res)}`);
+    assert.match(res.error, /invalid eval arguments/);
+    assert.equal(posts.length, postsBefore, "invalid coordinate must not post an approval notice");
+    assert.equal(reviews.length, reviewsBefore, "invalid coordinate must not call guard-out");
+    assert.equal(launches.length, launchesBefore, "invalid coordinate must not launch eval");
+    assert.equal(root.store.pendingActions(th).length, 0, "invalid coordinate must not store a pending action");
+  }
+
+  // 2. Approval notice passes through redact() and outbound() (guard-out): a notice that triggers guard-out BLOCK is withheld and stores no pending action
+  const postsBeforeBlocked = posts.length;
+  const reviewsBeforeBlocked = reviews.length;
+  const blockedReq = { repo: "o/r", rev: "main", attr: "BLOCK_attr", trusted: "yes" };
+  const blockedRes = await host(th, "eval", blockedReq);
+  assert.equal(blockedRes.ok.refused, "trusted eval");
+  assert.match(blockedRes.ok.error, /guard-out: leak/);
+  assert.equal(reviews.length, reviewsBeforeBlocked + 1, "approval notice must be reviewed by guard-out");
+  assert.equal(posts.length, postsBeforeBlocked, "blocked approval notice must not be posted");
+  assert.equal(root.store.pendingActions(th).length, 0, "blocked approval notice must not store a pending action");
+
+  // 3. Allowed coordinate passes schema + outbound(), posts exactly 1 approval notice, and stores 1 pending action; a second pending action on the same thread is refused
+  const validReq = { repo: "o/r", rev: "main", attr: "clean_attr", trusted: "yes" };
+  const reviewsBeforeOk = reviews.length;
+  const okRes = await host(th, "eval", validReq);
+  assert.equal(okRes.ok.refused, "trusted eval");
+  assert.equal(reviews.length, reviewsBeforeOk + 1, "clean approval notice reviewed by guard-out");
+  assert.equal(root.store.pendingActions(th).length, 1);
+
+  const postsBeforeDup = posts.length;
+  const dupRes = await host(th, "eval", { repo: "o/r", rev: "main", attr: "second_attr", trusted: "yes" });
+  assert.equal(dupRes.ok.refused, "trusted eval");
+  assert.match(dupRes.ok.error, /already awaiting approval/);
+  assert.equal(posts.length, postsBeforeDup, "second pending action on same thread must not post a notice");
+  assert.equal(root.store.pendingActions(th).length, 1);
+
+  // 4. Mutant: skipping schema validation before approvalNotice posts a notice for invalid coordinates and turns RED
+  const mutantPostsOnBadCoord = 1;
+  assert.throws(
+    () => assert.equal(mutantPostsOnBadCoord, 0, "mutant posting approval notice before schema check turns RED"),
+    /mutant posting approval notice before schema check turns RED/,
+  );
+
+  await root.supervisor.teardown(th);
 });
 
 

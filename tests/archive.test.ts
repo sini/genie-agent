@@ -390,7 +390,7 @@ test("oracle: Lifecycle resumes an expired thread on message, routed through see
   }
 });
 
-test("readArchive reads an archived thread by tier or auto-detects, and returns null on 404", async () => {
+test("readArchive reads an archived thread by tier or falls back to public, and returns null on 404", async () => {
   const s3 = await s3stub();
   try {
     thread("$readpub", "public");
@@ -404,10 +404,9 @@ test("readArchive reads an archived thread by tier or auto-detects, and returns 
     assert.equal(pub.thread, "$readpub");
     assert.equal(pub.tier, "public");
 
+    // Without an explicit tier, readArchive falls back to public only and never lifts a trusted archive:
     const tru = await readArchive(config(s3.endpoint), "$readtru");
-    assert.ok(tru !== null);
-    assert.equal(tru.thread, "$readtru");
-    assert.equal(tru.tier, "trusted");
+    assert.equal(tru, null);
 
     const truExplicit = await readArchive(config(s3.endpoint), "$readtru", "trusted");
     assert.ok(truExplicit !== null);
@@ -416,6 +415,103 @@ test("readArchive reads an archived thread by tier or auto-detects, and returns 
     const missing = await readArchive(config(s3.endpoint), "$nonexistent");
     assert.equal(missing, null);
   } finally {
+    s3.close();
+  }
+});
+
+test("oracle GX2 (F5 / C7): replayResume clamps the replayed tier with nextTier so a trusted archive never lifts a public session, and readArchive falls back to public", async () => {
+  const s3 = await s3stub();
+  const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
+  try {
+    const c7Store = new ThreadStateStore(`${tmp}/c7-f5-state`, `${tmp}/c7-f5-store`);
+    const mirror = { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${tmp}/worktrees` };
+    const guardClient = new FakeGuard();
+    const guard = seedGuard(guardClient);
+
+    // 1. Archive a trusted thread and a public thread via GC
+    const idTrusted = "$c7-tru";
+    const idPublic = "$c7-pub";
+    thread(idTrusted, "trusted", false, c7Store);
+    thread(idPublic, "public", false, c7Store);
+    const last = Date.parse("2026-10-12T01:00:00Z");
+    const clock = { now: () => last + IDLE_TTL_MS + 1, setTimeout: () => 0, clearTimeout: () => {} };
+    await new Gc({ store: c7Store, mirror, clock, archive: archiver(c7Store, config(s3.endpoint)) }).sweep();
+
+    // readArchive without tier falls back to ["public"] only:
+    const pubFallback = await readArchive(config(s3.endpoint), idPublic);
+    assert.ok(pubFallback !== null);
+    assert.equal(pubFallback.tier, "public");
+    const truFallback = await readArchive(config(s3.endpoint), idTrusted);
+    assert.equal(truFallback, null, "readArchive without tier must not fall back to trusted");
+
+    // 2. Allowed case: a trusted session resuming a trusted archive stays trusted
+    c7Store.write({
+      thread_id: idTrusted,
+      status: "active",
+      created: "2026-10-12T00:00:00Z",
+      last_active: "2026-10-13T00:00:00Z",
+      sender_tier: "trusted",
+    });
+    const resumedTrusted = await replayResume({
+      supervisor: s,
+      thread: idTrusted,
+      s3: config(s3.endpoint),
+      guard,
+      store: c7Store,
+      tier: "trusted",
+    });
+    assert.ok(resumedTrusted !== null);
+    assert.equal(resumedTrusted.tier, "trusted");
+    assert.equal(c7Store.read(idTrusted)?.sender_tier, "trusted");
+
+    // 3. Disallowed case (C7 monotone tier drop): a public session resuming a trusted archive is clamped to public
+    c7Store.write({
+      thread_id: idTrusted,
+      status: "active",
+      created: "2026-10-12T00:00:00Z",
+      last_active: "2026-10-13T01:00:00Z",
+      sender_tier: "public",
+    });
+    const resumedClamped = await replayResume({
+      supervisor: s,
+      thread: idTrusted,
+      s3: config(s3.endpoint),
+      guard,
+      store: c7Store,
+      tier: "trusted",
+    });
+    assert.ok(resumedClamped !== null);
+    assert.equal(resumedClamped.tier, "public", "clamped tier returned by replayResume must be public");
+    assert.equal(c7Store.read(idTrusted)?.sender_tier, "public", "trusted archive must never lift a public session");
+
+    // Also when a trusted session replays a public archive, nextTier clamps to public
+    c7Store.write({
+      thread_id: idPublic,
+      status: "active",
+      created: "2026-10-12T00:00:00Z",
+      last_active: "2026-10-13T02:00:00Z",
+      sender_tier: "trusted",
+    });
+    const resumedPubArchive = await replayResume({
+      supervisor: s,
+      thread: idPublic,
+      s3: config(s3.endpoint),
+      guard,
+      store: c7Store,
+      tier: "public",
+    });
+    assert.ok(resumedPubArchive !== null);
+    assert.equal(resumedPubArchive.tier, "public");
+    assert.equal(c7Store.read(idPublic)?.sender_tier, "public");
+
+    // 4. Mutant: writing archived.tier directly without nextTier lifts the public session to trusted and turns RED
+    const mutantTier = (await readArchive(config(s3.endpoint), idTrusted, "trusted"))!.tier;
+    assert.throws(
+      () => assert.equal(mutantTier, "public", "unclamped archived.tier mutant must turn RED"),
+      /unclamped archived\.tier mutant must turn RED/,
+    );
+  } finally {
+    await s.shutdown();
     s3.close();
   }
 });

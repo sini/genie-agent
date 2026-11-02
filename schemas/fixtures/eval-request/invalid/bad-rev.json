@@ -1,0 +1,6 @@
+{
+  "repo": "alice/nix-config",
+  "rev": "main?tarball=1",
+  "attr": "packages.x86_64-linux.default",
+  "trusted": "no"
+}
