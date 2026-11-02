@@ -37,6 +37,14 @@ export function isValidRepoCoord(repo: unknown): repo is string {
   );
 }
 
+// Repository allowlist check for PR proposals (GX2 F2). Defaults to empty ([]), refusing all
+// repositories unless explicitly configured as "owner/repo" or "owner/*".
+export function isRepoAllowed(repo: unknown, allowedRepos: readonly string[] = []): boolean {
+  if (!isValidRepoCoord(repo)) return false;
+  const [owner] = repo.split("/");
+  return allowedRepos.some((entry) => entry === repo || entry === `${owner}/*`);
+}
+
 export function isValidBranchRef(branch: unknown): branch is string {
   if (typeof branch !== "string" || !BRANCH_REF_RE.test(branch) || branch.includes("..")) return false;
   const parts = branch.split("/");
@@ -124,6 +132,8 @@ export interface Config {
   tokenFile: string;
   guard: GuardOutConfig;
   act: Act;
+  // Explicit allowlist of "owner/repo" or "owner/*" coordinates for PR proposals; defaults to [] (refuse all).
+  allowedRepos?: string[];
   // As the redactor takes them, from secretLineHashes.
   secretFileHashes?: string[];
 }
@@ -186,6 +196,11 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   const v = value as Proposal;
   const fieldErr = validateProposalFields(v);
   if (fieldErr !== null) return done(false, `not a proposal: ${fieldErr}`);
+  if (v.kind === "pr" || v.repo !== undefined) {
+    if (!isRepoAllowed(v.repo, c.allowedRepos ?? [])) {
+      return done(false, `repo not in broker.allowedRepos: ${v.repo}`);
+    }
+  }
   const out = await outbound(
     `genie-bot is about to publish this ${v.kind} on GitHub.`,
     (scrub): Proposal => ({
@@ -205,6 +220,11 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   const p = out.value;
   const postScrubErr = validateProposalFields(p);
   if (postScrubErr !== null) return done(false, `not a proposal: ${postScrubErr}`);
+  if (p.kind === "pr" || p.repo !== undefined) {
+    if (!isRepoAllowed(p.repo, c.allowedRepos ?? [])) {
+      return done(false, `repo not in broker.allowedRepos: ${p.repo}`);
+    }
+  }
 
   let token: string;
   try {

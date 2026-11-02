@@ -9,7 +9,7 @@ import { isAbsolute, resolve } from "node:path";
 import { checkUrl } from "../mirror/index.ts";
 import { DEFAULT_SCREEN_MAX_BYTES } from "../supervisor/guard-client.ts";
 import { errors, forModel, fromModel, load, type Schema } from "./schema.ts";
-import { fetchText, refusedList, type Resolver, search, systemResolver } from "./web.ts";
+import { fetchText, pin, refusedList, type Resolver, search, systemResolver } from "./web.ts";
 
 export { DEFAULT_SCREEN_MAX_BYTES };
 
@@ -353,7 +353,8 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       // A checkout moves files under the confinement root, so no read races it.
       executionMode: "sequential" as const,
       async execute(_id: string, params: { url: string }) {
-        checkUrl(params.url);
+        const u = checkUrl(params.url);
+        await pin(u, fetchOptions);
         const { path, rev } = await deps.host.clone(params.url);
         return text(JSON.stringify({ path: confine(cfg.root, path, cfg.memoryRoot), rev }));
       },

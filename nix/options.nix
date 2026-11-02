@@ -297,6 +297,12 @@ rec {
               description = "Optional public thread URL template containing `{thread}`.";
             };
 
+            allowedRepos = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "Explicit allowlist of GitHub repositories (\"owner/repo\" or \"owner/*\") for PR proposals. Empty refuses all.";
+            };
+
             guardOut = lib.mkOption {
               default = { };
               description = "Outbound guard-out model settings.";
@@ -606,6 +612,7 @@ rec {
 
       brokerAttrs = {
         tokenFile = brokerTokenFile;
+        allowedRepos = cfg.broker.allowedRepos;
         guardOut = guardOutAttrs;
       }
       // lib.optionalAttrs (cfg.broker.githubApi != null) {

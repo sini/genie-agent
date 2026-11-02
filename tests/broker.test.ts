@@ -51,11 +51,11 @@ const credential = () => `ghp_${randomBytes(27).toString("base64").replace(/[+/=
 
 const gist = (text = "{ }\n") => JSON.stringify({ kind: "gist", files: { "flake.nix": text }, title: "Minimal repro", body: "From thread !abc:example.org" });
 
-async function run(content: string, raw: string, status = 200) {
+async function run(content: string, raw: string, status = 200, allowedRepos: string[] = ["alice/nix-config"]) {
   const n = await ninfer(content, status);
   const { act, calls } = recordingAct();
   try {
-    const action = await broker("!t:example.org", raw, { tokenFile: tokenFile(randomUUID()), guard: { base: n.base, model: "m", system: "guard-out" }, act });
+    const action = await broker("!t:example.org", raw, { tokenFile: tokenFile(randomUUID()), allowedRepos, guard: { base: n.base, model: "m", system: "guard-out" }, act });
     return { action, calls, requests: n.requests };
   } finally {
     n.close();
@@ -160,6 +160,7 @@ test("oracle (G11): when guardOut.enable is false, the deterministic redactor st
   try {
     const offAction = await broker("!t:example.org", raw, {
       tokenFile: tokenFile(randomUUID()),
+      allowedRepos: ["alice/nix-config"],
       guard: { enable: false, base: n.base, model: "m", system: "guard-out" },
       act,
     });
@@ -169,6 +170,91 @@ test("oracle (G11): when guardOut.enable is false, the deterministic redactor st
     const sent = JSON.stringify(calls[0].p);
     assert.ok(!sent.includes(cred), "credential must be redacted even when guard-out is off");
     assert.deepEqual(calls[0].p, onRun.calls[0].p, "off-mode redacted proposal must equal on-mode allow proposal");
+  } finally {
+    n.close();
+  }
+});
+
+test("oracle GX2 (F2): broker.allowedRepos defaults to empty (refusing all PR proposals before guard-out and act), admits exact and owner/* matches, and mutant goes RED", async () => {
+  const prProposal = (repo: string) =>
+    JSON.stringify({
+      kind: "pr",
+      repo,
+      branch: "genie/fix-foo",
+      files: { "flake.nix": "{ }\n" },
+      title: "Fix foo",
+      body: "Body",
+    });
+
+  // 1. Default omitted allowedRepos (or empty []) refuses all PR proposals before guard-out and act
+  const n = await ninfer(verdict("pass", "clean"));
+  const { act, calls } = recordingAct();
+  try {
+    const defaultAction = await broker("!t:example.org", prProposal("alice/nix-config"), {
+      tokenFile: tokenFile(randomUUID()),
+      guard: { base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(defaultAction.acted, false);
+    assert.match(defaultAction.reason, /repo not in broker\.allowedRepos: alice\/nix-config/);
+    assert.equal(n.requests.length, 0, "disallowed repo must be refused before guard-out");
+    assert.equal(calls.length, 0, "disallowed repo must be refused before act sink");
+
+    const emptyAction = await broker("!t:example.org", prProposal("alice/nix-config"), {
+      tokenFile: tokenFile(randomUUID()),
+      allowedRepos: [],
+      guard: { base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(emptyAction.acted, false);
+    assert.equal(n.requests.length, 0);
+    assert.equal(calls.length, 0);
+
+    // 2. Allowed exact repo ("alice/nix-config") and wildcard ("sini/*") pass, while other repos ("bob/nix-config") are refused
+    const exactOk = await broker("!t:example.org", prProposal("alice/nix-config"), {
+      tokenFile: tokenFile(randomUUID()),
+      allowedRepos: ["alice/nix-config", "sini/*"],
+      guard: { base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(exactOk.acted, true);
+    assert.equal(calls.length, 1);
+
+    const wildcardOk = await broker("!t:example.org", prProposal("sini/genie-agent"), {
+      tokenFile: tokenFile(randomUUID()),
+      allowedRepos: ["alice/nix-config", "sini/*"],
+      guard: { base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(wildcardOk.acted, true);
+    assert.equal(calls.length, 2);
+
+    const callsBeforeRefused = calls.length;
+    const reqsBeforeRefused = n.requests.length;
+    const disallowed = await broker("!t:example.org", prProposal("bob/nix-config"), {
+      tokenFile: tokenFile(randomUUID()),
+      allowedRepos: ["alice/nix-config", "sini/*"],
+      guard: { base: n.base, model: "m", system: "guard-out" },
+      act,
+    });
+    assert.equal(disallowed.acted, false);
+    assert.match(disallowed.reason, /repo not in broker\.allowedRepos: bob\/nix-config/);
+    assert.equal(n.requests.length, reqsBeforeRefused, "disallowed repo must not reach guard-out");
+    assert.equal(calls.length, callsBeforeRefused, "disallowed repo must not reach act sink");
+
+    // 3. Mutant: a broker that defaults allowedRepos to ["*"] (or skips the check) turns the refusal assertion RED
+    const mutantBroker = async (repo: string) =>
+      broker("!t:example.org", prProposal(repo), {
+        tokenFile: tokenFile(randomUUID()),
+        allowedRepos: ["bob/*"],
+        guard: { base: n.base, model: "m", system: "guard-out" },
+        act,
+      });
+    const mutantRes = await mutantBroker("bob/nix-config");
+    assert.throws(
+      () => assert.equal(mutantRes.acted, false, "mutant admitting bob/nix-config must turn RED"),
+      /mutant admitting bob\/nix-config must turn RED/,
+    );
   } finally {
     n.close();
   }

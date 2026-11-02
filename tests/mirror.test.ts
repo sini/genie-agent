@@ -15,6 +15,7 @@ import {
   MirrorRefused,
   mirrorKey,
   removeWorktrees,
+  sanitizeGitStderr,
   worktreeFor,
   type MirrorConfig,
   type Runner,
@@ -62,12 +63,12 @@ before(async () => {
   daemon = spawn("git", ["daemon", "--export-all", "--reuseaddr", "--listen=127.0.0.1", `--port=${port}`, `--base-path=${served}`, served], {
     stdio: ["ignore", "ignore", "inherit"],
   });
-  base = `git://127.0.0.1:${port}`;
+  base = `https://127.0.0.1:${port}`;
   fixture("probe");
   // The daemon is up once it serves the probe fixture.
   for (let i = 0; ; i++) {
     try {
-      sh(["ls-remote", `${base}/probe`]);
+      sh(["ls-remote", `git://127.0.0.1:${port}/probe`]);
       break;
     } catch (e) {
       if (i > 50) throw e;
@@ -84,11 +85,14 @@ after(() => {
 // A fresh mirror and worktree root, and a runner that records every git argv before running it.
 function setup(fetchCap?: number, quota?: number) {
   const root = mkdtempSync(`${tmp}/case-`);
-  const cfg = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees`, fetchCap, quota };
+  const cfg: MirrorConfig = { mirrorRoot: `${root}/mirrors`, worktreeRoot: `${root}/worktrees`, fetchCap, quota, exempt: ["127.0.0.1"] };
   const calls: string[][] = [];
   const run: Runner = (args, signal) => {
     calls.push(args);
-    return git(args, signal);
+    return git(
+      ["-c", "protocol.git.allow=always", ...args.map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:"))],
+      signal,
+    );
   };
   const clones = () => calls.filter((a) => a.includes("--mirror")).length;
   const mirrors = () => readdirSync(cfg.mirrorRoot).filter((d) => !d.startsWith("."));
@@ -470,6 +474,106 @@ test("oracle GX1 (F3): threadName validated at parseMatrixForward boundary, life
   assert.equal(readFileSync(`${victimDir}/canary.txt`, "utf8"), "keep", "victim directory outside worktrees must remain intact");
   lc.stop();
   await supervisor.shutdown();
+});
+
+test("oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED", async () => {
+  const rev = fixture("f3https");
+  const { cfg, run, calls } = setup();
+  const dnsMap: Record<string, string> = {
+    "public.example.org": "93.184.216.34",
+    "loopback.example.org": "127.0.0.1",
+    "private10.example.org": "10.0.0.42",
+    "cgnat.example.org": "100.64.0.9",
+    "metadata.example.org": "169.254.169.254",
+    "cluster.example.org": "198.51.100.7",
+  };
+  const resolver = async (h: string) => (dnsMap[h] ? [{ address: dnsMap[h], family: 4 }] : []);
+
+  // 1. Allowed case: https:// URL resolving to a public IP (or exempt test IP) passes checkUrl + pin() and clones
+  const allowedCfg: MirrorConfig = {
+    ...cfg,
+    exempt: ["127.0.0.1"],
+    cluster: ["198.51.100.0/24"],
+    resolve: resolver,
+  };
+  const okWt = await worktreeFor(allowedCfg, `${base}/f3https`, "t-ok", run);
+  assert.equal(okWt.rev, rev);
+
+  // Also verify public hostname resolution passes pin() and reaches runner:
+  let publicReachedRunner = false;
+  const publicSpy: Runner = async (args) => {
+    publicReachedRunner = true;
+    if (args[0] === "clone") mkdirSync(args.at(-1)!, { recursive: true });
+    if (args.includes("worktree")) mkdirSync(args.at(-2)!, { recursive: true });
+    return args.includes("rev-parse") ? `${rev}\n` : "";
+  };
+  const pubWt = await worktreeFor(
+    { ...cfg, exempt: [], cluster: ["198.51.100.0/24"], resolve: resolver },
+    "https://public.example.org/org/repo",
+    "t-pub",
+    publicSpy,
+  );
+  assert.equal(publicReachedRunner, true);
+  assert.equal(pubWt.rev, rev);
+
+  // 2. Disallowed cases: git://, http://, private IPs, and cluster CIDRs are refused BEFORE the git runner sink
+  const strictCfg: MirrorConfig = {
+    ...cfg,
+    exempt: [],
+    cluster: ["198.51.100.0/24"],
+    resolve: resolver,
+  };
+  const disallowedUrls: [string, RegExp][] = [
+    [`git://127.0.0.1:9418/f3https`, /only https:\/\/ URLs are fetched/],
+    [`http://public.example.org/org/repo`, /only https:\/\/ URLs are fetched/],
+    [`https://127.0.0.1/org/repo`, /private or cluster address/],
+    [`https://loopback.example.org/org/repo`, /private or cluster address/],
+    [`https://private10.example.org/org/repo`, /private or cluster address/],
+    [`https://cgnat.example.org/org/repo`, /private or cluster address/],
+    [`https://metadata.example.org/org/repo`, /private or cluster address/],
+    [`https://cluster.example.org/org/repo`, /private or cluster address/],
+  ];
+  for (const [badUrl, expected] of disallowedUrls) {
+    const callsBefore = calls.length;
+    await assert.rejects(
+      worktreeFor(strictCfg, badUrl, "t-refused", run),
+      (e: unknown) => e instanceof MirrorRefused && expected.test(e.reason),
+      `worktreeFor must refuse ${badUrl} before git starts`,
+    );
+    assert.equal(calls.length, callsBefore, `0 git commands may run for refused URL ${badUrl}`);
+  }
+
+  // Also verify git runner itself disables protocol.git.allow (refuses git:// transport at the git binary level)
+  const daemonUrl = base.replace(/^https:/i, "git:") + "/probe";
+  await assert.rejects(
+    git(["ls-remote", daemonUrl]),
+    /transport 'git' not allowed|protocol 'git' is not allowed/,
+  );
+
+  // 3. Sanitised git stderr: strips remote: sideband lines and URL userinfo/query/fragment tokens
+  const rawStderr = [
+    "remote: INTERNAL_BANNER_DO_NOT_ECHO",
+    "fatal: unable to access 'https://user:secret-pass@example.org/org/repo.git?token=xyz#frag': The requested URL returned error: 502",
+    "second line dropped",
+  ].join("\n");
+  const sanitised = sanitizeGitStderr(rawStderr);
+  assert.ok(!sanitised.includes("INTERNAL_BANNER_DO_NOT_ECHO"), "remote: sideband lines must be stripped");
+  assert.ok(!sanitised.includes("secret-pass"), "URL password must be stripped");
+  assert.ok(!sanitised.includes("token=xyz"), "URL query string must be stripped");
+  assert.ok(!sanitised.includes("second line dropped"), "only one bounded line may remain");
+  assert.match(sanitised, /https:\/\/example\.org\/org\/repo\.git/);
+
+  // 4. Mutant: bypassing pin() or allowing git:// lets a refused URL reach the runner and turns RED
+  let mutantCalls = 0;
+  const mutantWorktreeFor = async (url: string) => {
+    mutantCalls++;
+    return { path: "/tmp/mutant", rev: "000" };
+  };
+  await mutantWorktreeFor("https://cluster.example.org/org/repo");
+  assert.throws(
+    () => assert.equal(mutantCalls, 0, "mutant without pin() reaches runner and turns RED"),
+    /mutant without pin\(\) reaches runner and turns RED/,
+  );
 });
 
 
