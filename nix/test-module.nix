@@ -285,20 +285,27 @@ let
         RuntimeDirectory
         WorkingDirectory
         ExecStart
+        AmbientCapabilities
+        CapabilityBoundingSet
+        DevicePolicy
         ProtectSystem
         NoNewPrivileges
         PrivateTmp
         PrivateDevices
         PrivateUsers
+        ProtectClock
         ProtectHome
         ProtectHostname
         ProtectKernelLogs
         ProtectKernelTunables
         ProtectKernelModules
         ProtectControlGroups
+        RemoveIPC
         RestrictAddressFamilies
+        RestrictRealtime
         RestrictSUIDSGID
         LockPersonality
+        SystemCallArchitectures
         UMask
         ;
       Delegate = u.serviceConfig.Delegate or false;
@@ -310,6 +317,9 @@ let
       SystemCallErrorNumber = u.serviceConfig.SystemCallErrorNumber or null;
       ExecStartPre = u.serviceConfig.ExecStartPre or null;
       PrivatePIDs = u.serviceConfig.PrivatePIDs or false;
+      PrivateNetwork = u.serviceConfig.PrivateNetwork or false;
+      ProtectProc = u.serviceConfig.ProtectProc or null;
+      RestrictNamespaces = u.serviceConfig.RestrictNamespaces or false;
       LimitCORE = u.serviceConfig.LimitCORE or null;
       EnvironmentFile = u.serviceConfig.EnvironmentFile or null;
     };

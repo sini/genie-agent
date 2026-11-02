@@ -33,6 +33,7 @@ let
   };
 
   commonHardening = {
+    AmbientCapabilities = "";
     CapabilityBoundingSet = "";
     DevicePolicy = "closed";
     LockPersonality = true;
@@ -47,6 +48,7 @@ let
     ProtectKernelModules = true;
     ProtectKernelTunables = true;
     ProtectSystem = "strict";
+    RemoveIPC = true;
     RestrictAddressFamilies = [
       "AF_INET"
       "AF_INET6"
@@ -407,6 +409,7 @@ let
         tierCfg.memoryDir
       ];
       dispInaccessiblePaths = [
+        "-/run/credentials/genie-dispatcher@${otherTier}.service"
         "-/run/agenix"
         "-/run/agenix.d"
         "-/run/genie-secrets"
@@ -506,8 +509,17 @@ let
             # PrivatePIDs = false so genie-dispatcher runs in the ancestor (host) PID namespace
             # and SO_PEERPIDFD resolves peers in genie-herdr@<tier>'s child PID namespace.
             PrivatePIDs = false;
+            PrivateNetwork = true;
+            ProtectProc = "invisible";
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            RestrictNamespaces = true;
             LimitCORE = 0;
-            SystemCallFilter = [ "~perf_event_open" ];
+            SystemCallFilter = [
+              "@system-service"
+              "~@privileged"
+              "~@resources"
+              "~perf_event_open"
+            ];
             SystemCallErrorNumber = "EPERM";
             LoadCredential = lib.optional (
               tierCfg.tokenEnvironmentFile != null

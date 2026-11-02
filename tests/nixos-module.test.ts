@@ -44,8 +44,15 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
   assert.equal(rootUnit.serviceConfig.ProtectHome, "tmpfs", "ProtectHome must be tmpfs when xmsgSocket is set");
   assert.equal(rootUnit.serviceConfig.ProtectKernelTunables, true);
   assert.equal(rootUnit.serviceConfig.ProtectKernelModules, true);
+  assert.equal(rootUnit.serviceConfig.ProtectClock, true);
+  assert.equal(rootUnit.serviceConfig.AmbientCapabilities, "");
+  assert.equal(rootUnit.serviceConfig.CapabilityBoundingSet, "");
+  assert.equal(rootUnit.serviceConfig.DevicePolicy, "closed");
+  assert.equal(rootUnit.serviceConfig.RemoveIPC, true);
+  assert.equal(rootUnit.serviceConfig.RestrictRealtime, true);
   assert.equal(rootUnit.serviceConfig.RestrictSUIDSGID, true);
   assert.equal(rootUnit.serviceConfig.LockPersonality, true);
+  assert.equal(rootUnit.serviceConfig.SystemCallArchitectures, "native");
   assert.equal(rootUnit.serviceConfig.UMask, "0077");
   assert.equal(rootUnit.serviceConfig.Delegate, true, "Delegate must be true when eval.memoryMax is set");
   assert.equal(rootUnit.serviceConfig.ProtectControlGroups, false, "ProtectControlGroups must be false when Delegate is true");
@@ -98,6 +105,26 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
     assert.equal(dispUnit.serviceConfig.User, "sini");
     assert.equal(herdrUnit.serviceConfig.PrivateUsers, false);
     assert.equal(dispUnit.serviceConfig.PrivateUsers, false);
+    assert.equal(herdrUnit.serviceConfig.AmbientCapabilities, "");
+    assert.equal(herdrUnit.serviceConfig.CapabilityBoundingSet, "");
+    assert.equal(herdrUnit.serviceConfig.ProtectClock, true);
+    assert.equal(herdrUnit.serviceConfig.RemoveIPC, true);
+    assert.equal(herdrUnit.serviceConfig.SystemCallArchitectures, "native");
+    assert.equal(dispUnit.serviceConfig.AmbientCapabilities, "");
+    assert.equal(dispUnit.serviceConfig.CapabilityBoundingSet, "");
+    assert.equal(dispUnit.serviceConfig.ProtectClock, true);
+    assert.equal(dispUnit.serviceConfig.RemoveIPC, true);
+    assert.equal(dispUnit.serviceConfig.SystemCallArchitectures, "native");
+    assert.equal(dispUnit.serviceConfig.PrivateNetwork, true);
+    assert.equal(dispUnit.serviceConfig.ProtectProc, "invisible");
+    assert.deepEqual(dispUnit.serviceConfig.RestrictAddressFamilies, ["AF_UNIX"]);
+    assert.equal(dispUnit.serviceConfig.RestrictNamespaces, true);
+    assert.deepEqual(dispUnit.serviceConfig.SystemCallFilter, [
+      "@system-service",
+      "~@privileged",
+      "~@resources",
+      "~perf_event_open",
+    ]);
     assert.match(herdrUnit.serviceConfig.ExecStart, new RegExp(`--session genie-${tier} server`));
     assert.match(dispUnit.serviceConfig.ExecStart, new RegExp(`--service-name genie-expert-${tier}`));
     assert.match(dispUnit.serviceConfig.ExecStart, new RegExp(`--herdr-session genie-${tier}`));
@@ -330,6 +357,10 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
         `expected ${masked} in genie-herdr@${tier}.InaccessiblePaths`,
       );
     }
+    assert.ok(
+      dispSc.InaccessiblePaths.includes(`-/run/credentials/genie-dispatcher@${other}.service`),
+      `expected -/run/credentials/genie-dispatcher@${other}.service in genie-dispatcher@${tier}.InaccessiblePaths`,
+    );
 
     // 4. genie-herdr@<tier>.path includes bubblewrap, xmsg, and ripgrep
     assert.ok(herdrUnit.path.some((p: string) => p.includes("bubblewrap")));

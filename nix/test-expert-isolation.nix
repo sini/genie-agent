@@ -2227,6 +2227,16 @@ let
             ["systemctl", "show", "-p", "MainPID", "--value", "genie-dispatcher@trusted"],
             text=True,
         ).strip()
+        # Wait for (sd-executor) to complete setup_namespace()/exec_setup_credentials() and execve
+        for pid_s in (disp_pub_pid, disp_tru_pid):
+            for _ in range(50):
+                try:
+                    comm = open(f"/proc/{pid_s}/comm", "r", encoding="utf-8").read().strip()
+                except OSError:
+                    comm = "(sd-executor)"
+                if comm != "(sd-executor)":
+                    break
+                time.sleep(0.05)
         c5_probe = subprocess.run([
             "nsenter", "-t", disp_pub_pid, "-m",
             "setpriv", "--reuid=1000", "--regid=100", "--init-groups",
@@ -3530,6 +3540,19 @@ pkgs.testers.runNixOSTest {
       print(driver_out)
       if rc != 0:
           red.append("gi15-driver")
+
+      # XH2: systemd-analyze security exposure check across genie-agent, genie-herdr@*, and genie-dispatcher@*
+      for unit, max_score in [
+          ("genie-agent.service", 4.0),
+          ("genie-herdr@public.service", 3.8),
+          ("genie-herdr@trusted.service", 3.8),
+          ("genie-dispatcher@public.service", 0.8),
+          ("genie-dispatcher@trusted.service", 0.8),
+      ]:
+          line = real.succeed(f"systemd-analyze security --no-pager {unit} | tail -n 1").strip()
+          print(f"[XH2 exposure] {unit}: {line}")
+          score = float(line.split(":")[1].strip().split()[0])
+          cell(f"XH2 {unit}", score <= max_score, f"{line} (<= {max_score})")
 
       for m in (probe, real):
           t0 = time.monotonic()
