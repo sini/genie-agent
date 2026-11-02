@@ -3597,36 +3597,32 @@ pkgs.testers.runNixOSTest {
       def has(m, line, f):
           return m.execute(f"grep -q -F -- '{line}' {f}")[0] == 0
 
-      def check_unit_ns_and_exe(m, unit, exe_suffix):
-          cmd = (
+      def unit_ns_and_exe_cmd(unit, exe_suffix):
+          return (
               f"pid=$(systemctl show -p MainPID --value {unit}) && "
               f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
               f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
-              f"case \"$(readlink /proc/$pid/exe)\" in *{exe_suffix}) true ;; *) false ;; esac"
+              f"[ \"$(readlink /proc/$pid/exe)\" != \"$(readlink /proc/1/exe)\" ] && "
+              f"(case \"$(readlink /proc/$pid/exe)\" in *{exe_suffix}) true ;; *) tr '\\0' ' ' < /proc/$pid/cmdline | grep -qF -- '{exe_suffix}' ;; esac)"
           )
-          return m.execute(cmd)[0] == 0
+
+      def check_unit_ns_and_exe(m, unit, exe_suffix):
+          return m.execute(unit_ns_and_exe_cmd(unit, exe_suffix))[0] == 0
 
       start_all()
       for m in (probe, real):
           m.wait_for_unit("multi-user.target")
           for tier in ("public", "trusted"):
-              m.wait_until_succeeds(
-                  f"pid=$(systemctl show -p MainPID --value genie-herdr@{tier}) && "
-                  f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
-                  f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
-                  f"case \"$(readlink /proc/$pid/exe)\" in */herdr) true ;; *) false ;; esac && "
-                  f"${pkgs.python3}/bin/python3 -I -c 'import socket; "
-                  f"s1=socket.socket(socket.AF_UNIX); s1.connect(\"${stateDir}/herdr-session-{tier}/herdr.sock\"); s1.close(); "
-                  f"s2=socket.socket(socket.AF_UNIX); s2.connect(\"${stateDir}/herdr-session-{tier}/herdr-client.sock\"); s2.close()'",
-                  timeout=30,
-              )
-              m.wait_until_succeeds(
-                  f"pid=$(systemctl show -p MainPID --value genie-dispatcher@{tier}) && "
-                  f"[ -n \"$pid\" ] && [ \"$pid\" -gt 0 ] && "
-                  f"[ \"$(readlink /proc/$pid/ns/mnt)\" != \"$(readlink /proc/1/ns/mnt)\" ] && "
-                  f"case \"$(readlink /proc/$pid/exe)\" in */genie-dispatcher) true ;; *) false ;; esac",
-                  timeout=30,
-              )
+              m.wait_until_succeeds(unit_ns_and_exe_cmd(f"genie-herdr@{tier}", "/herdr"), timeout=30)
+              m.wait_until_succeeds(unit_ns_and_exe_cmd(f"genie-dispatcher@{tier}", "/genie-dispatcher"), timeout=30)
+      for tier in ("public", "trusted"):
+          probe.wait_until_succeeds(f"grep -q 'probe done' ${stateDir}/probe-{tier}.log", timeout=30)
+          real.wait_until_succeeds(
+              f"${pkgs.python3}/bin/python3 -I -c 'import socket; "
+              f"s1=socket.socket(socket.AF_UNIX); s1.connect(\"${stateDir}/herdr-session-{tier}/herdr.sock\"); s1.close(); "
+              f"s2=socket.socket(socket.AF_UNIX); s2.connect(\"${stateDir}/herdr-session-{tier}/herdr-client.sock\"); s2.close()'",
+              timeout=30,
+          )
       real.wait_for_unit("genie-stub-api.service")
       real.wait_until_succeeds(
           "${pkgs.python3}/bin/python3 -I -c 'import socket; "
