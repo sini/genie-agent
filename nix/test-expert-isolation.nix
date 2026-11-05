@@ -561,6 +561,79 @@ let
     }))
   '';
 
+  gv2EvalNixProbe = pkgs.writeScriptBin "nix" ''
+    #!${pkgs.python3}/bin/python3 -I
+    import errno, json, os, sys
+
+    try:
+        self_status = open("/proc/self/status", "r", encoding="utf-8").read()
+        nspids = []
+        for line in self_status.splitlines():
+            if line.startswith("NSpid:"):
+                nspids = [int(x) for x in line.split()[1:] if x.isdigit()]
+        self_status_ok = len(nspids) >= 1 and "Uid:\t1000" in self_status
+    except OSError:
+        nspids = []
+        self_status_ok = False
+
+    def probe_pid(pid):
+        if not pid:
+            return {}
+        out = {}
+        for sub in ("environ", "mem", "root"):
+            p = f"/proc/{pid}/{sub}"
+            try:
+                if sub == "root":
+                    os.listdir(p)
+                else:
+                    fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+                    os.close(fd)
+                out[sub] = "OK"
+            except OSError as ex:
+                out[sub] = errno.errorcode.get(ex.errno, str(ex.errno))
+        return out
+
+    root_res = probe_pid(1)
+    max_pid = max(nspids[0] if nspids else 64, 64)
+    jail_unit_pids = set(nspids[:1] + [os.getpid(), os.getppid()])
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            for line in open(f"/proc/{d}/status", "r", encoding="utf-8"):
+                if line.startswith("NSpid:"):
+                    parts = [int(x) for x in line.split()[1:] if x.isdigit()]
+                    if len(parts) >= 2 and parts[-1] in (1, 2):
+                        jail_unit_pids.add(parts[0])
+        except OSError:
+            pass
+    other_leaks = {}
+    other_checked = 0
+    for cand in range(2, max_pid + 16):
+        if cand in jail_unit_pids:
+            continue
+        res = probe_pid(cand)
+        other_checked += 1
+        if any(v not in ("ENOENT", "EACCES") for v in res.values()):
+            other_leaks[str(cand)] = res
+
+    sys.stderr.write(
+        "GV2_EVAL_PROC_PROBE:"
+        + json.dumps({
+            "self_status_ok": self_status_ok,
+            "nspids": nspids,
+            "root": root_res,
+            "other_checked": other_checked,
+            "other_leaks": other_leaks,
+        })
+        + "\n"
+    )
+    sys.stderr.flush()
+    sys.stdout.write('"gv2-eval-ok"\n')
+    sys.stdout.flush()
+    sys.exit(0)
+  '';
+
   gi15TestScripts = pkgs.writeTextDir "stub_api.py" ''
     import functools, http.server, json, os, socket, socketserver, ssl, subprocess, sys, threading, time, urllib.parse
 
@@ -972,11 +1045,25 @@ let
                         tc = ("read", {"path": f"{cp}/tracked-link"})
                     elif step == 4:
                         tc = ("web_search", {"query": "gv2-search-canary"})
-                    elif step == 5:
+                    elif step == 5 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount"):
+                        tc = ("eval", {
+                            "repo": "owner/repo",
+                            "rev": "0123456789abcdef0123456789abcdef01234567",
+                            "attr": "packages.x86_64-linux.default",
+                            "trusted": "no",
+                            "secrets": "none",
+                        })
+                    elif (step == 5 and prompt not in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount")) or (step == 6 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount")):
                         try:
                             cp = json.loads(tool_outs[1]).get("path", "/err")
                         except Exception:
                             cp = f"err:{tool_outs[1]}"
+                        ev_out = None
+                        if prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount") and len(tool_outs) > 5:
+                            try:
+                                ev_out = json.loads(tool_outs[5])
+                            except Exception:
+                                ev_out = {"raw": tool_outs[5]}
                         ans_str = json.dumps({
                             "gv2": prompt,
                             "mem": tool_outs[0].splitlines()[0].strip() if tool_outs[0] else "",
@@ -984,6 +1071,7 @@ let
                             "readme": tool_outs[2].strip(),
                             "link": tool_outs[3].strip(),
                             "search": tool_outs[4].strip(),
+                            **({"eval": ev_out} if ev_out is not None else {}),
                         })
                         tc = ("reply", {
                             "answer": ans_str,
@@ -3910,6 +3998,37 @@ let
 
                 with open(dropin_file, "w", encoding="utf-8") as df:
                     df.write(f"[Service]\nExecStart=\nExecStart={orig_root_bin} --config {mut_cfg_path}\n")
+            elif mutant == "M-eval-proc-mount":
+                mut_eval_bin_dir = f"{STATE_DIR}/gv2-mut-eval-bin"
+                os.makedirs(mut_eval_bin_dir, exist_ok=True)
+                os.chown(mut_eval_bin_dir, 1000, 100)
+                os.chmod(mut_eval_bin_dir, 0o755)
+                mut_eval_bwrap = f"{mut_eval_bin_dir}/bwrap"
+                with open(mut_eval_bwrap, "w", encoding="utf-8") as mf:
+                    mf.write("\n".join([
+                        "#!${pkgs.python3}/bin/python3 -I",
+                        "import os, sys",
+                        'real_bwrap = "${pkgs.bubblewrap}/bin/bwrap"',
+                        "argv = sys.argv[1:]",
+                        "if '--unshare-all' in argv or '--unshare-ipc' in argv:",
+                        "    new_argv = ['--unshare-pid']",
+                        "    i = 0",
+                        "    while i < len(argv):",
+                        "        if argv[i] == '--bind' and i + 2 < len(argv) and argv[i + 1] == '/proc' and argv[i + 2] == '/proc':",
+                        "            new_argv.extend(['--proc', '/proc'])",
+                        "            i += 3",
+                        "        else:",
+                        "            new_argv.append(argv[i])",
+                        "            i += 1",
+                        "    argv = new_argv",
+                        "os.execv(real_bwrap, [real_bwrap] + argv)",
+                    ]) + "\n")
+                os.chown(mut_eval_bwrap, 1000, 100)
+                os.chmod(mut_eval_bwrap, 0o755)
+                m_path = re.search(r'Environment="PATH=([^"]+)"', cat_ga)
+                orig_path = m_path.group(1) if m_path else "/run/current-system/sw/bin"
+                with open(dropin_file, "w", encoding="utf-8") as df:
+                    df.write(f'[Service]\nEnvironment="PATH={mut_eval_bin_dir}:{orig_path}"\n')
             elif mutant == "M-no-protectproc":
                 with open(dropin_file, "w", encoding="utf-8") as df:
                     df.write("[Service]\nPrivatePIDs=false\nProtectProc=default\n")
@@ -3959,6 +4078,34 @@ let
                 else []
             )
             no_threads_seg = not os.path.exists(f"{STATE_DIR}/state/threads")
+            ev_a = ans_a.get("eval") if isinstance(ans_a.get("eval"), dict) else {}
+            ev_stderr = ev_a.get("stderr_tail", "") if isinstance(ev_a, dict) else ""
+            ev_probe = {}
+            for line in ev_stderr.splitlines():
+                if line.startswith("GV2_EVAL_PROC_PROBE:"):
+                    try:
+                        ev_probe = json.loads(line.split("GV2_EVAL_PROC_PROBE:", 1)[1])
+                    except Exception:
+                        pass
+            root_probe = ev_probe.get("root") if isinstance(ev_probe.get("root"), dict) else {}
+            eval_ok = (
+                True
+                if mutant not in (None, "M-eval-proc-mount")
+                else (
+                    isinstance(ev_a, dict)
+                    and "Can't mount proc" not in ev_stderr
+                    and "bwrap:" not in ev_stderr
+                    and ev_a.get("exit") == 0
+                    and ev_a.get("limit_hit") == "none"
+                    and "gv2-eval-ok" in ev_a.get("stdout_tail", "")
+                    and ev_probe.get("self_status_ok") is True
+                    and set(root_probe.keys()) == {"environ", "mem", "root"}
+                    and all(v in ("ENOENT", "EACCES") for v in root_probe.values())
+                    and isinstance(ev_probe.get("other_checked"), int)
+                    and ev_probe.get("other_checked", 0) >= 10
+                    and ev_probe.get("other_leaks") == {}
+                )
+            )
             step_a_ok = (
                 b_ok
                 and ans_a.get("gv2") == f"gv2-turn-A:{tag}"
@@ -3967,13 +4114,14 @@ let
                 and "/etc/passwd" in ans_a.get("link", "")
                 and "root:x:" not in ans_a.get("link", "")
                 and "gv2-search-result-canary:gv2-search-canary" in ans_a.get("search", "")
+                and eval_ok
                 and symlink_flat_ok
                 and len(jsonl_files) >= 1
                 and no_threads_seg
             )
             if not step_a_ok:
                 return False, (
-                    f"stepA failed: b_ok={b_ok} ans_a={ans_a} symlink_flat_ok={symlink_flat_ok} "
+                    f"stepA failed: b_ok={b_ok} eval_ok={eval_ok} ans_a={ans_a} symlink_flat_ok={symlink_flat_ok} "
                     f"jsonl={jsonl_files} no_threads_seg={no_threads_seg} rep_a={rep_a_raw!r}"
                 )
 
@@ -4146,7 +4294,7 @@ let
                 and p4_private_users_ok
             )
             return ok, (
-                f"stepA={step_a_ok}(turn={turn_a_ms:.0f}ms) creds={creds_ok} "
+                f"stepA={step_a_ok}(turn={turn_a_ms:.0f}ms,eval_probe={ev_probe}) creds={creds_ok} "
                 f"B1={pr['b1_ok']}(nspids={pr['nspids']}) "
                 f"B2={pr['b2_ok']}({ {k: v for k, v in pr['b2_results'].items() if v != 'ENOENT'} }) "
                 f"B3={pr['b3_ok']}(checked={pr['b3_checked']},leaks={pr['b3_leaks']}) "
@@ -4158,8 +4306,10 @@ let
             if os.path.exists(dropin_file):
                 os.unlink(dropin_file)
                 subprocess.run(["systemctl", "daemon-reload"], check=False)
-            for p in (mut_bwrap_path, mut_cfg_path):
-                if os.path.exists(p):
+            for p in (mut_bwrap_path, mut_cfg_path, f"{STATE_DIR}/gv2-mut-eval-bin"):
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.exists(p):
                     os.unlink(p)
             subprocess.run(["systemctl", "reset-failed", "genie-agent.service"], check=False)
             subprocess.run(["systemctl", "restart", "genie-agent.service"], check=False)
@@ -4301,6 +4451,9 @@ let
     # 8.22 M-no-protectproc -> GV2
     check_mutant("M-no-protectproc", "GV2", *eval_gv2(mutant="M-no-protectproc"))
 
+    # 8.23 M-eval-proc-mount -> GV2
+    check_mutant("M-eval-proc-mount", "GV2", *eval_gv2(mutant="M-eval-proc-mount"))
+
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)
         timing_end("red")
@@ -4400,6 +4553,7 @@ pkgs.testers.runNixOSTest {
             keyFile = "/run/genie-secrets/model-key";
           };
           tier1.searxngUrl = "http://gv2-stub:18080";
+          eval.memoryMax = null;
           broker = {
             tokenFile = "/run/genie-secrets/broker-token";
             guardOut = {
@@ -4417,6 +4571,7 @@ pkgs.testers.runNixOSTest {
           };
           experts.dispatcherPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.genie-dispatcher;
         };
+        systemd.services.genie-agent.path = lib.mkBefore [ gv2EvalNixProbe ];
         systemd.services.genie-agent.environment = {
           NIX_SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";
           SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";

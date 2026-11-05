@@ -55,10 +55,10 @@ export const effectiveTier = ({ request, sender_tier }: Launch): Tier =>
 
 const tail = (s: string) => s.slice(-TAIL_CHARS);
 
-const which = (name: string): string => {
+const which = (name: string, resolve = true): string => {
   for (const dir of (process.env.PATH ?? "").split(":")) {
     const p = `${dir}/${name}`;
-    if (dir && existsSync(p)) return realpathSync(p);
+    if (dir && existsSync(p)) return resolve ? realpathSync(p) : p;
   }
   throw new Error(`${name} not found on PATH`);
 };
@@ -283,7 +283,10 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   // ponytail: the whole host store is bound read-only for the nix binary's closure; bind only that
   // closure if this runner leaves the gVisor Job.
   const bwrap = [
-    "--unshare-all",
+    "--unshare-user",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
     "--share-net",
     "--die-with-parent",
     "--ro-bind", "/nix/store", "/nix/store",
@@ -292,7 +295,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     "--ro-bind-try", caBundle, caBundle,
     "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
     "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
-    "--proc", "/proc",
+    "--bind", "/proc", "/proc",
     "--dev", "/dev",
     "--tmpfs", "/tmp",
     // The throwaway store sits at a fixed jail path, so it never nests inside a host build dir.
@@ -313,7 +316,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     }
     // In its own cgroup, bwrap is moved there before it runs, so every process of the eval is in it.
     const [command, args] = cg
-      ? [which("sh"), ["-c", 'echo 0 > "$0/cgroup.procs" && exec "$@"', cg, which("bwrap"), ...bwrap]]
+      ? [which("sh"), ["-c", 'echo 0 > "$0/cgroup.procs" && exec "$@"', cg, which("env", false), "-u", "SHLVL", which("bwrap"), ...bwrap]]
       : [which("bwrap"), bwrap];
     return await new Promise<EvalResult>((resolve, reject) => {
       const child = spawn(command, args, {
@@ -408,10 +411,14 @@ let cgroupParent: string | null | undefined;
 const evalCgroup = (): string | null => {
   if (cgroupParent === undefined) {
     cgroupParent = null;
-    const own = existsSync("/proc/self/cgroup") ? ownCgroup() : "";
+    const rawOwn = existsSync("/proc/self/cgroup") ? ownCgroup() : "";
+    const own = rawOwn.endsWith("/genie-runner") ? rawOwn.slice(0, -"/genie-runner".length) : rawOwn;
     try {
-      mkdirSync(`${own}/genie-runner`);
+      mkdirSync(`${own}/genie-runner`, { recursive: true });
       writeFileSync(`${own}/genie-runner/cgroup.procs`, "0");
+      for (const pid of readFileSync(`${own}/cgroup.procs`, "utf8").trim().split(/\s+/)) {
+        if (pid) writeFileSync(`${own}/genie-runner/cgroup.procs`, pid);
+      }
       writeFileSync(`${own}/cgroup.subtree_control`, "+memory");
       cgroupParent = own;
     } catch {
