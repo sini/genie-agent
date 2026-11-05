@@ -5,7 +5,7 @@
 // thread's conversation (design row 21) and there is no second transcript format. The thread's Nix
 // store, mounted only into its eval Jobs, is a separate root, so state is never inside it.
 // Collection is P3's, src/gc, and the archive P4's; parking and closing are C4's, src/lifecycle.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 
 export type Tier = "public" | "trusted";
 
@@ -67,6 +67,32 @@ export function checkThread(thread: string): string {
   if (!thread || thread === "." || thread.includes("..") || thread.includes("/") || thread.includes("\0"))
     throw new Error(`thread state: refused thread id ${JSON.stringify(thread)}`);
   return thread;
+}
+
+// Safely reads a session file from the thread's writable session directory (GS2 C1):
+// opens with O_RDONLY | O_NONBLOCK | O_NOFOLLOW and verifies fstat().isFile() so a symlink
+// or FIFO planted inside the writable session directory is refused without following or blocking.
+export function readSessionFile(path: string, opts?: { noFollow?: boolean }): string | null {
+  const noFollow = opts?.noFollow ?? true;
+  const flags =
+    constants.O_RDONLY |
+    constants.O_NONBLOCK |
+    (noFollow ? constants.O_NOFOLLOW : 0);
+  let fd: number;
+  try {
+    fd = openSync(path, flags);
+  } catch {
+    return null;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    return readFileSync(fd, "utf8");
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // Write the whole file or none of it: a temp file in the same directory, fsynced, then renamed.

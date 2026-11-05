@@ -703,6 +703,10 @@ in
             # runs in its own child cgroup with memory.max enforced.
             Delegate = cfg.eval.memoryMax != null;
             ProtectControlGroups = cfg.eval.memoryMax == null;
+            # GS2 (C2): PrivatePIDs + ProtectProc=invisible isolate genie-agent's /proc from host PIDs
+            # and hide parent/sibling processes across each tier-1 pi bwrap user-namespace boundary.
+            PrivatePIDs = true;
+            ProtectProc = "invisible";
 
             LoadCredential = [
               "model-key:${toString cfg.model.keyFile}"

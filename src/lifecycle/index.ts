@@ -14,7 +14,7 @@
 // cleared when pi's turn settles; a resume replays what is pending ahead of the new message.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { type MirrorConfig, MirrorRefused, removeWorktrees, threadName } from "../mirror/index.ts";
-import type { ThreadStateStore } from "../state/index.ts";
+import { readSessionFile, type ThreadStateStore } from "../state/index.ts";
 import type { Record, Supervisor } from "../supervisor/index.ts";
 
 export interface Clock {
@@ -195,6 +195,7 @@ export interface LifecycleOptions {
   onQueueTimeout?: (thread: string) => Promise<unknown> | unknown;
   replayResume?: (thread: string) => Promise<unknown>;
   resync?: (thread: string) => Promise<string | void>;
+  sessionNoFollow?: boolean;
 }
 
 interface QueuedTurn {
@@ -306,9 +307,9 @@ export class Lifecycle {
     const hadState = opts?.hadState ?? existsSync(stateFile);
     const isRestart = !isRunning && !existingQueued && (hadState || this.seenThreads.has(thread) || Boolean(opts?.isDelta));
     let hasState = false;
-    if (existsSync(sessionFile) && existsSync(stateFile)) {
+    if (existsSync(stateFile)) {
       try {
-        const rawSession = readFileSync(sessionFile, "utf8").trim();
+        const rawSession = readSessionFile(sessionFile, { noFollow: this.o.sessionNoFollow ?? true })?.trim() ?? "";
         if (rawSession.length > 0) {
           for (const line of rawSession.split("\n")) {
             JSON.parse(line);

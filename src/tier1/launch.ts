@@ -3,7 +3,9 @@
 // a skill's path for the model to `read`, and C1 confines `read` to worktrees, so each body goes in
 // through `--append-system-prompt` instead. pi's own discovery of extensions, skills, prompt
 // templates and context files is off.
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { checkThread } from "../state/index.ts";
 import type { Launch } from "../supervisor/index.ts";
 import { CONFIG_ENV } from "./extension.ts";
 import { type Config, memoryPrompt } from "./index.ts";
@@ -11,6 +13,59 @@ import { type Config, memoryPrompt } from "./index.ts";
 export { memoryPrompt };
 
 import { pathToFileURL } from "node:url";
+
+export interface PiSandbox {
+  bwrap?: string;
+  stateRoot?: string;
+  worktreeRoot?: string;
+  agentDir?: string;
+  memoryRoot?: string;
+  rwWorktree?: boolean;
+  rwAgentDir?: boolean;
+  exposeStateRoot?: boolean;
+  omitPiOffline?: boolean;
+}
+
+const CA_CANDIDATES = [
+  process.env.NIX_SSL_CERT_FILE,
+  process.env.SSL_CERT_FILE,
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/ssl/certs/ca-bundle.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+];
+
+const resolveReal = (p: string): string | undefined => {
+  try {
+    return existsSync(p) ? realpathSync(p) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const resolveCaFile = (): string | undefined => {
+  for (const c of CA_CANDIDATES) {
+    if (!c) continue;
+    const r = resolveReal(c);
+    if (r) return r;
+  }
+  return undefined;
+};
+
+const whichBin = (name: string): string => {
+  if (name.includes("/")) return name;
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    const p = `${dir}/${name}`;
+    if (dir && existsSync(p)) {
+      try {
+        return realpathSync(p);
+      } catch {
+        return p;
+      }
+    }
+  }
+  return name;
+};
 
 const repo = process.env.GENIE_REPO_ROOT
   ? pathToFileURL(`${process.env.GENIE_REPO_ROOT}/`)
@@ -62,6 +117,12 @@ export function tier1Launch(o: {
   memoryPath?: string;
   // When false (G11 guard.enable = false), appends UNSCREENED_PROMPT to the system prompt.
   screened?: boolean;
+  // pi's agentDir containing models.json.
+  agentDir?: string;
+  // Extra environment variables to pass into the sandbox.
+  env?: Record<string, string>;
+  // Per-thread bwrap sandbox configuration (GS2 / XA5-F1). Enabled by default; false only in mutant tests.
+  sandbox?: PiSandbox | false;
 }): Launch {
   const appendPrompts = [skillsPrompt()];
   if (o.memory) {
@@ -70,17 +131,181 @@ export function tier1Launch(o: {
   if (o.screened === false) {
     appendPrompts.push(UNSCREENED_PROMPT);
   }
+  const repoDir = new URL(".", repo).pathname.replace(/\/+$/, "");
+  const systemPromptPath = o.prompt ?? new URL("prompts/tier1.md", repo).pathname;
   const fixed = [
     "--mode", "rpc",
     "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
     "-e", new URL("src/tier1/extension.ts", repo).pathname,
-    "--system-prompt", o.prompt ?? new URL("prompts/tier1.md", repo).pathname,
+    "--system-prompt", systemPromptPath,
     ...appendPrompts.flatMap((p) => ["--append-system-prompt", p]),
   ];
-  return (thread) => ({
-    command: o.pi,
-    args: [...fixed, ...(o.args?.(thread) ?? [])],
-    env: { [CONFIG_ENV]: JSON.stringify(o.config(thread)) },
-  });
+  let fallbackSbRoot: string | undefined;
+  return (thread) => {
+    const cfg = o.config(thread);
+    const cfgJson = JSON.stringify(cfg);
+    const extraArgs = o.args?.(thread) ?? [];
+    if (o.sandbox === false) {
+      return {
+        command: o.pi,
+        args: [...fixed, ...extraArgs],
+        env: { [CONFIG_ENV]: cfgJson, PI_OFFLINE: "1", ...(o.env ?? {}) },
+      };
+    }
+    const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};
+    const hasSessionDir = extraArgs.includes("--session-dir");
+    if (sb.worktreeRoot || sb.stateRoot || hasSessionDir) {
+      checkThread(thread);
+    }
+    const safeThread = thread.replace(/^\/+/, "").replace(/[^A-Za-z0-9._:$!-]/g, "_") || "t";
+    const sessionDirFromArgs = hasSessionDir ? extraArgs[extraArgs.indexOf("--session-dir") + 1] : undefined;
+    const stateRoot = resolve(
+      sb.stateRoot ??
+        (sessionDirFromArgs
+          ? dirname(dirname(sessionDirFromArgs))
+          : `${(fallbackSbRoot ??= mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-tier1-sb-`))}/state`),
+    );
+    const sessionDir = resolve(sessionDirFromArgs ?? `${stateRoot}/${safeThread}/session`);
+    const worktreeRoot = resolve(
+      sb.worktreeRoot ??
+        (cfg.root ? dirname(resolve(cfg.root)) : `${stateRoot}/worktrees`),
+    );
+    const threadWorktree = resolve(
+      sb.worktreeRoot
+        ? `${sb.worktreeRoot}/${thread}`
+        : cfg.root || `${worktreeRoot}/${safeThread}`,
+    );
+    const agentDir = resolve(
+      sb.agentDir ??
+        o.agentDir ??
+        process.env.PI_CODING_AGENT_DIR ??
+        `${(fallbackSbRoot ??= mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-tier1-sb-`))}/agent`,
+    );
+    const bwrapBin = whichBin(sb.bwrap ?? "bwrap");
+    const piBin = whichBin(o.pi);
+    const memRoot = sb.memoryRoot ?? cfg.memoryRoot ?? (o.memoryPath ? dirname(o.memoryPath) : undefined);
+
+    mkdirSync(threadWorktree, { recursive: true, mode: 0o755 });
+    mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+
+    const apiKeyArgs: string[] = [];
+    if (extraArgs.includes("--model") && !extraArgs.includes("--api-key")) {
+      let apiKey = "stub";
+      try {
+        const parsedModels = JSON.parse(readFileSync(`${agentDir}/models.json`, "utf8"));
+        const modelArg = extraArgs[extraArgs.indexOf("--model") + 1] ?? "";
+        const prov = modelArg.split("/")[0] || "genie";
+        const configuredKey = parsedModels?.providers?.[prov]?.apiKey;
+        if (typeof configuredKey === "string" && configuredKey.length > 0) {
+          apiKey = configuredKey;
+        }
+      } catch {}
+      apiKeyArgs.push("--api-key", apiKey);
+    }
+
+    const resolvConf = resolveReal("/etc/resolv.conf");
+    const etcHosts = resolveReal("/etc/hosts");
+    const nsswitchConf = resolveReal("/etc/nsswitch.conf");
+    const caBundle = resolveCaFile();
+
+    // /tmp is already a private tmpfs below; masking it again (and remounting it read-only) would
+    // only take pi's scratch space away.
+    const separateWorktreeRoot =
+      worktreeRoot !== "/tmp" &&
+      worktreeRoot !== `${stateRoot}/worktrees` &&
+      !worktreeRoot.startsWith(`${stateRoot}/`);
+    // Mask parent-first: a tmpfs mounted later over an ancestor would hide an earlier one, and the
+    // --remount-ro of the hidden path would then fail.
+    const worktreeMaskFirst = separateWorktreeRoot && stateRoot.startsWith(`${worktreeRoot}/`);
+    const stateMask = sb.exposeStateRoot ? ["--ro-bind", stateRoot, stateRoot] : ["--tmpfs", stateRoot];
+    const worktreeMask = separateWorktreeRoot ? ["--tmpfs", worktreeRoot] : [];
+    const agentDirContainsRoots =
+      stateRoot.startsWith(`${agentDir}/`) || worktreeRoot.startsWith(`${agentDir}/`);
+
+    const bwrapArgs: string[] = [
+      "--die-with-parent",
+      "--new-session",
+      "--unshare-user",
+      "--unshare-pid",
+      "--ro-bind", "/nix/store", "/nix/store",
+      ...(resolvConf ? ["--ro-bind-try", resolvConf, "/etc/resolv.conf"] : []),
+      ...(etcHosts ? ["--ro-bind-try", etcHosts, "/etc/hosts"] : []),
+      ...(nsswitchConf ? ["--ro-bind-try", nsswitchConf, "/etc/nsswitch.conf"] : []),
+      ...(caBundle
+        ? [
+            "--ro-bind-try", caBundle, caBundle,
+            "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
+            "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
+          ]
+        : []),
+      "--ro-bind-try", "/bin", "/bin",
+      "--ro-bind-try", "/usr", "/usr",
+      "--ro-bind-try", "/lib", "/lib",
+      "--ro-bind-try", "/lib64", "/lib64",
+      "--dev", "/dev",
+      "--bind", "/proc", "/proc",
+      "--tmpfs", "/tmp",
+      ...(agentDirContainsRoots
+        ? [sb.rwAgentDir ? "--bind" : "--ro-bind", agentDir, agentDir]
+        : []),
+      ...(worktreeMaskFirst ? [...worktreeMask, ...stateMask] : [...stateMask, ...worktreeMask]),
+      "--bind", sessionDir, sessionDir,
+      ...(!agentDirContainsRoots
+        ? [sb.rwAgentDir ? "--bind" : "--ro-bind", agentDir, agentDir]
+        : []),
+      sb.rwWorktree ? "--bind" : "--ro-bind", threadWorktree, threadWorktree,
+      ...(memRoot && existsSync(memRoot) ? ["--ro-bind", memRoot, memRoot] : []),
+      ...(repoDir && !repoDir.startsWith("/nix/store/") && existsSync(repoDir)
+        ? ["--ro-bind", repoDir, repoDir]
+        : []),
+      ...(piBin.startsWith("/") && !piBin.startsWith("/nix/store/") && (!repoDir || !piBin.startsWith(`${repoDir}/`)) && existsSync(piBin)
+        ? ["--ro-bind", piBin, piBin]
+        : []),
+      ...(systemPromptPath.startsWith("/") &&
+      !systemPromptPath.startsWith("/nix/store/") &&
+      (!repoDir || !systemPromptPath.startsWith(`${repoDir}/`)) &&
+      !systemPromptPath.startsWith(`${agentDir}/`) &&
+      existsSync(systemPromptPath)
+        ? ["--ro-bind", systemPromptPath, systemPromptPath]
+        : []),
+      ...(separateWorktreeRoot ? ["--remount-ro", worktreeRoot] : []),
+      ...(!sb.exposeStateRoot ? ["--remount-ro", stateRoot] : []),
+      "--clearenv",
+      "--setenv", "PATH", process.env.PATH ?? "/bin:/usr/bin",
+      "--setenv", "HOME", threadWorktree,
+      "--setenv", "PI_CODING_AGENT_DIR", agentDir,
+      ...(!sb.omitPiOffline ? ["--setenv", "PI_OFFLINE", "1"] : []),
+      "--setenv", "PI_SKIP_VERSION_CHECK", "1",
+      "--setenv", "PI_TELEMETRY", "0",
+      "--setenv", CONFIG_ENV, cfgJson,
+      ...(caBundle
+        ? [
+            "--setenv", "SSL_CERT_FILE", caBundle,
+            "--setenv", "NIX_SSL_CERT_FILE", caBundle,
+          ]
+        : []),
+      ...(process.env.NODE_EXTRA_CA_CERTS ? ["--setenv", "NODE_EXTRA_CA_CERTS", process.env.NODE_EXTRA_CA_CERTS] : []),
+      ...(process.env.GENIE_REPO_ROOT ? ["--setenv", "GENIE_REPO_ROOT", process.env.GENIE_REPO_ROOT] : []),
+      ...(process.env.PI_SETTLE ? ["--setenv", "PI_SETTLE", process.env.PI_SETTLE] : []),
+      ...Object.entries(o.env ?? {}).flatMap(([k, v]) => ["--setenv", k, v]),
+      "--chdir", threadWorktree,
+      "--",
+      piBin,
+      ...fixed,
+      ...extraArgs,
+      ...apiKeyArgs,
+    ];
+    return {
+      command: bwrapBin,
+      args: bwrapArgs,
+      env: {
+        [CONFIG_ENV]: cfgJson,
+        PI_CODING_AGENT_DIR: agentDir,
+        ...(!sb.omitPiOffline ? { PI_OFFLINE: "1" } : {}),
+        ...(o.env ?? {}),
+      },
+    };
+  };
 }
 

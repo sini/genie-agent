@@ -13,7 +13,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { GcOptions } from "../gc/index.ts";
-import type { BlockedExpertReply, ThreadStateStore, Tier } from "../state/index.ts";
+import { type BlockedExpertReply, readSessionFile, type ThreadStateStore, type Tier } from "../state/index.ts";
 import type { Supervisor } from "../supervisor/index.ts";
 import { seedSession, type SeedGuard } from "../supervisor/seed.ts";
 import { nextTier } from "../tier/index.ts";
@@ -52,14 +52,20 @@ export interface ArchivedThread {
 }
 
 // Everything the archive holds for a thread, from P2's state directory.
-export function archiveObject(store: ThreadStateStore, thread: string, now = new Date()) {
+export function archiveObject(
+  store: ThreadStateStore,
+  thread: string,
+  now = new Date(),
+  opts?: { noFollow?: boolean },
+) {
   const state = store.read(thread);
   if (!state) throw new Error(`archive: thread ${thread} has no state`);
   const args = store.sessionArgs(thread);
   const session = `${args[args.indexOf("--session-dir") + 1]}/${args[args.indexOf("--session-id") + 1]}.jsonl`;
+  const transcript = readSessionFile(session, opts);
   const escalation = store.escalation(thread) ?? null;
   const absent: Record<string, string> = { ...ABSENT };
-  if (!existsSync(session)) absent.transcript = "pi wrote no session: the thread closed before its first reply";
+  if (transcript === null) absent.transcript = "pi wrote no session: the thread closed before its first reply";
   if (!escalation) absent.escalation = "the thread never escalated";
   const blockedExpertReplies = store.blockedExpertReplies?.(thread) ?? [];
   return {
@@ -71,7 +77,7 @@ export function archiveObject(store: ThreadStateStore, thread: string, now = new
       created: state.created,
       last_active: state.last_active,
       archived_at: now.toISOString(),
-      transcript: existsSync(session) ? readFileSync(session, "utf8") : null,
+      transcript,
       verdicts: null,
       escalation,
       actions: null,
@@ -185,7 +191,7 @@ export async function replayResume(
   if (archived.transcript) {
     if (store) {
       const sessionFile = `${store.dir(thread)}/session/thread.jsonl`;
-      if (existsSync(sessionFile)) rmSync(sessionFile, { recursive: false, force: true });
+      rmSync(sessionFile, { recursive: false, force: true });
     }
     await seedSession(supervisor, thread, { transcript: archived.transcript }, guard);
   }

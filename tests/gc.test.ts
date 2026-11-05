@@ -129,3 +129,48 @@ test("oracle: a read-only store path is removed", async () => {
   assert.equal(existsSync(`${store.storeRoot}/g-ro`), false);
   assert.equal(existsSync(`${store.stateRoot}/g-ro`), false);
 });
+
+test("oracle GS2 (C8): Gc.collect tears down a live pi process before removing its worktrees, and mutant goes RED", async () => {
+  thread("g-c8");
+  const events: string[] = [];
+  const clock = new FakeClock(T0 + 97 * H);
+  const gc = new Gc({
+    store,
+    mirror,
+    clock,
+    archive: async () => {
+      events.push("archive");
+    },
+    supervisor: {
+      teardown: async (t) => {
+        events.push(`teardown:${t}:wtExists=${existsSync(`${mirror.worktreeRoot}/${t}`)}`);
+      },
+    },
+  });
+  await gc.sweep();
+  assert.deepEqual(events, ["archive", "teardown:g-c8:wtExists=true"]);
+  assert.equal(existsSync(`${mirror.worktreeRoot}/g-c8`), false);
+
+  // Mutant: omitting supervisor.teardown leaves 0 teardown calls before removeWorktrees and turns RED
+  thread("g-c8-mut");
+  const mutEvents: string[] = [];
+  const mutGc = new Gc({
+    store,
+    mirror,
+    clock: new FakeClock(T0 + 97 * H),
+    archive: async () => {
+      mutEvents.push("archive");
+    },
+  });
+  await mutGc.sweep();
+  assert.throws(
+    () =>
+      assert.deepEqual(
+        mutEvents,
+        ["archive", "teardown:g-c8-mut:wtExists=true"],
+        "mutant omitting supervisor.teardown in Gc.collect turns RED",
+      ),
+    /mutant omitting supervisor\.teardown in Gc\.collect turns RED/,
+  );
+});
+

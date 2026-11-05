@@ -32,7 +32,7 @@ import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
-import { tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
+import { type PiSandbox, tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
 import { errors, load } from "../tier1/schema.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 
@@ -93,7 +93,7 @@ export interface Config {
   pi: string;
   // Tier 1's OpenAI-compatible model.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
-  tier1: Omit<Tier1Config, "root">;
+  tier1: Omit<Tier1Config, "root"> & { sandbox?: Pick<PiSandbox, "bwrap"> };
   // Inbound guard-in screening switch (G11; default true).
   guard?: { enable?: boolean };
   // Hindsight dataplane endpoint for recall ("support" -> genie, "memory" -> genie-memory).
@@ -245,7 +245,15 @@ export async function resyncThread(
   return parts.join("");
 }
 
-export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
+// `mutants` is reachable only from code (tests), never from the config file: it exists so the GS2
+// oracle can show that each sandbox mutant turns it red.
+export function main(
+  configFile: string,
+  io: Io,
+  run?: Runner,
+  clock?: Clock,
+  mutants?: { piSandbox?: Omit<PiSandbox, "stateRoot" | "worktreeRoot" | "agentDir" | "memoryRoot"> | false },
+) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
@@ -297,6 +305,19 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
     memory: Boolean(c.tier1.memoryRoot),
     memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
     screened: guardEnable,
+    // GS2 (P2): the jail is the Launch's construction. Config may only name the bwrap binary; there is
+    // no production path to an unjailed pi (tier1Launch's `sandbox: false` is a test-only mutant hook).
+    sandbox:
+      mutants?.piSandbox === false
+        ? false
+        : {
+            ...(c.tier1.sandbox?.bwrap ? { bwrap: c.tier1.sandbox.bwrap } : {}),
+            ...(mutants?.piSandbox ?? {}),
+            stateRoot: c.stateRoot,
+            worktreeRoot: c.mirror.worktreeRoot,
+            agentDir,
+            memoryRoot: c.tier1.memoryRoot,
+          },
     config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
@@ -577,7 +598,7 @@ export function main(configFile: string, io: Io, run?: Runner, clock?: Clock) {
       : undefined,
     resync: io.request ? (t) => resyncThread(t, io.request!, screen) : undefined,
   });
-  const gc = new Gc({ store, mirror: c.mirror, archive });
+  const gc = new Gc({ store, mirror: c.mirror, archive, supervisor, clock });
 
   // C7 reads the raw envelope before guard-in; a reject is answered with a refusal and never
   // reaches pi. An expert reply is judged by guard-out (C8); a blocked reply is dropped from

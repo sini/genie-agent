@@ -12,6 +12,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { type Clock, systemClock } from "../lifecycle/index.ts";
 import { type MirrorConfig, removeWorktrees } from "../mirror/index.ts";
 import type { ThreadStateStore } from "../state/index.ts";
+import type { Supervisor } from "../supervisor/index.ts";
 
 export const IDLE_TTL_MS = 96 * 60 * 60 * 1000;
 export const SWEEP_MS = 60 * 60 * 1000;
@@ -25,6 +26,7 @@ export interface GcOptions {
   mirror: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">;
   // P4's archiver; a rejection keeps the thread whole for the next sweep.
   archive(thread: string): Promise<void>;
+  supervisor?: Pick<Supervisor, "teardown">;
   clock?: Clock;
   ttlMs?: number;
   sweepMs?: number;
@@ -68,14 +70,17 @@ export class Gc {
     const st = this.o.store.read(thread);
     const tier = st?.sender_tier ?? "public";
     await this.o.archive(thread);
+    // Tear down any live pi process before removing the thread's worktree directory (GS2 C8)
+    // so no sandboxed pi process retains a bind mount to an unlinked worktree directory.
+    await this.o.supervisor?.teardown(thread);
     // Write the tombstone right after archive PUT succeeds, before any rmSync.
     // If removal throws or crashes, the thread is tombstoned so next message resumes from archive.
     this.o.store.setTombstone(thread, { archived: true, tier });
     await removeWorktrees(this.o.mirror, thread);
-    // A message that arrived during the awaits made the thread live again: keep its state.
-    // ponytail: its worktrees are already gone and are re-added on demand; a per-thread lock with
-    // C4 is owed if that ever costs more than a refetch.
+    // A message that arrived during the awaits made the thread live again: keep its state,
+    // and tear down any process spawned during removeWorktrees so the next turn binds a fresh dir.
     if (!this.isExpired(thread)) {
+      await this.o.supervisor?.teardown(thread);
       this.o.store.clearTombstone(thread);
       return;
     }

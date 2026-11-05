@@ -202,6 +202,7 @@ test("oracle: the tool list is exactly the thirteen", async () => {
   const events: PiRecord[] = [];
   const launch = tier1Launch({
     pi: process.env.PI ?? "pi",
+    agentDir,
     config: () => ({ root, searxngUrl: "http://127.0.0.1:1", cluster: [] }),
     args: () => ["--model", "genie/m", "--no-session"],
   });

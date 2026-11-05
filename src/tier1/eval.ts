@@ -648,6 +648,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
 
   const launch = tier1Launch({
     pi: opts.pi ?? process.env.PI ?? "pi",
+    agentDir,
     prompt: promptPath,
     memory: opts.memory,
     memoryPath: opts.memory ? opts.memoryMdPath : undefined,

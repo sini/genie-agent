@@ -4,11 +4,12 @@
 // removes nothing. Run with `node --test tests/archive.test.ts`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { archiver, BUCKET, readArchive, replayResume, sign } from "../src/archive/index.ts";
+import { archiveObject, archiver, BUCKET, readArchive, replayResume, sign } from "../src/archive/index.ts";
 import { Gc, IDLE_TTL_MS } from "../src/gc/index.ts";
 import { Lifecycle } from "../src/lifecycle/index.ts";
 import { type ThreadState, ThreadStateStore } from "../src/state/index.ts";
@@ -515,4 +516,51 @@ test("oracle GX2 (F5 / C7): replayResume clamps the replayed tier with nextTier 
     s3.close();
   }
 });
+
+test("oracle GS2 (C1): archiveObject opens session/thread.jsonl with O_NOFOLLOW | O_NONBLOCK and accepts only a regular file, refusing symlinks and FIFOs, and mutant goes RED", () => {
+  const c1Store = new ThreadStateStore(`${tmp}/gs2-c1-state`, `${tmp}/gs2-c1-store`);
+  const canaryPath = `${tmp}/gs2-c1-canary.txt`;
+  const canaryText = '{"role":"user","content":"CANARY_CREDENTIAL_7788"}\n';
+  writeFileSync(canaryPath, canaryText);
+
+  const thSym = "$gs2-c1-symlink";
+  c1Store.write({
+    thread_id: thSym,
+    status: "closed",
+    created: "2026-10-12T00:00:00Z",
+    last_active: "2026-10-12T01:00:00Z",
+    sender_tier: "public",
+  });
+  const symSession = `${c1Store.dir(thSym)}/session/thread.jsonl`;
+  rmSync(symSession, { force: true });
+  symlinkSync(canaryPath, symSession);
+
+  // 1. Default (O_NOFOLLOW): symlink is refused; transcript is null and canary never enters archiveObject
+  const safeObj = archiveObject(c1Store, thSym);
+  assert.equal(safeObj.body.transcript, null, "symlink session/thread.jsonl must be refused");
+  assert.ok(!JSON.stringify(safeObj).includes("CANARY_CREDENTIAL_7788"));
+
+  // 2. FIFO at session/thread.jsonl: O_NONBLOCK + fstat().isFile() refuses immediately without blocking
+  const thFifo = "$gs2-c1-fifo";
+  c1Store.write({
+    thread_id: thFifo,
+    status: "closed",
+    created: "2026-10-12T00:00:00Z",
+    last_active: "2026-10-12T01:00:00Z",
+    sender_tier: "public",
+  });
+  const fifoSession = `${c1Store.dir(thFifo)}/session/thread.jsonl`;
+  rmSync(fifoSession, { force: true });
+  execFileSync("mkfifo", [fifoSession]);
+  const fifoObj = archiveObject(c1Store, thFifo);
+  assert.equal(fifoObj.body.transcript, null, "FIFO session/thread.jsonl must be refused without blocking");
+
+  // 3. Mutant (dropping O_NOFOLLOW): follows symlink to canary file and turns RED
+  const mutantObj = archiveObject(c1Store, thSym, new Date(), { noFollow: false });
+  assert.throws(
+    () => assert.equal(mutantObj.body.transcript, null, "mutant dropping O_NOFOLLOW reads canary and turns RED"),
+    /mutant dropping O_NOFOLLOW reads canary and turns RED/,
+  );
+});
+
 

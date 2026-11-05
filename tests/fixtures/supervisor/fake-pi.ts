@@ -5,11 +5,17 @@
 // it also loads and appends the transcript at `<d>/<id>.jsonl`, as pi resumes a session by id.
 // `{type: "host", title, placeholder}` asks its client an `input` dialog, as an extension's
 // ctx.ui.input does in pi's RPC mode, and answers with the client's value.
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
-const record = `${process.env.PI_RECORD}/${process.pid}.jsonl`;
 const arg = (flag: string) => process.argv[process.argv.indexOf(flag) + 1];
-const session = process.argv.includes("--session-dir") ? `${arg("--session-dir")}/${arg("--session-id")}.jsonl` : undefined;
+const sessionDir = process.argv.includes("--session-dir") ? arg("--session-dir") : undefined;
+const record =
+  process.env.PI_RECORD && existsSync(process.env.PI_RECORD) ? `${process.env.PI_RECORD}/${process.pid}.jsonl` : undefined;
+const sessionRecord = sessionDir ? `${sessionDir}/record.jsonl` : undefined;
+const sessionAllRecords = sessionDir ? `${sessionDir}/all-records.jsonl` : undefined;
+if (sessionRecord) writeFileSync(sessionRecord, "");
+if (sessionDir) writeFileSync(`${sessionDir}/argv.json`, JSON.stringify(process.argv.slice(2)));
+const session = sessionDir ? `${sessionDir}/${arg("--session-id")}.jsonl` : undefined;
 const messages: { role: string; content: string }[] =
   session && existsSync(session) ? readFileSync(session, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const reply = (r: object) => process.stdout.write(`${JSON.stringify({ type: "response", ...r })}\n`);
@@ -23,7 +29,9 @@ process.stdin.on("data", (chunk: string) => {
   while ((nl = buf.indexOf("\n")) >= 0) {
     const line = buf.slice(0, nl);
     buf = buf.slice(nl + 1);
-    appendFileSync(record, `${line}\n`);
+    if (record) appendFileSync(record, `${line}\n`);
+    if (sessionRecord) appendFileSync(sessionRecord, `${line}\n`);
+    if (sessionAllRecords) appendFileSync(sessionAllRecords, `${line}\n`);
     const cmd = JSON.parse(line);
     const r = { id: cmd.id, command: cmd.type, success: true };
     if (cmd.type === "extension_ui_response") dialogs.get(cmd.id)?.(cmd.value);

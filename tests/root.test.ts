@@ -231,13 +231,24 @@ const tierOf = (s: string) => (s === ALICE ? "trusted" : "public");
 const envelope = (sender: string, text: string) =>
   `[matrix] room=#support:example.org thread=$root user=${sender} (${tierOf(sender)})\n\n<request>\n${JSON.stringify({ sender, sender_id: idOf(sender), tier: tierOf(sender), text })}\n</request>`;
 const inbound = async (...items: Inbound[]) => (batches.push(items), root.run());
+const threadRecord = (thread: string, store = root.store): string => {
+  const f = `${store.dir(thread)}/session/record.jsonl`;
+  return existsSync(f) ? readFileSync(f, "utf8") : "";
+};
 // Every prompt any fake pi received.
-const prompts = () =>
-  readdirSync(tmp)
+const prompts = () => {
+  const stateDirs = existsSync(root.store.stateRoot)
+    ? readdirSync(root.store.stateRoot).filter((d) => !d.startsWith("."))
+    : [];
+  const fromSessions = stateDirs.flatMap((t) => {
+    const f = `${root.store.stateRoot}/${t}/session/all-records.jsonl`;
+    return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  });
+  const fromTmp = readdirSync(tmp)
     .filter((f) => f.endsWith(".jsonl"))
-    .flatMap((f) => readFileSync(`${tmp}/${f}`, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)))
-    .filter((r) => r.type === "prompt")
-    .map((r) => r.message);
+    .flatMap((f) => readFileSync(`${tmp}/${f}`, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
+  return [...fromSessions, ...fromTmp].filter((r) => r.type === "prompt").map((r) => r.message);
+};
 // One Host call from thread's tier 1, over its pi's bridge dialog.
 const host = async (thread: string, method: string, arg: unknown) =>
   JSON.parse(((await root.supervisor.command(thread, { type: "host", title: BRIDGE, placeholder: JSON.stringify({ method, arg }) })).data as any).value);
@@ -445,7 +456,7 @@ test("oracle: an expired thread collected by GC resumes on a new message with it
 
   const pid = root.supervisor.pid(thread);
   assert.ok(pid !== undefined, "pi was launched for resumed thread");
-  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+  const threadPrompts = threadRecord(thread)
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
@@ -506,6 +517,7 @@ test("oracle: an expired thread whose removal throws after tombstoning still res
 
   // Cause removal to throw by placing a file where the thread's worktree directory would be
   const wtDir = `${tmp}/worktrees/${thread}`;
+  rmSync(wtDir, { recursive: true, force: true });
   mkdirSync(`${tmp}/worktrees`, { recursive: true });
   writeFileSync(wtDir, "not-a-dir");
 
@@ -524,7 +536,7 @@ test("oracle: an expired thread whose removal throws after tombstoning still res
 
   const pid = root.supervisor.pid(thread);
   assert.ok(pid !== undefined, "pi was launched for resumed thread");
-  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+  const threadPrompts = threadRecord(thread)
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
@@ -649,7 +661,7 @@ test("oracle: blocked expert reply marker is absent from later public package, d
   await inbound({ thread, envelope: envelope(BOB, "resumed question after gc") });
   const pid = root.supervisor.pid(thread);
   assert.ok(pid !== undefined, "pi was launched for resumed thread");
-  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+  const threadPrompts = threadRecord(thread)
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
@@ -672,7 +684,7 @@ test("oracle: an allowed expert reply is posted and delivered to pi", async () =
   assert.deepEqual(posts.at(-1), [thread, { text: cleanExpert }]);
   const pid = root.supervisor.pid(thread);
   assert.ok(pid !== undefined);
-  const threadPrompts = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+  const threadPrompts = threadRecord(thread)
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
@@ -1022,7 +1034,7 @@ test("oracle: at the 10m deadline, 1 notice is posted and 1 escalation is create
 
     // At 5m (300_000 ms): check-in fires once, no notice or escalation yet
     await clock.advance(CHECKIN_MS);
-    const recorded = readFileSync(`${tmp}/${pid}.jsonl`, "utf8")
+    const recorded = threadRecord(thread, c13Root.store)
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l))
@@ -1335,11 +1347,10 @@ test("oracle: tier1Launch seeds operating memory when tier1.memoryRoot is set", 
   mkdirSync(memDir, { recursive: true });
   writeFileSync(`${memDir}/MEMORY.md`, "# Custom Memory Index\n- [Guide](workflow/guide.md)\n");
 
-  const argvFile = `${memTmp}/argv.json`;
   const piSpy = `${memTmp}/pi-spy`;
   writeFileSync(
     piSpy,
-    `#!/bin/sh\nexport PI_SETTLE=manual\n"${process.execPath}" -e 'require("fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+    `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
   );
   chmodSync(piSpy, 0o755);
   writeFileSync(`${memTmp}/model-key`, "k\n");
@@ -1375,7 +1386,7 @@ test("oracle: tier1Launch seeds operating memory when tier1.memoryRoot is set", 
   try {
     memBatches.push([{ thread: "th_mem", envelope: envelope(ALICE, "check memory") }]);
     await memRoot.run();
-    const argv: string[] = JSON.parse(readFileSync(argvFile, "utf8"));
+    const argv: string[] = JSON.parse(readFileSync(`${memRoot.store.dir("th_mem")}/session/argv.json`, "utf8"));
     const appended: string[] = [];
     for (let i = 0; i < argv.length; i++) {
       if (argv[i] === "--append-system-prompt" && i + 1 < argv.length) {
@@ -1727,11 +1738,10 @@ test("oracle (G11): parameterized root pipeline over guard.enable and broker.gua
   for (const enabled of [true, false] as const) {
     const modeTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-g11-mode-${enabled}-`);
     for (const f of ["model", "s3", "token"]) writeFileSync(`${modeTmp}/${f}-key`, "k\n");
-    const argvFile = `${modeTmp}/argv.json`;
     const piSpy = `${modeTmp}/pi-spy`;
     writeFileSync(
       piSpy,
-      `#!/bin/sh\nexport PI_SETTLE=manual\n"${process.execPath}" -e 'require("fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+      `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
     );
     chmodSync(piSpy, 0o755);
 
@@ -1795,7 +1805,7 @@ test("oracle (G11): parameterized root pipeline over guard.enable and broker.gua
       modeBatches.push([{ thread: th, envelope: envelope(BOB, "how does den wire modules?") }]);
       await modeRoot.run();
 
-      const argv: string[] = JSON.parse(readFileSync(argvFile, "utf8"));
+      const argv: string[] = JSON.parse(readFileSync(`${modeRoot.store.dir(th)}/session/argv.json`, "utf8"));
       const appendedPrompts: string[] = [];
       for (let i = 0; i < argv.length; i++) {
         if (argv[i] === "--append-system-prompt" && i + 1 < argv.length) {
@@ -1999,11 +2009,11 @@ test("oracle (GI-8 c): room_context screens returned <context> block through gua
   // 2. guard.enable = false (G11): 0 guard calls, text arrives under unscreened prompt framing
   const offTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-gi8-c-off-`);
   writeFileSync(`${offTmp}/model-key`, "k\n");
-  const argvFile = `${offTmp}/argv.json`;
+  const argvFile = `${offTmp}/state/th_off/session/argv.json`;
   const piSpy = `${offTmp}/pi-spy`;
   writeFileSync(
     piSpy,
-    `#!/bin/sh\nexport PI_SETTLE=manual\n"${process.execPath}" -e 'require("fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+    `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
   );
   chmodSync(piSpy, 0o755);
   const offCfg = `${offTmp}/config.json`;
@@ -2140,7 +2150,7 @@ test("oracle (GI-8 d): resync paging loops offset over a > 4 KiB multi-page tran
   // Verify the reassembled transcript was delivered to the new pi process byte-exactly ahead of the follow-up message
   const pidAfter = root.supervisor.pid(thread);
   assert.ok(pidAfter !== undefined, "pi process must be running after resync");
-  const piPrompts = readFileSync(`${tmp}/${pidAfter}.jsonl`, "utf8")
+  const piPrompts = threadRecord(thread)
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
@@ -2547,6 +2557,305 @@ test("oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.j
 
   await root.supervisor.teardown(th);
 });
+
+test("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all four mutants go RED", async () => {
+  const gs2Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-gs2-root-test-`);
+  const memDir = `${gs2Tmp}/memory`;
+  mkdirSync(memDir, { recursive: true });
+  writeFileSync(`${memDir}/MEMORY.md`, "# Operating Memory\n");
+
+  // Add a tracked symlink to a served git fixture repo
+  const symRepo = `${tmp}/served/gs2-sym`;
+  sh("init", "-q", "-b", "main", symRepo);
+  writeFileSync(`${symRepo}/README.md`, "gs2 repo\n");
+  execFileSync("ln", ["-s", "/etc/passwd", `${symRepo}/tracked-link`]);
+  sh("-C", symRepo, "add", "README.md", "tracked-link");
+  sh("-C", symRepo, "commit", "-q", "-m", "add tracked link");
+
+  // Stub SearXNG HTTP server for web_search positive control
+  const searx = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({ results: [{ title: "NixOS Manual", url: "https://nixos.org/manual", content: "clean" }] }),
+    );
+  });
+  await new Promise<void>((r) => searx.listen(0, "127.0.0.1", r));
+  const searxPort = (searx.address() as AddressInfo).port;
+  const model = await stubModel();
+
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${gs2Tmp}/${f}-key`, "secret-credential-value\n");
+
+  const probeSource = `import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+const arg = (flag) => process.argv[process.argv.indexOf(flag) + 1];
+const sessionDir = arg("--session-dir");
+const sessionId = arg("--session-id");
+const cfg = JSON.parse(process.env.GENIE_TIER1_CONFIG || "{}");
+const agentDir = process.env.PI_CODING_AGENT_DIR || "";
+const parentPid = process.env.GS2_PARENT_PID || "1";
+const otherStateFile = process.env.GS2_OTHER_STATE || "";
+const ownStateFile = process.env.GS2_OWN_STATE || "";
+const memDir = cfg.memoryRoot || "";
+const wtDir = process.cwd();
+
+const tryWrite = (p) => {
+  try {
+    writeFileSync(p, "probe");
+    return "WRITABLE";
+  } catch (e) {
+    return e.code || "ERR";
+  }
+};
+const tryRead = (p) => {
+  try {
+    return { ok: true, text: readFileSync(p, "utf8") };
+  } catch (e) {
+    return { ok: false, code: e.code || "ERR" };
+  }
+};
+const tryReadlink = (p) => {
+  try {
+    return { ok: true, target: readlinkSync(p) };
+  } catch (e) {
+    return { ok: false, code: e.code || "ERR" };
+  }
+};
+const tryReaddir = (p) => {
+  try {
+    return { ok: true, entries: readdirSync(p).sort() };
+  } catch (e) {
+    return { ok: false, code: e.code || "ERR" };
+  }
+};
+
+let buf = "";
+const dialogs = new Map();
+const reply = (r) => process.stdout.write(JSON.stringify({ type: "response", ...r }) + "\\n");
+
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", async (chunk) => {
+  buf += chunk;
+  let nl;
+  while ((nl = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    const cmd = JSON.parse(line);
+    const r = { id: cmd.id, command: cmd.type, success: true };
+    if (cmd.type === "extension_ui_response") {
+      dialogs.get(cmd.id)?.(cmd.value);
+    } else if (cmd.type === "prompt") {
+      reply({ ...r, data: { disposition: "started" } });
+      if (sessionDir && sessionId) {
+        writeFileSync(sessionDir + "/" + sessionId + ".jsonl", JSON.stringify({ role: "user", content: cmd.message }) + "\\n");
+      }
+      // Perform mid-turn Host.clone via RPC bridge
+      const cloneRes = await new Promise((resolve) => {
+        const id = "ui_clone";
+        dialogs.set(id, (val) => resolve(JSON.parse(val)));
+        process.stdout.write(JSON.stringify({
+          type: "extension_ui_request",
+          id,
+          method: "input",
+          title: ${JSON.stringify(BRIDGE)},
+          placeholder: JSON.stringify({ method: "clone", arg: "https://127.0.0.1:${port}/gs2-sym" }),
+        }) + "\\n");
+      });
+      const clonedPath = cloneRes?.ok?.path || "";
+      const linkPath = clonedPath ? clonedPath + "/tracked-link" : "";
+      let linkStat = null;
+      // lstat, not existsSync: existsSync follows the link, and its target is absent inside the jail.
+      if (linkPath) {
+        try {
+          const st = lstatSync(linkPath);
+          linkStat = { isFile: st.isFile(), isSymbolicLink: st.isSymbolicLink() };
+        } catch {}
+      }
+      const modelsJson = tryRead(agentDir + "/models.json");
+      let modelFetchOk = false;
+      if (modelsJson.ok) {
+        const parsed = JSON.parse(modelsJson.text);
+        const res = await fetch(parsed.providers.genie.baseUrl + "/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "m", messages: [{ role: "assistant", content: "ping" }] }),
+        });
+        modelFetchOk = res.ok;
+      }
+      let webFetchOk = false;
+      if (cfg.searxngUrl) {
+        const res = await fetch(cfg.searxngUrl + "/search?q=nix&format=json");
+        webFetchOk = res.ok;
+      }
+      const selfEnviron = readFileSync("/proc/self/environ", "utf8").split("\\0");
+      const report = {
+        nixStoreRead: existsSync(process.execPath),
+        nixStoreWrite: tryWrite("/nix/store/.gs2-probe"),
+        memoryRead: tryRead(memDir + "/MEMORY.md").ok,
+        memoryWrite: tryWrite(memDir + "/.gs2-probe"),
+        worktreeWrite: tryWrite(wtDir + "/.gs2-probe"),
+        clonedRepoWrite: clonedPath ? tryWrite(clonedPath + "/.gs2-probe") : "NO_CLONE",
+        sessionWrite: tryWrite(sessionDir + "/probe-write.txt"),
+        agentDirRead: modelsJson.ok,
+        agentDirWrite: tryWrite(agentDir + "/.gs2-probe"),
+        ownStateRead: tryRead(ownStateFile),
+        otherStateRead: tryRead(otherStateFile),
+        runCredentials: tryReaddir("/run/credentials"),
+        runXmsg: tryReaddir("/run/xmsg"),
+        runUser: tryReaddir("/run/user"),
+        parentProcEnviron: tryRead("/proc/" + parentPid + "/environ"),
+        parentProcFd0: tryReadlink("/proc/" + parentPid + "/fd/0"),
+        piOffline: selfEnviron.includes("PI_OFFLINE=1"),
+        etcEntries: tryReaddir("/etc"),
+        etcPasswd: tryRead("/etc/passwd"),
+        modelFetchOk,
+        webFetchOk,
+        clonedPath,
+        linkStat,
+      };
+      writeFileSync(sessionDir + "/gs2-report.json", JSON.stringify(report));
+      process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n");
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+`;
+
+  const runProbe = async (
+    label: string,
+    sandboxCfg: Record<string, unknown> | false | undefined,
+    symlinksTrue = false,
+  ) => {
+    const runDir = `${gs2Tmp}/${label}`;
+    mkdirSync(`${runDir}/state/other_thread`, { recursive: true });
+    const otherStateFile = `${runDir}/state/other_thread/state.json`;
+    writeFileSync(otherStateFile, JSON.stringify({ thread_id: "other_thread", sender_tier: "trusted" }));
+    const ownStateFile = `${runDir}/state/th_gs2/state.json`;
+
+    const piWrap = `${runDir}/pi-wrap.mjs`;
+    writeFileSync(
+      piWrap,
+      `#!${process.execPath}\nprocess.env.GS2_PARENT_PID = ${JSON.stringify(String(process.pid))};\nprocess.env.GS2_OTHER_STATE = ${JSON.stringify(otherStateFile)};\nprocess.env.GS2_OWN_STATE = ${JSON.stringify(ownStateFile)};\n${probeSource}`,
+    );
+    chmodSync(piWrap, 0o755);
+
+    const cfgPath = `${runDir}/config.json`;
+    writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        stateRoot: `${runDir}/state`,
+        storeRoot: `${runDir}/store`,
+        mirror: { mirrorRoot: `${runDir}/mirrors`, worktreeRoot: `${runDir}/worktrees`, exempt: ["127.0.0.1"] },
+        pi: piWrap,
+        model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: `${gs2Tmp}/model-key` },
+        tier1: {
+          searxngUrl: `http://127.0.0.1:${searxPort}`,
+          cluster: [],
+          memoryRoot: memDir,
+        },
+        s3: null,
+        broker: {
+          guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+        },
+      }),
+    );
+
+    const probeBatches: Inbound[][] = [];
+    const probeRoot = main(
+      cfgPath,
+      {
+        intake: { next: async () => probeBatches.shift() ?? null },
+        post: { post: async () => {} },
+        guard,
+        xmsg,
+        git: (args, signal) => {
+          const rewritten = args.map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:"));
+          const filtered = symlinksTrue
+            ? rewritten.map((a) => (a === "core.symlinks=false" ? "core.symlinks=true" : a))
+            : rewritten;
+          return git(["-c", "protocol.git.allow=always", ...filtered], signal);
+        },
+      },
+      async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+      undefined,
+      sandboxCfg !== undefined ? { piSandbox: sandboxCfg as false | Record<string, boolean> } : undefined,
+    );
+    try {
+      probeBatches.push([{ thread: "th_gs2", envelope: envelope(BOB, "probe isolation") }]);
+      await probeRoot.run();
+      const reportPath = `${runDir}/state/th_gs2/session/gs2-report.json`;
+      for (let i = 0; i < 60 && !existsSync(reportPath); i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      return JSON.parse(readFileSync(reportPath, "utf8"));
+    } finally {
+      await probeRoot.stop();
+    }
+  };
+
+  const assertIsolated = (rep: any) => {
+    assert.equal(rep.nixStoreRead, true, "/nix/store must be readable");
+    assert.notEqual(rep.nixStoreWrite, "WRITABLE", "/nix/store must be read-only");
+    assert.equal(rep.memoryRead, true, "/memory must be readable");
+    assert.equal(rep.memoryWrite, "EROFS", "/memory must be read-only");
+    assert.equal(rep.worktreeWrite, "EROFS", "thread worktree must be read-only inside pi");
+    assert.equal(rep.clonedRepoWrite, "EROFS", "cloned worktree subdir must be read-only inside pi");
+    assert.equal(rep.sessionWrite, "WRITABLE", "thread session dir must be writable");
+    assert.equal(rep.agentDirRead, true, "agentDir/models.json must be readable");
+    assert.equal(rep.agentDirWrite, "EROFS", "agentDir must be read-only");
+    assert.equal(rep.ownStateRead.ok, false, "thread state.json outside session/ must be hidden");
+    assert.equal(rep.otherStateRead.ok, false, "other threads' stateRoot entries must be hidden");
+    assert.equal(rep.runCredentials.ok, false, "/run/credentials must be hidden");
+    assert.equal(rep.runXmsg.ok, false, "/run/xmsg must be hidden");
+    assert.equal(rep.runUser.ok, false, "/run/user must be hidden");
+    assert.equal(rep.parentProcEnviron.ok, false, "parent /proc/<pid>/environ must be inaccessible");
+    assert.equal(rep.parentProcFd0.ok, false, "dereferencing parent /proc/<pid>/fd/0 must be denied");
+    assert.equal(rep.piOffline, true, "PI_OFFLINE=1 must be in /proc/self/environ");
+    assert.equal(rep.etcPasswd.ok, false, "/etc/passwd must not be bound into /etc");
+    assert.ok(
+      rep.etcEntries.ok && rep.etcEntries.entries.every((e: string) => ["hosts", "nsswitch.conf", "resolv.conf", "ssl"].includes(e)),
+      `only DNS/TLS files may be in /etc, got ${JSON.stringify(rep.etcEntries)}`,
+    );
+    assert.equal(rep.modelFetchOk, true, "model HTTP endpoint must remain reachable");
+    assert.equal(rep.webFetchOk, true, "web / searxng HTTP endpoint must remain reachable");
+    assert.deepEqual(rep.linkStat, { isFile: true, isSymbolicLink: false }, "tracked symlinks must be regular files");
+  };
+
+  try {
+    // 1. Default configuration passes all positive and negative isolation checks
+    const baseReport = await runProbe("default", undefined);
+    assertIsolated(baseReport);
+
+    // 2. Mutant M-no-pi-bwrap (sandbox: false) turns RED
+    const noBwrapReport = await runProbe("m-no-bwrap", false);
+    assert.throws(() => assertIsolated(noBwrapReport), /AssertionError/, "M-no-pi-bwrap must turn oracle RED");
+    // ...for the right reason: unjailed pi sees /run/credentials and other threads' state.
+    assert.equal(noBwrapReport.runCredentials.ok || noBwrapReport.otherStateRead.ok, true, "M-no-pi-bwrap: hidden paths become visible");
+
+    // 3. Mutant M-rw-worktree-or-agentdir (rwWorktree: true, rwAgentDir: true) turns RED
+    const rwReport = await runProbe("m-rw-wt-agent", { rwWorktree: true, rwAgentDir: true });
+    assert.throws(() => assertIsolated(rwReport), /AssertionError/, "M-rw-worktree-or-agentdir must turn oracle RED");
+    assert.equal(rwReport.worktreeWrite, "WRITABLE", "M-rw-worktree-or-agentdir: worktree becomes writable");
+    assert.equal(rwReport.agentDirWrite, "WRITABLE", "M-rw-worktree-or-agentdir: real agentDir becomes writable");
+
+    // 4. Mutant M-expose-state-root (exposeStateRoot: true) turns RED
+    const exposeStateReport = await runProbe("m-expose-state", { exposeStateRoot: true });
+    assert.throws(() => assertIsolated(exposeStateReport), /AssertionError/, "M-expose-state-root must turn oracle RED");
+    assert.equal(exposeStateReport.otherStateRead.ok, true, "M-expose-state-root: another thread's state becomes readable");
+
+    // 5. Mutant M-symlinks-true (core.symlinks=true) turns RED
+    const symlinksReport = await runProbe("m-symlinks-true", undefined, true);
+    assert.throws(() => assertIsolated(symlinksReport), /AssertionError/, "M-symlinks-true must turn oracle RED");
+    assert.equal(symlinksReport.linkStat?.isSymbolicLink, true, "M-symlinks-true: tracked symlink materializes as S_IFLNK");
+
+    // 6. Mutant M-no-pi-offline (omitPiOffline: true) turns RED
+    const noOfflineReport = await runProbe("m-no-offline", { omitPiOffline: true });
+    assert.throws(() => assertIsolated(noOfflineReport), /AssertionError/, "M-no-pi-offline must turn oracle RED");
+    assert.equal(noOfflineReport.piOffline, false, "M-no-pi-offline: PI_OFFLINE=1 is absent");
+  } finally {
+    model.close();
+    searx.closeAllConnections?.();
+    searx.close();
+  }
+});
+
 
 
 

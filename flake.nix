@@ -444,7 +444,7 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's
@@ -455,7 +455,10 @@
           tier1 =
             pkgs.runCommand "genie-agent-tier1"
               {
-                nativeBuildInputs = [ pkgs.nodejs ];
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.bubblewrap
+                ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
@@ -561,10 +564,14 @@
           tier1-bridge =
             pkgs.runCommand "genie-agent-tier1-bridge"
               {
-                nativeBuildInputs = [ pkgs.nodejs ];
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.bubblewrap
+                ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
+                    ./src/state
                     ./src/supervisor
                     ./src/tier1
                     ./src/mirror
@@ -771,6 +778,7 @@
                 grep -q '^ok [0-9]* - oracle (GL1 FIFO): queued turns acquire slots in strict FIFO arrival order$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 timer at acquisition): the 600s TurnController timer starts when a turn acquires its slot, not at intake$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (GL1 escalate-not-drop): a queued turn waiting past maxQueueWaitSecs fast-escalates and is never dropped$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle GS2 (C1): Lifecycle.message opens session/thread.jsonl with O_NOFOLLOW | O_NONBLOCK and accepts only a regular file, refusing symlinks and FIFOs without blocking, and mutant goes RED$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # Escalation: a forced or below-threshold draft sends at once, a confident one only on 🔍
@@ -898,6 +906,7 @@
                   'a read-only store path is removed'; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -q '^ok [0-9]* - oracle GS2 (C8): Gc.collect tears down a live pi process before removing its worktrees, and mutant goes RED$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
@@ -1035,6 +1044,7 @@
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 grep -q '^ok [0-9]* - oracle GX2 (F5 / C7): replayResume clamps the replayed tier with nextTier so a trusted archive never lifts a public session, and readArchive falls back to public$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle GS2 (C1): archiveObject opens session/thread.jsonl with O_NOFOLLOW | O_NONBLOCK and accepts only a regular file, refusing symlinks and FIFOs, and mutant goes RED$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The composition root (plan C11) end to end over fakes: an inbound line reaches pi with its tier
@@ -1048,6 +1058,7 @@
                 nativeBuildInputs = [
                   pkgs.nodejs
                   pkgs.git
+                  pkgs.bubblewrap
                 ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
@@ -1099,6 +1110,7 @@
                 grep -q "^ok [0-9]* - oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts the 10m timer at slot acquisition, and fast-escalates queued turns past tier1.maxQueueWaitSecs with 'tier-1 busy'$" $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GX2 (F2): propose on a public thread creates a PendingAction requiring a trusted !approve, refuses disallowed repos before notice or act, and mutant goes RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.json before any approval notice, screens the notice through redact() and outbound(), caps pending actions at 1 per thread, and mutant goes RED$' $TMPDIR/tap || exit 1
+                grep -q "^ok [0-9]* - oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all four mutants go RED$" $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover

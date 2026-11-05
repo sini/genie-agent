@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { after, before, test } from "node:test";
@@ -503,7 +503,7 @@ test("oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.
   let publicReachedRunner = false;
   const publicSpy: Runner = async (args) => {
     publicReachedRunner = true;
-    if (args[0] === "clone") mkdirSync(args.at(-1)!, { recursive: true });
+    if (args.includes("clone")) mkdirSync(args.at(-1)!, { recursive: true });
     if (args.includes("worktree")) mkdirSync(args.at(-2)!, { recursive: true });
     return args.includes("rev-parse") ? `${rev}\n` : "";
   };
@@ -575,5 +575,87 @@ test("oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.
     /mutant without pin\(\) reaches runner and turns RED/,
   );
 });
+
+test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED", async () => {
+  fixture("gs2symlinks");
+  const work = `${tmp}/work-gs2symlinks`;
+  writeFileSync(`${work}/README.md`, "regular-file-ok\n");
+  symlinkSync("/etc/hosts", `${work}/linked-file`);
+  sh(["add", "README.md", "linked-file"], work);
+  sh(["commit", "-q", "-m", "add-symlink"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const { cfg, run, calls } = setup();
+  const wt = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", run);
+  assert.equal(readFileSync(`${wt.path}/README.md`, "utf8"), "regular-file-ok\n");
+  const st = lstatSync(`${wt.path}/linked-file`);
+  assert.equal(st.isSymbolicLink(), false, "tracked symlink must not be checked out as S_IFLNK");
+  assert.equal(st.isFile(), true, "tracked symlink must be checked out as a regular file under core.symlinks=false");
+  assert.equal(readFileSync(`${wt.path}/linked-file`, "utf8").trim(), "/etc/hosts");
+  assert.ok(
+    calls.some((a) => a.includes("worktree") && a.includes("core.symlinks=false")),
+    "worktree add argv must carry -c core.symlinks=false",
+  );
+  // C4: bare mirror config persists core.symlinks=false (--config core.symlinks=false on clone)
+  const mirrorCfgText = readFileSync(`${cfg.mirrorRoot}/${mirrorKey(`${base}/gs2symlinks`)}/config`, "utf8");
+  assert.match(mirrorCfgText, /symlinks\s*=\s*false/, "bare mirror config must persist core.symlinks=false");
+
+  // C4 two-call cell: upstream commit adds a second symlink, and a second worktreeFor call on the same (url, thread)
+  // takes the `if (existsSync(path)) checkout --force --detach` branch and still keeps symlinks as regular files.
+  symlinkSync("/etc/resolv.conf", `${work}/second-link`);
+  sh(["add", "second-link"], work);
+  sh(["commit", "-q", "-m", "add-second-symlink"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const wt2 = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", run);
+  assert.equal(wt2.path, wt.path);
+  const st2 = lstatSync(`${wt2.path}/second-link`);
+  assert.equal(st2.isSymbolicLink(), false, "re-checkout branch must not check out tracked symlink as S_IFLNK");
+  assert.equal(st2.isFile(), true, "re-checkout branch must check out tracked symlink as regular file");
+  assert.ok(
+    calls.some((a) => a.includes("checkout") && a.includes("core.symlinks=false")),
+    "checkout argv must carry -c core.symlinks=false",
+  );
+
+  // Mutant M-symlinks-true (both clone/worktree and checkout branches): forcing core.symlinks=true materializes S_IFLNK and turns RED
+  const { cfg: mutCfg } = setup();
+  const mutRun: Runner = (args, signal) =>
+    git(
+      [
+        "-c",
+        "protocol.git.allow=always",
+        // Overrides the runner's own leading -c core.symlinks=false (a later -c wins).
+        "-c",
+        "core.symlinks=true",
+        ...args
+          .map((a) => (a === "core.symlinks=false" ? "core.symlinks=true" : a))
+          .map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:")),
+      ],
+      signal,
+    );
+  const mutWt = await worktreeFor(mutCfg, `${base}/gs2symlinks`, "thread-gs2-mut", mutRun);
+  const mutSt = lstatSync(`${mutWt.path}/linked-file`);
+  assert.throws(
+    () => assert.equal(mutSt.isSymbolicLink(), false, "mutant M-symlinks-true materializes S_IFLNK and turns RED"),
+    /mutant M-symlinks-true materializes S_IFLNK and turns RED/,
+  );
+  const mutSt2 = lstatSync(`${mutWt.path}/second-link`);
+  assert.throws(
+    () => assert.equal(mutSt2.isSymbolicLink(), false, "mutant M-symlinks-true on second-link turns RED"),
+    /mutant M-symlinks-true on second-link turns RED/,
+  );
+
+  // Checkout-branch-only mutant: only the re-checkout of the existing thread worktree forces
+  // core.symlinks=true; the new link it brings in materializes as S_IFLNK.
+  symlinkSync("/etc/hostname", `${work}/third-link`);
+  sh(["add", "third-link"], work);
+  sh(["commit", "-q", "-m", "add-third-symlink"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+  const coMutRun: Runner = (args, signal) => (args.includes("checkout") ? mutRun(args, signal) : run(args, signal));
+  const wt3 = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", coMutRun);
+  assert.equal(wt3.path, wt.path);
+  assert.equal(lstatSync(`${wt3.path}/third-link`).isSymbolicLink(), true, "checkout-branch mutant materializes S_IFLNK (RED)");
+});
+
 
 

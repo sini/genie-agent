@@ -174,6 +174,7 @@ export const git: Runner = (args, signal) => {
     "protocol.git.allow=never",
     "protocol.file.allow=never",
     "credential.helper=",
+    "core.symlinks=false",
   ].flatMap((c) => ["-c", c]);
   return new Promise((resolve, reject) => {
     // Its own process group, so an abort also kills the transport and index-pack git spawns.
@@ -290,9 +291,16 @@ async function fetchMirror(run: Runner, mirrorRoot: string, dir: string, url: st
     return;
   }
   // Cloned beside the mirror and renamed into place, so a failed clone leaves no mirror.
+  // --config core.symlinks=false persists in the bare mirror's config so every worktree inherits it (GS2 C4).
   const tmp = mkdtempSync(`${mirrorRoot}/.clone-`);
   try {
-    await capped(run, ["clone", "--mirror", "--", url, `${tmp}/m`], tmp, cap, url);
+    await capped(
+      run,
+      ["clone", "--config", "core.symlinks=false", "--mirror", "--", url, `${tmp}/m`],
+      tmp,
+      cap,
+      url,
+    );
     renameSync(`${tmp}/m`, dir);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -410,11 +418,11 @@ export async function worktreeFor(
     evict(cfg.mirrorRoot, key, cfg.quota ?? DEFAULT_QUOTA, url);
     const rev = (await run(["-C", dir, "rev-parse", "--verify", "HEAD^{commit}"])).trim();
     if (existsSync(path)) {
-      await run(["-C", path, "checkout", "--force", "--detach", rev]);
+      await run(["-C", path, "-c", "core.symlinks=false", "checkout", "--force", "--detach", rev]);
     } else {
       mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
       // --force: a removed worktree stays registered in the mirror and would refuse this path.
-      await run(["-C", dir, "worktree", "add", "--force", "--detach", path, rev]);
+      await run(["-C", dir, "-c", "core.symlinks=false", "worktree", "add", "--force", "--detach", path, rev]);
       touch(dir, cfg.mirrorRoot);
     }
     return { path, rev };

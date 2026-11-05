@@ -4,7 +4,7 @@
 // `node --test tests/lifecycle.test.ts`; needs git on PATH.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   CHECKIN_MS,
@@ -623,3 +623,61 @@ test("oracle (GL1 escalate-not-drop): a queued turn waiting past maxQueueWaitSec
     await supervisor.shutdown();
   }
 });
+
+test("oracle GS2 (C1): Lifecycle.message opens session/thread.jsonl with O_NOFOLLOW | O_NONBLOCK and accepts only a regular file, refusing symlinks and FIFOs without blocking, and mutant goes RED", async () => {
+  const c1Store = new ThreadStateStore(`${tmp}/state-gs2-c1`, `${tmp}/store-gs2-c1`);
+  const canaryPath = `${tmp}/gs2-lc-canary.jsonl`;
+  writeFileSync(canaryPath, '{"role":"user","content":"canary"}\n');
+
+  const runCheck = async (label: string, kind: "symlink" | "fifo", sessionNoFollow: boolean) => {
+    const th = `t-c1-${label}`;
+    c1Store.write({
+      thread_id: th,
+      status: "active",
+      created: new Date(T0).toISOString(),
+      last_active: new Date(T0).toISOString(),
+      sender_tier: "public",
+    });
+    const sessionFile = `${c1Store.dir(th)}/session/thread.jsonl`;
+    rmSync(sessionFile, { force: true });
+    if (kind === "symlink") {
+      symlinkSync(canaryPath, sessionFile);
+    } else {
+      execFileSync("mkfifo", [sessionFile]);
+    }
+    let resyncCalls = 0;
+    const supervisor = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
+    const lc = new Lifecycle({
+      supervisor,
+      store: c1Store,
+      mirror,
+      deeper: async () => {},
+      resync: async () => {
+        resyncCalls++;
+        return "";
+      },
+      sessionNoFollow,
+    });
+    try {
+      await lc.message(th, "hello", { hadState: true });
+      return resyncCalls;
+    } finally {
+      lc.stop();
+      await supervisor.shutdown();
+    }
+  };
+
+  // 1. Symlink at session/thread.jsonl is refused (hasState = false -> triggers resync = 1)
+  assert.equal(await runCheck("sym-safe", "symlink", true), 1, "symlink session file must be refused and trigger resync");
+
+  // 2. FIFO at session/thread.jsonl returns immediately without blocking (hasState = false -> triggers resync = 1)
+  assert.equal(await runCheck("fifo-safe", "fifo", true), 1, "FIFO session file must be refused without blocking");
+
+  // 3. Mutant (sessionNoFollow = false): follows symlink to canary valid JSONL (hasState = true -> resync = 0) and turns RED
+  const mutantResyncCalls = await runCheck("sym-mutant", "symlink", false);
+  assert.throws(
+    () => assert.equal(mutantResyncCalls, 1, "mutant dropping O_NOFOLLOW follows symlink and turns RED"),
+    /mutant dropping O_NOFOLLOW follows symlink and turns RED/,
+  );
+});
+

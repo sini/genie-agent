@@ -527,6 +527,9 @@ test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and exec
   let offeredTools: string[] = [];
   const toolOutputs: Record<string, string> = {};
   let stubRequests = 0;
+  // GS2: /etc/passwd is not bound into pi's jail, so it would be refused as nonexistent. Escape to a
+  // file that does exist inside the jail (pi's own store path) to keep exercising the containment check.
+  const escPath = realpathSync(process.env.PI ?? "pi");
 
   const builtinServer = createServer((req, res) => {
     let body = "";
@@ -546,7 +549,7 @@ test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and exec
             { id: "c_find", name: "find", args: { pattern: "*.nix" } },
             { id: "c_grep", name: "grep", args: { pattern: "services.foo" } },
             { id: "c_read", name: "read", args: { path: "sub/mod.nix" } },
-            { id: "c_esc", name: "read", args: { path: "/etc/passwd" } },
+            { id: "c_esc", name: "read", args: { path: escPath } },
           ]),
         );
         return;
@@ -602,7 +605,7 @@ test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and exec
     assert.equal(toolOutputs.c_find.trim(), "sub/mod.nix");
     assert.match(toolOutputs.c_grep, /sub\/mod\.nix:1:.*\{ services\.foo\.enable = true; \}/);
     assert.equal(toolOutputs.c_read, "{ services.foo.enable = true; }\n");
-    assert.match(toolOutputs.c_esc, /refused: \/etc\/passwd is outside the thread's worktrees and memory mount/);
+    assert.equal(toolOutputs.c_esc.trim(), `refused: ${escPath} is outside the thread's worktrees and memory mount`);
     assert.equal(armRes.runs[0].questions[0].correctness, 1);
     assert.equal(armRes.runs[0].questions[0].citation, 1);
   } finally {
@@ -652,6 +655,7 @@ test("oracle C2.3 (Cell 1): eval tool set and system prompt equal production tie
     writePiModelsJson(prodAgentDir, { baseUrl: `http://127.0.0.1:${parityPort}`, id: "stub-qwen" });
     const prodLaunch = tier1Launch({
       pi: process.env.PI ?? "pi",
+      agentDir: prodAgentDir,
       config: () => ({ root: "", searxngUrl: "http://127.0.0.1:1", cluster: [] }),
       args: () => ["--model", "genie/stub-qwen", "--no-session"],
     });
@@ -688,7 +692,12 @@ test("oracle C2.3 (Cell 1): eval tool set and system prompt equal production tie
     assert.equal(captured.length, 2, "production tier1Launch must also send 1 request to loopback stub");
     const prodCapture = captured[1];
 
-    assert.strictEqual(evalCapture.system, prodCapture.system, "eval system prompt must equal production tier1Launch byte-for-byte");
+    // GS2: pi now runs chdir'd into its own thread worktree inside bwrap, so pi's <cwd> block names
+    // the thread (slot-0 vs prod-t1) and a per-launch root. Everything else must match byte-for-byte.
+    const noCwd = (s: string) => s.replace(/<cwd>\n[^\n]*\n<\/cwd>/, "<cwd>\n…\n</cwd>");
+    assert.match(evalCapture.system, /<cwd>\n[^\n]*\/worktrees\/slot-0\n<\/cwd>/, "eval pi runs in its thread worktree");
+    assert.match(prodCapture.system, /<cwd>\n[^\n]*\/worktrees\/prod-t1\n<\/cwd>/, "production pi runs in its thread worktree");
+    assert.strictEqual(noCwd(evalCapture.system), noCwd(prodCapture.system), "eval system prompt must equal production tier1Launch byte-for-byte");
     assert.deepStrictEqual(evalCapture.tools, prodCapture.tools, "eval tool set and schemas must equal production tier1Launch");
   } finally {
     parityServer.close();
