@@ -344,8 +344,225 @@ let
     trusted = "canary-trusted-token-0000";
   };
 
+  gv2TlsCerts =
+    pkgs.runCommand "gv2-tls-certs"
+      {
+        nativeBuildInputs = [ pkgs.openssl ];
+      }
+      ''
+        mkdir -p $out
+        openssl req -x509 -newkey rsa:2048 -nodes \
+          -keyout $out/key.pem -out $out/cert.pem \
+          -days 3650 -subj "/CN=gv2-git.example.org" \
+          -addext "subjectAltName=DNS:gv2-git.example.org,IP:198.18.0.1" \
+          -addext "basicConstraints=critical,CA:TRUE" \
+          -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign"
+      '';
+
+  gv2GitFixture =
+    pkgs.runCommand "gv2-git-fixture"
+      {
+        nativeBuildInputs = [ pkgs.git ];
+      }
+      ''
+        mkdir -p src $out
+        git init -b main src
+        git -C src config user.email "gv2@example.org"
+        git -C src config user.name "gv2"
+        echo "gv2-readme-canary" > src/README.md
+        ln -s /etc/passwd src/tracked-link
+        git -C src add README.md tracked-link
+        git -C src commit -m "gv2 fixture commit"
+        git clone --bare src $out/fixture.git
+        git -C $out/fixture.git update-server-info
+      '';
+
+  gv2ProbePy = pkgs.writeText "gv2_probe.py" ''
+    import ctypes, errno, json, os, stat, sys
+
+    class CapHeader(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+
+    class CapData(ctypes.Structure):
+        _fields_ = [
+            ("effective", ctypes.c_uint32),
+            ("permitted", ctypes.c_uint32),
+            ("inheritable", ctypes.c_uint32),
+        ]
+
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    hdr = CapHeader(0x20080522, 0)
+    dat = (CapData * 2)()
+    libc.capset(ctypes.byref(hdr), ctypes.byref(dat))
+
+    cfg = json.loads(sys.stdin.read())
+    tid_a = cfg["tid_a"]
+    tid_b = cfg["tid_b"]
+    clone_path = cfg["clone_path"]
+    agent_dir = cfg["agent_dir"]
+    root_pids = cfg["root_pids"]
+    root_fds = cfg["root_fds"]
+    jail_a_pids = set(cfg["jail_a_pids"])
+
+    status_map = {}
+    for line in open("/proc/self/status", "r", encoding="utf-8"):
+        if ":" in line:
+            k, v = line.split(":", 1)
+            status_map[k.strip()] = v.strip()
+
+    self_nspids = [int(x) for x in status_map.get("NSpid", "").split() if x.isdigit()]
+    self_uid = os.getuid()
+    self_gid = os.getgid()
+    self_cap_eff = status_map.get("CapEff", "")
+    self_cap_prm = status_map.get("CapPrm", "")
+    self_no_new_privs = status_map.get("NoNewPrivs", "")
+
+    # B1: NSpid depth >= 2
+    b1_ok = len(self_nspids) >= 2
+
+    # B2: /run/credentials/**, /run/user/1000/xmsg/agent.sock, state/thread-gv2-B, state/thread-gv2-A/state.json absent (ENOENT)
+    b2_targets = [
+        "/run/credentials",
+        "/run/credentials/genie-agent.service",
+        "/run/credentials/genie-agent.service/model-key",
+        "/run/credentials/genie-agent.service/broker-token",
+        "/run/credentials/genie-agent.service/guard-out-key",
+        "/run/credentials/genie-agent.service/s3-secret-key",
+        "/run/genie-secrets/model-key",
+        "/run/user/1000/xmsg/agent.sock",
+        "/run/user/1000/xmsg/register.sock",
+        f"/var/lib/genie-agent/state/{tid_b}",
+        f"/var/lib/genie-agent/state/{tid_b}/state.json",
+        f"/var/lib/genie-agent/state/{tid_b}/session",
+        f"/var/lib/genie-agent/state/{tid_a}/state.json",
+        f"/var/lib/genie-agent/state/{tid_a}/context.json",
+        "/var/lib/genie-agent/mirrors",
+        f"/var/lib/genie-agent/worktrees/{tid_b}",
+    ]
+    b2_results = {}
+    for p in b2_targets:
+        try:
+            os.lstat(p)
+            b2_results[p] = "EXISTS"
+            continue
+        except OSError as ex:
+            err_name = errno.errorcode.get(ex.errno, str(ex.errno))
+        try:
+            fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+            os.close(fd)
+            b2_results[p] = "OPEN_OK"
+        except OSError as ex2:
+            err_name2 = errno.errorcode.get(ex2.errno, str(ex2.errno))
+            b2_results[p] = err_name if err_name == err_name2 else f"{err_name}/{err_name2}"
+    b2_ok = all(v == "ENOENT" for v in b2_results.values())
+
+    # B3: genie-root's environ, mem, root and every fd/<n> dereference denied
+    b3_leaks = []
+    b3_checked = 0
+    for rpid in root_pids:
+        if rpid in self_nspids or rpid in jail_a_pids:
+            continue
+        for sub in ("environ", "mem"):
+            b3_checked += 1
+            try:
+                fd = os.open(f"/proc/{rpid}/{sub}", os.O_RDONLY | os.O_NONBLOCK)
+                os.close(fd)
+                b3_leaks.append(f"/proc/{rpid}/{sub}:open")
+            except OSError:
+                pass
+        b3_checked += 1
+        try:
+            os.listdir(f"/proc/{rpid}/root")
+            b3_leaks.append(f"/proc/{rpid}/root:listdir")
+        except OSError:
+            pass
+        for fd_num in root_fds:
+            b3_checked += 1
+            fp = f"/proc/{rpid}/fd/{fd_num}"
+            try:
+                t = os.readlink(fp)
+                b3_leaks.append(f"{fp}:readlink={t}")
+            except OSError:
+                pass
+            try:
+                fd = os.open(fp, os.O_RDONLY | os.O_NONBLOCK)
+                os.close(fd)
+                b3_leaks.append(f"{fp}:open")
+            except OSError:
+                pass
+    b3_ok = len(b3_leaks) == 0 and b3_checked >= 6
+
+    # B4: writes to /nix/store, /memory, worktree, and real agentDir fail with EROFS; session dir is writable
+    def check_ro_create(p: str) -> str:
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.close(fd)
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+            return "WRITABLE"
+        except OSError as ex:
+            return errno.errorcode.get(ex.errno, str(ex.errno))
+
+    def check_ro_existing(p: str) -> str:
+        try:
+            fd = os.open(p, os.O_WRONLY)
+            os.close(fd)
+            return "WRITABLE"
+        except OSError as ex:
+            return errno.errorcode.get(ex.errno, str(ex.errno))
+
+    b4_ro = {
+        "nix_store": check_ro_create("/nix/store/.gv2-probe-w"),
+        "memory_dir": check_ro_create("/memory/.gv2-probe-w"),
+        "worktree_dir": check_ro_create(f"/var/lib/genie-agent/worktrees/{tid_a}/.gv2-probe-w"),
+        "worktree_file": check_ro_existing(f"{clone_path}/README.md"),
+        "agent_dir": check_ro_create(f"{agent_dir}/.gv2-probe-w"),
+        "agent_models": check_ro_existing(f"{agent_dir}/models.json"),
+        "state_root": check_ro_create("/var/lib/genie-agent/state/.gv2-probe-w"),
+        "worktrees_root": check_ro_create("/var/lib/genie-agent/worktrees/.gv2-probe-w"),
+    }
+    sess_probe = f"/var/lib/genie-agent/state/{tid_a}/session/.gv2-probe-ok"
+    try:
+        with open(sess_probe, "w", encoding="utf-8") as sf:
+            sf.write("ok\n")
+        os.unlink(sess_probe)
+        b4_sess_rw = "OK"
+    except OSError as ex:
+        b4_sess_rw = errno.errorcode.get(ex.errno, str(ex.errno))
+    b4_ok = all(v == "EROFS" for v in b4_ro.values()) and b4_sess_rw == "OK"
+
+    # B5 (C2): the jail's /proc lists no PID outside pi's own jail
+    proc_pids = sorted(int(x) for x in os.listdir("/proc") if x.isdigit())
+    allowed_pids = jail_a_pids | set(self_nspids)
+    outside_pids = [p for p in proc_pids if p not in allowed_pids]
+    b5_ok = len(outside_pids) == 0 and len(proc_pids) >= 2
+
+    print(json.dumps({
+        "uid": self_uid,
+        "gid": self_gid,
+        "cap_eff": self_cap_eff,
+        "cap_prm": self_cap_prm,
+        "no_new_privs": self_no_new_privs,
+        "nspids": self_nspids,
+        "b1_ok": b1_ok,
+        "b2_ok": b2_ok,
+        "b2_results": b2_results,
+        "b3_ok": b3_ok,
+        "b3_leaks": b3_leaks,
+        "b3_checked": b3_checked,
+        "b4_ok": b4_ok,
+        "b4_ro": b4_ro,
+        "b4_sess_rw": b4_sess_rw,
+        "b5_ok": b5_ok,
+        "proc_pids": proc_pids,
+        "outside_pids": outside_pids,
+    }))
+  '';
+
   gi15TestScripts = pkgs.writeTextDir "stub_api.py" ''
-    import http.server, json, os, socket, socketserver, sys, threading, time, urllib.parse
+    import functools, http.server, json, os, socket, socketserver, ssl, subprocess, sys, threading, time, urllib.parse
 
     LOG_PATH = "/tmp/gi15-api-log.jsonl"
     V68_PATH = "/tmp/v68-results.json"
@@ -353,6 +570,20 @@ let
     XMSG_SOCK = f"{XMSG_DIR}/agent.sock"
     REG_SOCK = f"{XMSG_DIR}/register.sock"
     HTTP_SOCK = f"{XMSG_DIR}/http.sock"
+
+    subprocess.run(["${pkgs.iproute2}/bin/ip", "addr", "replace", "198.18.0.1/32", "dev", "lo"], check=True)
+
+    class QuietGitHttpsHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory="${gv2GitFixture}", **kwargs)
+        def log_message(self, *args):
+            pass
+
+    git_https_srv = http.server.ThreadingHTTPServer(("0.0.0.0", 18443), QuietGitHttpsHandler)
+    git_ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    git_ssl_ctx.load_cert_chain("${gv2TlsCerts}/cert.pem", "${gv2TlsCerts}/key.pem")
+    git_https_srv.socket = git_ssl_ctx.wrap_socket(git_https_srv.socket, server_side=True)
+    threading.Thread(target=git_https_srv.serve_forever, daemon=True).start()
 
     os.makedirs(XMSG_DIR, mode=0o700, exist_ok=True)
     os.chown("/run/user/1000", 1000, 100)
@@ -504,7 +735,8 @@ let
                         if key and key in idem_map:
                             mid = idem_map[key]
                         else:
-                            if not to.startswith("genie-expert-") and to not in reg_alive:
+                            is_svc = raw_to.startswith("svc:") or to == "genie" or to.startswith("genie-expert-")
+                            if not is_svc and to not in reg_alive:
                                 conn.sendall((json.dumps({
                                     "status": "error",
                                     "error": "not_found",
@@ -514,7 +746,7 @@ let
                             mid = next_msg_id()
                             if key:
                                 idem_map[key] = mid
-                            msg_sender[mid] = "supervisor" if to.startswith("genie-expert-") else "genie-expert-public"
+                            msg_sender[mid] = "supervisor" if is_svc else "genie-expert-public"
                             reg_queues.setdefault(to, []).append({"messageId": mid, "text": text})
                             xmsg_cond.notify_all()
                     conn.sendall((json.dumps({"address": f"{to}@test", "message_id": mid}) + "\n").encode("utf-8"))
@@ -565,7 +797,7 @@ let
                     recs = [
                         {"address": f"{r}@test"}
                         for r in sorted(reg_alive)
-                        if not r.startswith("genie-expert-")
+                        if not r.startswith("genie-expert-") and r != "genie"
                     ]
                 body = json.dumps({"recipients": recs}).encode("utf-8")
                 self.send_response(200)
@@ -636,12 +868,56 @@ let
                         trs.append(blk)
         return trs
 
+    def extract_openai_tool_outputs(msgs):
+        outs = []
+        for m in msgs:
+            if m.get("role") == "tool":
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    outs.append(c)
+                elif isinstance(c, list):
+                    outs.append("".join(b.get("text", "") for b in c if isinstance(b, dict)))
+                else:
+                    outs.append(str(c))
+        return outs
+
+    oai_call_seq = 0
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/search":
+                qs = urllib.parse.parse_qs(parsed.query)
+                q = qs.get("q", [""])[0]
+                body = json.dumps({
+                    "results": [{
+                        "title": f"GV2 Title for {q}",
+                        "url": "https://example.org/gv2-search",
+                        "content": f"gv2-search-result-canary:{q}",
+                    }]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_PUT(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 0:
+                self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_POST(self):
-            global v68_step
+            global v68_step, oai_call_seq
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length).decode("utf-8", "replace")
             try:
@@ -652,6 +928,116 @@ let
             prompt = get_user_prompt(msgs)
             trs = collect_tool_results(msgs)
             auth = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+
+            if self.path.startswith("/v1/chat/completions"):
+                if not body.get("stream"):
+                    resp_bytes = json.dumps({
+                        "id": "chatcmpl_gv2_go",
+                        "object": "chat.completion",
+                        "choices": [{
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": "{\"verdict\":\"pass\",\"reason\":\"clean\"}",
+                            },
+                        }],
+                    }).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp_bytes)))
+                    self.end_headers()
+                    self.wfile.write(resp_bytes)
+                    return
+
+                tool_outs = extract_openai_tool_outputs(msgs)
+                step = len(tool_outs)
+                tc = None
+                if prompt.startswith("gv2-turn-A:"):
+                    if step == 0:
+                        tc = ("read", {"path": "/memory/MEMORY.md"})
+                    elif step == 1:
+                        tc = ("clone", {"url": "https://gv2-git.example.org:18443/fixture.git"})
+                    elif step == 2:
+                        try:
+                            cp = json.loads(tool_outs[1]).get("path", "/err")
+                        except Exception:
+                            cp = "/err"
+                        tc = ("read", {"path": f"{cp}/README.md"})
+                    elif step == 3:
+                        try:
+                            cp = json.loads(tool_outs[1]).get("path", "/err")
+                        except Exception:
+                            cp = "/err"
+                        tc = ("read", {"path": f"{cp}/tracked-link"})
+                    elif step == 4:
+                        tc = ("web_search", {"query": "gv2-search-canary"})
+                    elif step == 5:
+                        try:
+                            cp = json.loads(tool_outs[1]).get("path", "/err")
+                        except Exception:
+                            cp = f"err:{tool_outs[1]}"
+                        ans_str = json.dumps({
+                            "gv2": prompt,
+                            "mem": tool_outs[0].splitlines()[0].strip() if tool_outs[0] else "",
+                            "clone_path": cp,
+                            "readme": tool_outs[2].strip(),
+                            "link": tool_outs[3].strip(),
+                            "search": tool_outs[4].strip(),
+                        })
+                        tc = ("reply", {
+                            "answer": ans_str,
+                            "confidence": 0.95,
+                            "gaps": [],
+                            "escalate_forced": "no",
+                        })
+                elif prompt.startswith("gv2-turn-B:"):
+                    if step == 0:
+                        tc = ("reply", {
+                            "answer": f"gv2-B-ok:{prompt}",
+                            "confidence": 0.95,
+                            "gaps": [],
+                            "escalate_forced": "no",
+                        })
+
+                with lock:
+                    oai_call_seq += 1
+                    cid = f"call_gv2_{oai_call_seq}"
+                if tc is not None:
+                    delta = {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": cid,
+                            "type": "function",
+                            "function": {
+                                "name": tc[0],
+                                "arguments": json.dumps(tc[1]),
+                            },
+                        }],
+                    }
+                    fin = "tool_calls"
+                else:
+                    delta = {"role": "assistant", "content": "done"}
+                    fin = "stop"
+
+                def mk_chunk(d, f_reason):
+                    return "data: " + json.dumps({
+                        "id": cid,
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": body.get("model", "m"),
+                        "choices": [{"index": 0, "delta": d, "finish_reason": f_reason}],
+                    }) + "\n\n"
+
+                sse_payload = (mk_chunk(delta, None) + mk_chunk({}, fin) + "data: [DONE]\n\n").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(sse_payload)))
+                self.end_headers()
+                self.wfile.write(sse_payload)
+                self.wfile.flush()
+                return
 
             with lock:
                 with open(LOG_PATH, "a", encoding="utf-8") as lf:
@@ -3388,6 +3774,399 @@ let
     cell("GV1", *eval_gv1())
 
     # =========================================================================
+    # 7c. GV2: End-to-end Tier 1 pi bwrap sandbox verification (GS2 §3a.2)
+    # =========================================================================
+    def make_matrix_envelope(tid: str, text: str, tier: str = "public") -> str:
+        req_line = json.dumps({
+            "sender": "alice",
+            "sender_id": "@alice:example.org",
+            "tier": tier,
+            "text": text,
+        })
+        return f"[matrix] room=!gv2:example.org thread={tid} user=alice ({tier})\n\n<request>\n{req_line}\n</request>"
+
+    def eval_gv2(mutant: str | None = None) -> tuple[bool, str]:
+        tag = mutant.lower().replace("-", "_") if mutant else "norm"
+        tid_a = f"thread-gv2-A-{tag}"
+        tid_b = f"thread-gv2-B-{tag}"
+        dropin_dir = "/run/systemd/system/genie-agent.service.d"
+        dropin_file = f"{dropin_dir}/m-gv2.conf"
+        mut_bwrap_path = f"{STATE_DIR}/gv2-mutant-bwrap"
+        mut_cfg_path = f"{STATE_DIR}/gv2-mutant-config.json"
+
+        cat_ga = subprocess.check_output(["systemctl", "cat", "genie-agent.service"], text=True)
+        m_ga = re.search(r"ExecStart=(\S+)\s+--config\s+(\S+)", cat_ga)
+        assert m_ga, "missing ExecStart in genie-agent.service"
+        orig_root_bin = m_ga.group(1).strip()
+        orig_cfg_path = m_ga.group(2).strip()
+
+        def restart_and_wait_genie_agent() -> bool:
+            prev_poll = xmsg_agent_call({"action": "status", "name": "genie"}).get("polling", 0)
+            xmsg_agent_call({"action": "reset", "name": "genie"})
+            subprocess.run(["systemctl", "reset-failed", "genie-agent.service"], check=False)
+            subprocess.run(["systemctl", "restart", "genie-agent.service"], check=True)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 15.0:
+                st = xmsg_agent_call({"action": "status", "name": "genie"})
+                if st.get("polling", 0) > prev_poll and st.get("alive"):
+                    return True
+                time.sleep(0.1)
+            return False
+
+        try:
+            subprocess.run(["systemctl", "stop", "genie-agent.service"], check=True)
+            for p in (
+                f"{STATE_DIR}/state/{tid_a}",
+                f"{STATE_DIR}/state/{tid_b}",
+                f"{STATE_DIR}/worktrees/{tid_a}",
+                f"{STATE_DIR}/worktrees/{tid_b}",
+                mut_bwrap_path,
+                mut_cfg_path,
+            ):
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.lexists(p):
+                    os.unlink(p)
+
+            os.makedirs(dropin_dir, exist_ok=True)
+            if os.path.exists(dropin_file):
+                os.unlink(dropin_file)
+
+            if mutant in ("M-no-pi-bwrap", "M-rw-worktree-or-agentdir", "M-expose-state-root"):
+                mut_script = "\n".join([
+                    "#!${pkgs.python3}/bin/python3 -I",
+                    "import os, sys",
+                    f"mutant = {mutant!r}",
+                    'real_bwrap = "${pkgs.bubblewrap}/bin/bwrap"',
+                    "argv = sys.argv[1:]",
+                    "sep = argv.index('--')",
+                    "b_flags = argv[:sep]",
+                    "pi_cmd = argv[sep + 1:]",
+                    "if mutant == 'M-no-pi-bwrap':",
+                    "    env = {}",
+                    "    cwd = None",
+                    "    i = 0",
+                    "    while i < len(b_flags):",
+                    "        f = b_flags[i]",
+                    "        if f == '--setenv':",
+                    "            env[b_flags[i + 1]] = b_flags[i + 2]",
+                    "            i += 3",
+                    "        elif f == '--chdir':",
+                    "            cwd = b_flags[i + 1]",
+                    "            i += 2",
+                    "        elif f in ('--ro-bind', '--ro-bind-try', '--bind'):",
+                    "            i += 3",
+                    "        elif f in ('--dev', '--proc', '--tmpfs', '--remount-ro'):",
+                    "            i += 2",
+                    "        else:",
+                    "            i += 1",
+                    "    if cwd:",
+                    "        os.chdir(cwd)",
+                    "    os.execve(pi_cmd[0], pi_cmd, env)",
+                    "elif mutant == 'M-rw-worktree-or-agentdir':",
+                    "    new_flags = []",
+                    "    i = 0",
+                    "    while i < len(b_flags):",
+                    "        f = b_flags[i]",
+                    "        if f == '--ro-bind' and i + 2 < len(b_flags):",
+                    "            src, dst = b_flags[i + 1], b_flags[i + 2]",
+                    "            if '/genie-pi-' in src or src.startswith('/var/lib/genie-agent/worktrees/'):",
+                    "                new_flags.extend(['--bind', src, dst])",
+                    "            else:",
+                    "                new_flags.extend([f, src, dst])",
+                    "            i += 3",
+                    "        elif f == '--remount-ro' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/worktrees':",
+                    "            i += 2",
+                    "        else:",
+                    "            new_flags.append(f)",
+                    "            i += 1",
+                    "    os.execv(real_bwrap, [real_bwrap] + new_flags + ['--'] + pi_cmd)",
+                    "elif mutant == 'M-expose-state-root':",
+                    "    new_flags = []",
+                    "    i = 0",
+                    "    while i < len(b_flags):",
+                    "        f = b_flags[i]",
+                    "        if f == '--tmpfs' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/state':",
+                    "            new_flags.extend(['--ro-bind', '/var/lib/genie-agent/state', '/var/lib/genie-agent/state'])",
+                    "            i += 2",
+                    "        elif f == '--remount-ro' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/state':",
+                    "            i += 2",
+                    "        else:",
+                    "            new_flags.append(f)",
+                    "            i += 1",
+                    "    os.execv(real_bwrap, [real_bwrap] + new_flags + ['--'] + pi_cmd)",
+                ]) + "\n"
+                with open(mut_bwrap_path, "w", encoding="utf-8") as mf:
+                    mf.write(mut_script)
+                os.chown(mut_bwrap_path, 1000, 100)
+                os.chmod(mut_bwrap_path, 0o755)
+
+                cfg_obj = json.loads(open(orig_cfg_path, "r", encoding="utf-8").read())
+                cfg_obj.setdefault("tier1", {}).setdefault("sandbox", {})["bwrap"] = mut_bwrap_path
+                with open(mut_cfg_path, "w", encoding="utf-8") as cf:
+                    json.dump(cfg_obj, cf)
+                os.chown(mut_cfg_path, 1000, 100)
+                os.chmod(mut_cfg_path, 0o644)
+
+                with open(dropin_file, "w", encoding="utf-8") as df:
+                    df.write(f"[Service]\nExecStart=\nExecStart={orig_root_bin} --config {mut_cfg_path}\n")
+            elif mutant == "M-no-protectproc":
+                with open(dropin_file, "w", encoding="utf-8") as df:
+                    df.write("[Service]\nPrivatePIDs=false\nProtectProc=default\n")
+
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+            if not restart_and_wait_genie_agent():
+                return False, "genie-agent.service failed to register and poll on xmsg"
+
+            # Step A: Launch sibling thread B first so both its state on disk and its live pi jail exist
+            send_b = xmsg_agent_call({
+                "action": "send",
+                "to": "svc:genie",
+                "text": make_matrix_envelope(tid_b, f"gv2-turn-B:{tag}"),
+            })
+            reps_b = xmsg_wait_replies(send_b["message_id"], wait_s=20)
+            rep_b_raw = reps_b[0]["text"] if reps_b else ""
+            b_ok = f"gv2-B-ok:gv2-turn-B:{tag}" in rep_b_raw
+
+            # Step A: Positive turn on thread A (read /memory/MEMORY.md, clone HTTPS fixture, read README + tracked-link, web_search gv2-stub, reply)
+            t_turn_a = time.monotonic()
+            send_a = xmsg_agent_call({
+                "action": "send",
+                "to": "svc:genie",
+                "text": make_matrix_envelope(tid_a, f"gv2-turn-A:{tag}"),
+            })
+            reps_a = xmsg_wait_replies(send_a["message_id"], wait_s=25)
+            turn_a_ms = (time.monotonic() - t_turn_a) * 1000.0
+            rep_a_raw = reps_a[0]["text"] if reps_a else ""
+            try:
+                env_a_obj = json.loads(rep_a_raw)
+                draft_a = json.loads(env_a_obj["text"]) if isinstance(env_a_obj.get("text"), str) else env_a_obj
+                ans_a = json.loads(draft_a.get("answer", "{}"))
+            except Exception:
+                ans_a = {}
+
+            clone_path = ans_a.get("clone_path", "")
+            tracked_link_host = f"{clone_path}/tracked-link" if clone_path.startswith("/") else ""
+            symlink_flat_ok = (
+                bool(tracked_link_host)
+                and os.path.isfile(tracked_link_host)
+                and not os.path.islink(tracked_link_host)
+            )
+            sess_dir_a = f"{STATE_DIR}/state/{tid_a}/session"
+            jsonl_files = (
+                [f for f in os.listdir(sess_dir_a) if f.endswith(".jsonl") and os.path.getsize(f"{sess_dir_a}/{f}") > 0]
+                if os.path.isdir(sess_dir_a)
+                else []
+            )
+            no_threads_seg = not os.path.exists(f"{STATE_DIR}/state/threads")
+            step_a_ok = (
+                b_ok
+                and ans_a.get("gv2") == f"gv2-turn-A:{tag}"
+                and bool(ans_a.get("mem"))
+                and "gv2-readme-canary" in ans_a.get("readme", "")
+                and "/etc/passwd" in ans_a.get("link", "")
+                and "root:x:" not in ans_a.get("link", "")
+                and "gv2-search-result-canary:gv2-search-canary" in ans_a.get("search", "")
+                and symlink_flat_ok
+                and len(jsonl_files) >= 1
+                and no_threads_seg
+            )
+            if not step_a_ok:
+                return False, (
+                    f"stepA failed: b_ok={b_ok} ans_a={ans_a} symlink_flat_ok={symlink_flat_ok} "
+                    f"jsonl={jsonl_files} no_threads_seg={no_threads_seg} rep_a={rep_a_raw!r}"
+                )
+
+            # Step B: Boundary probe running as pi inside thread A's live jail
+            def get_nspids(pid_str: str) -> list[str]:
+                try:
+                    for line in open(f"/proc/{pid_str}/status", "r", encoding="utf-8"):
+                        if line.startswith("NSpid:"):
+                            return line.split()[1:]
+                except OSError:
+                    pass
+                return []
+
+            root_pid = int(subprocess.check_output(
+                ["systemctl", "show", "-p", "MainPID", "--value", "genie-agent.service"],
+                text=True,
+            ).strip())
+            root_nspids = [int(x) for x in get_nspids(str(root_pid)) if x.isdigit()]
+            root_pids = sorted(set([root_pid] + root_nspids))
+            root_fds = sorted(int(x) for x in os.listdir(f"/proc/{root_pid}/fd") if x.isdigit())
+
+            pi_a_pid = None
+            pi_b_pid = None
+            for d in os.listdir("/proc"):
+                if not d.isdigit() or int(d) == root_pid:
+                    continue
+                try:
+                    raw_cmd = open(f"/proc/{d}/cmdline", "rb").read()
+                    raw_env = open(f"/proc/{d}/environ", "rb").read()
+                except OSError:
+                    continue
+                parts = [p.decode("utf-8", "replace") for p in raw_cmd.split(b"\x00") if p]
+                if not parts or parts[0].endswith("/bwrap") or parts[0] == "bwrap":
+                    continue
+                env_str = raw_env.decode("utf-8", "replace")
+                if "GENIE_TIER1_CONFIG=" not in env_str:
+                    continue
+                if f"/worktrees/{tid_a}" in env_str:
+                    pi_a_pid = int(d)
+                elif f"/worktrees/{tid_b}" in env_str:
+                    pi_b_pid = int(d)
+
+            if not pi_a_pid or not pi_b_pid:
+                return False, f"live pi processes not found: pi_a_pid={pi_a_pid} pi_b_pid={pi_b_pid}"
+
+            env_a_bytes = open(f"/proc/{pi_a_pid}/environ", "rb").read().split(b"\x00")
+            agent_dir = ""
+            for kv in env_a_bytes:
+                if kv.startswith(b"PI_CODING_AGENT_DIR="):
+                    agent_dir = kv.split(b"=", 1)[1].decode("utf-8", "replace")
+
+            pidns_a = os.readlink(f"/proc/{pi_a_pid}/ns/pid")
+            userns_a = os.readlink(f"/proc/{pi_a_pid}/ns/user")
+            init_userns = os.readlink("/proc/1/ns/user")
+            jail_a_pids = set()
+            if userns_a != init_userns:
+                for d in os.listdir("/proc"):
+                    if not d.isdigit():
+                        continue
+                    try:
+                        if os.readlink(f"/proc/{d}/ns/pid") == pidns_a:
+                            for nsp in get_nspids(d):
+                                if nsp.isdigit():
+                                    jail_a_pids.add(int(nsp))
+                    except OSError:
+                        pass
+            else:
+                for nsp in get_nspids(str(pi_a_pid)):
+                    if nsp.isdigit():
+                        jail_a_pids.add(int(nsp))
+
+            if userns_a == init_userns:
+                ns_prefix = [
+                    "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(pi_a_pid), "--",
+                    "${pkgs.util-linux}/bin/setpriv", "--no-new-privs",
+                ]
+            else:
+                ns_prefix = [
+                    "${pkgs.util-linux}/bin/setpriv", "--reuid=1000", "--regid=100", "--clear-groups", "--",
+                    "${pkgs.util-linux}/bin/nsenter", "--preserve-credentials", "-U", "-m", "-p", "-t", str(pi_a_pid), "--",
+                    "${pkgs.util-linux}/bin/setpriv", "--no-new-privs",
+                ]
+
+            probe_in = json.dumps({
+                "tid_a": tid_a,
+                "tid_b": tid_b,
+                "clone_path": clone_path,
+                "agent_dir": agent_dir,
+                "root_pids": root_pids,
+                "root_fds": root_fds,
+                "jail_a_pids": sorted(jail_a_pids),
+            })
+            probe_proc = subprocess.run(
+                ns_prefix + ["${pkgs.python3}/bin/python3", "-I", "${gv2ProbePy}"],
+                input=probe_in,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            pr = json.loads(probe_proc.stdout)
+            creds_ok = (
+                pr["uid"] == 1000
+                and pr["gid"] == 100
+                and pr["cap_eff"] == "0000000000000000"
+                and pr["cap_prm"] == "0000000000000000"
+                and pr["no_new_privs"] == "1"
+            )
+
+            # Step C (only on unmutated run): C2 --proc /proc measurement, P6 in-unit spawn cost, P4 PrivateUsers=true arm
+            c2_proc_mount_rejected = True
+            mean_spawn_ms = 0.0
+            p4_private_users_ok = True
+            p4_detail = "skipped-for-mutant"
+            if mutant is None:
+                c2_proc = subprocess.run([
+                    "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
+                    "${pkgs.bubblewrap}/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
+                    "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--proc", "/proc",
+                    "--", "${pkgs.coreutils}/bin/true",
+                ], capture_output=True, text=True)
+                c2_proc_mount_rejected = c2_proc.returncode != 0 and "Can't mount proc" in c2_proc.stderr
+
+                spawn_samples = []
+                for _ in range(5):
+                    t_sp = time.monotonic()
+                    subprocess.run([
+                        "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
+                        "${pkgs.bubblewrap}/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
+                        "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
+                        "--", "${pkgs.coreutils}/bin/true",
+                    ], check=True, capture_output=True)
+                    spawn_samples.append((time.monotonic() - t_sp) * 1000.0)
+                mean_spawn_ms = sum(spawn_samples) / len(spawn_samples)
+
+                p4_res = subprocess.run([
+                    "systemd-run", "--wait", "--pipe",
+                    "-p", "User=sini",
+                    "-p", "PrivateUsers=yes",
+                    "-p", "PrivatePIDs=yes",
+                    "-p", "ProtectProc=invisible",
+                    "-p", "ProtectKernelTunables=yes",
+                    "-p", "ProtectSystem=strict",
+                    "-p", "NoNewPrivileges=yes",
+                    "${pkgs.bubblewrap}/bin/bwrap",
+                    "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
+                    "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
+                    "--", "${pkgs.python3}/bin/python3", "-I", "-c",
+                    "import json, os, subprocess; "
+                    "nsp = [l.split()[1:] for l in open('/proc/self/status') if l.startswith('NSpid:')][0]; "
+                    "pv = subprocess.check_output(['${pkgs.pi-coding-agent}/bin/pi', '--version'], text=True).strip(); "
+                    "print(json.dumps({'uid': os.getuid(), 'nspids': nsp, 'pi_ver': pv}))",
+                ], capture_output=True, text=True)
+                if p4_res.returncode == 0:
+                    p4_json = json.loads(p4_res.stdout.strip().splitlines()[-1])
+                    p4_private_users_ok = p4_json.get("uid") == 1000 and len(p4_json.get("nspids", [])) >= 2 and bool(p4_json.get("pi_ver"))
+                    p4_detail = f"ok(nspids={p4_json.get('nspids')},pi={p4_json.get('pi_ver')})"
+                else:
+                    p4_private_users_ok = False
+                    p4_detail = f"rc={p4_res.returncode}:{p4_res.stderr.strip()}"
+
+            ok = (
+                step_a_ok
+                and creds_ok
+                and pr["b1_ok"]
+                and pr["b2_ok"]
+                and pr["b3_ok"]
+                and pr["b4_ok"]
+                and pr["b5_ok"]
+                and c2_proc_mount_rejected
+                and p4_private_users_ok
+            )
+            return ok, (
+                f"stepA={step_a_ok}(turn={turn_a_ms:.0f}ms) creds={creds_ok} "
+                f"B1={pr['b1_ok']}(nspids={pr['nspids']}) "
+                f"B2={pr['b2_ok']}({ {k: v for k, v in pr['b2_results'].items() if v != 'ENOENT'} }) "
+                f"B3={pr['b3_ok']}(checked={pr['b3_checked']},leaks={pr['b3_leaks']}) "
+                f"B4={pr['b4_ok']}(ro={ {k: v for k, v in pr['b4_ro'].items() if v != 'EROFS'} },sess={pr['b4_sess_rw']}) "
+                f"B5={pr['b5_ok']}(proc={pr['proc_pids']},outside={pr['outside_pids']}) "
+                f"C2_proc_rejected={c2_proc_mount_rejected} P6_bwrap_ms={mean_spawn_ms:.1f} P4_priv_users={p4_detail}"
+            )
+        finally:
+            if os.path.exists(dropin_file):
+                os.unlink(dropin_file)
+                subprocess.run(["systemctl", "daemon-reload"], check=False)
+            for p in (mut_bwrap_path, mut_cfg_path):
+                if os.path.exists(p):
+                    os.unlink(p)
+            subprocess.run(["systemctl", "reset-failed", "genie-agent.service"], check=False)
+            subprocess.run(["systemctl", "restart", "genie-agent.service"], check=False)
+
+    cell("GV2", *eval_gv2())
+
+    # =========================================================================
     # 8. MUTANT VERIFICATION (all 12 GI-15 mutants must turn their target cell RED)
     # =========================================================================
     def check_mutant(m_name: str, target_cell: str, ok: bool, detail: str):
@@ -3510,6 +4289,18 @@ let
     # 8.18 M-no-load-credential -> GV1
     check_mutant("M-no-load-credential", "GV1", *eval_gv1(mutant="M-no-load-credential"))
 
+    # 8.19 M-no-pi-bwrap -> GV2
+    check_mutant("M-no-pi-bwrap", "GV2", *eval_gv2(mutant="M-no-pi-bwrap"))
+
+    # 8.20 M-rw-worktree-or-agentdir -> GV2
+    check_mutant("M-rw-worktree-or-agentdir", "GV2", *eval_gv2(mutant="M-rw-worktree-or-agentdir"))
+
+    # 8.21 M-expose-state-root -> GV2
+    check_mutant("M-expose-state-root", "GV2", *eval_gv2(mutant="M-expose-state-root"))
+
+    # 8.22 M-no-protectproc -> GV2
+    check_mutant("M-no-protectproc", "GV2", *eval_gv2(mutant="M-no-protectproc"))
+
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)
         timing_end("red")
@@ -3543,7 +4334,10 @@ let
         "d /var/lib/genie/public-repos 0755 root root -"
         "d /var/lib/genie/support-memory 0755 root root -"
         "d /run/genie-secrets 0700 root root -"
-        "f /run/genie-secrets/model-key 0400 root root - unused"
+        "f /run/genie-secrets/model-key 0400 root root - canary-model-key-0000"
+        "f /run/genie-secrets/broker-token 0400 root root - canary-broker-token-0000"
+        "f /run/genie-secrets/guard-out-key 0400 root root - canary-guard-out-key-0000"
+        "f /run/genie-secrets/s3-secret-key 0400 root root - canary-s3-secret-key-0000"
         "f /run/genie-secrets/public.env 0400 root root - CLAUDE_CODE_OAUTH_TOKEN=${tokens.public}"
         "f /run/genie-secrets/trusted.env 0400 root root - CLAUDE_CODE_OAUTH_TOKEN=${tokens.trusted}"
       ];
@@ -3593,8 +4387,40 @@ pkgs.testers.runNixOSTest {
       claudePackage = null; # Uses real pkgs.claude-code via module.nix defaultClaudePackage
       memorySize = 4096;
       extraConfig = {
-        services.genie-agent.experts.dispatcherPackage =
-          self.packages.${pkgs.stdenv.hostPlatform.system}.genie-dispatcher;
+        networking.extraHosts = ''
+          127.0.0.1 gv2-stub
+          198.18.0.1 gv2-git.example.org
+        '';
+        security.pki.certificateFiles = [ "${gv2TlsCerts}/cert.pem" ];
+        services.genie-agent = {
+          package = self.packages.${pkgs.stdenv.hostPlatform.system}.genie-root;
+          piPackage = pkgs.pi-coding-agent;
+          model = {
+            baseUrl = "http://gv2-stub:18080/v1";
+            keyFile = "/run/genie-secrets/model-key";
+          };
+          tier1.searxngUrl = "http://gv2-stub:18080";
+          broker = {
+            tokenFile = "/run/genie-secrets/broker-token";
+            guardOut = {
+              enable = true;
+              base = "http://gv2-stub:18080/v1";
+              model = "guard-out-model";
+              keyFile = "/run/genie-secrets/guard-out-key";
+            };
+          };
+          s3 = {
+            endpoint = "http://gv2-stub:18080";
+            bucket = "gv2-bucket";
+            accessKeyId = "gv2-ak";
+            secretKeyFile = "/run/genie-secrets/s3-secret-key";
+          };
+          experts.dispatcherPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.genie-dispatcher;
+        };
+        systemd.services.genie-agent.environment = {
+          NIX_SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";
+          SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";
+        };
         environment.etc."genie-gi15-test/stub_api.py".source = "${gi15TestScripts}/stub_api.py";
         environment.etc."genie-gi15-test/jail_suite.py".source = jailSuitePy;
         environment.etc."genie-gi15-test/setup_v610_repo.py".source = setupV610RepoPy;
@@ -3605,6 +4431,7 @@ pkgs.testers.runNixOSTest {
           description = "GI-15 local stub Anthropic Messages API & host xmsg socket listener";
           wantedBy = [ "multi-user.target" ];
           before = [
+            "genie-agent.service"
             "genie-herdr@public.service"
             "genie-herdr@trusted.service"
             "genie-dispatcher@public.service"
@@ -3748,12 +4575,13 @@ pkgs.testers.runNixOSTest {
       cell("V5", has(probe, "PROBE direct-read-fail settings.json", tru) and tru_settings == 0,
            f"@trusted settings.json read fails; settings marker occurrences in trusted log = {tru_settings}")
 
-      # Real node: GI-15 V3, V6.1–V6.11 and all 12 mutants
+      # Real node: GI-15 V3, V6.1–V6.11, GV1, GV2 and all 23 mutants
       # Budget, measured as driver.py guest wall time:
+      #   KVM, uplink, gs2-pi-sandbox incl. GV2 + 4 GV2 mutants (2026-11-05):  304.6 s  (GV1 + 2 mutants: 33.8 s; GV2 + 4 mutants: 23.3 s)
       #   KVM, cortex, gx2-rebased + this instrumentation (2026-11-05):  284.7 s  (GV1 + 2 mutants: 33.1 s)
       #   KVM (afw1607g..., GX2 tree incl. GV1, 2026-11-02):  ~247 s
       #   TCG (wfpp86gk..., uplink):  ~479 s;  TCG (z488xxv0..., uplink, gx2-rebased):  ~545 s pass, >600 s fail
-      # 600 s is ~2.1x the KVM runtime. TCG is refused up front (see the /dev/kvm check), not budgeted for.
+      # 600 s is ~2.0x the KVM runtime. TCG is refused up front (see the /dev/kvm check), not budgeted for.
       # driver.py prints [TIMING] per cell and in total, also on red, on exception, and on SIGTERM.
       GI15_DRIVER_TIMEOUT_S = 600
       t_drv = time.monotonic()
