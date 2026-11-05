@@ -74,6 +74,8 @@
                       nativeBuildInputs = [
                         pkgs.nodejs
                         pkgs.git
+                        # GS2: genie-root always runs pi inside bwrap (genie-agent.service has it on PATH).
+                        pkgs.bubblewrap
                         xmsgNoCheck
                         genie-agent.packages.${system}.genie-guard
                         genie-agent.packages.${system}.genie-root

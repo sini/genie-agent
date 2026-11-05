@@ -1043,7 +1043,9 @@ const [xmsgDir] = process.argv.slice(1);
       const hasRecordedPrompt = (thread: string): boolean => {
         const pid = root?.supervisor.pid(thread);
         if (pid === undefined) return false;
-        const recPath = join(piDir, `${pid}.jsonl`);
+        // GS2: pi runs jailed, so PI_RECORD (outside the jail) is not visible to it and the supervisor's
+        // pid is bwrap's. The fake pi also appends every stdin record to its (writable) session dir.
+        const recPath = join(root.store.dir(thread), "session", "all-records.jsonl");
         return existsSync(recPath) && readFileSync(recPath, "utf8").includes('"type":"prompt"');
       };
       for (let i = 0; i < 800; i++) {
@@ -1909,14 +1911,13 @@ test(
 
     let rootProc: ChildProcess | null = null;
     try {
-      const promptLogFile = join(node.dir, "prompts.jsonl");
-      writeFileSync(promptLogFile, "");
-      const piScript = join(node.dir, "fake-pi.js");
-      writeFileSync(
-        piScript,
-        `
+      // GS2: pi runs inside bwrap with only piBin, repoDir, sessionDir (rw), and worktreeDir (rw)
+      // mounted from outside /nix/store, so inline the script into piBin and log into --session-dir.
+      const piCode = `
 const { appendFileSync } = require("node:fs");
-const logFile = ${JSON.stringify(promptLogFile)};
+const { join } = require("node:path");
+const sdIdx = process.argv.indexOf("--session-dir");
+const logFile = join(process.argv[sdIdx + 1], "prompts.jsonl");
 let buf = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -1948,10 +1949,10 @@ process.stdin.on("data", (chunk) => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-`,
-      );
+`;
       const piBin = join(node.dir, "fake-pi");
-      writeFileSync(piBin, `#!/bin/sh\nexec "${process.execPath}" "${piScript}" "$@"\n`, { mode: 0o755 });
+      writeFileSync(piBin, `#!${process.execPath}\n${piCode}`, { mode: 0o755 });
+      const promptLogFile = join(node.dir, "state", "$gi10_after_restart", "session", "prompts.jsonl");
 
       const modelKey = join(node.dir, "model-key");
       writeFileSync(modelKey, "k\n");
