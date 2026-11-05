@@ -218,6 +218,18 @@ jobs:
           if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nix-daemon 2>/dev/null; then
             sudo systemctl restart nix-daemon
           fi
+      # GS2: root, tier1, tier1-bridge, and xmsg-integration launch pi inside bwrap (--unshare-all).
+      - name: Admit bubblewrap to user namespaces
+        run: |
+          bwrap="$(nix build --no-link --print-out-paths --inputs-from ./ci nixpkgs#bubblewrap)/bin/bwrap"
+          case "$bwrap" in
+            /nix/store/*/bin/bwrap) ;;
+            *) echo "::error::not a bwrap store path: '$bwrap'"; exit 1 ;;
+          esac
+          h=$(basename "$(dirname "$(dirname "$bwrap")")"); h=${h%%-*}
+          printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile integration-bwrap-userns-%s %s flags=(unconfined) {\n  userns,\n}\n' "$h" "$bwrap" > "$RUNNER_TEMP/userns-$h.profile"
+          sudo -n apparmor_parser -r "$RUNNER_TEMP/userns-$h.profile"
+          echo "admitted to user namespaces: $bwrap"
       - name: Integration, SEA, and tier-1 bridge checks
         run: |
           read -r -a integ <<< "$INTEGRATION_CHECKS"
