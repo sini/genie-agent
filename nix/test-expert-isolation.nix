@@ -1296,12 +1296,61 @@ let
 
     red = []
 
+    # Item 52: driver timing. Each cell prints its own elapsed time and the running total;
+    # start, end, red exit, uncaught exception and SIGTERM (guest `timeout`) all print a total.
+    # Lines are mirrored to /dev/kmsg so they appear live, guest-timestamped, on the serial log
+    # even if the captured stdout is lost (best effort; printk may ratelimit bursts).
+    import atexit, signal
+    _T0 = time.monotonic()
+    _T_LAST = [_T0]
+    _TIMING_DONE = [False]
+    try:
+        _CONSOLE = open("/dev/kmsg", "w", encoding="utf-8", buffering=1)
+    except OSError:
+        _CONSOLE = None
+
+    def timing(msg: str):
+        line = f"[TIMING] {msg}"
+        print(line, flush=True)
+        if _CONSOLE is not None:
+            try:
+                _CONSOLE.write(line + "\n")
+            except OSError:
+                pass
+
+    def timing_mark(label: str):
+        now = time.monotonic()
+        timing(f"{label} elapsed={now - _T_LAST[0]:.1f}s total={now - _T0:.1f}s")
+        _T_LAST[0] = now
+
+    _PID0 = os.getpid()
+
+    def timing_end(reason: str):
+        if _TIMING_DONE[0] or os.getpid() != _PID0:
+            return
+        _TIMING_DONE[0] = True
+        timing(f"driver end reason={reason} total={time.monotonic() - _T0:.1f}s red={red}")
+
+    def _on_sigterm(signum, frame):
+        if os.getpid() != _PID0:
+            # forked helper: keep default SIGTERM semantics
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+        timing_end("SIGTERM (guest timeout?)")
+        os._exit(143)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+    atexit.register(lambda: timing_end("exit"))
+    timing(f"driver start wall={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
+
     def cell(name: str, ok: bool, detail: str):
         if ok:
             print(f"CELL {name} GREEN: {detail}", flush=True)
         else:
             print(f"CELL {name} RED: {detail}", flush=True)
             red.append(name)
+        timing_mark(f"cell={name}")
 
     def get_unit_shim(tier: str) -> str:
         out = subprocess.check_output(["systemctl", "cat", f"genie-dispatcher@{tier}"], text=True)
@@ -3463,8 +3512,10 @@ let
 
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)
+        timing_end("red")
         sys.exit(1)
     print("DRIVER ALL GREEN", flush=True)
+    timing_end("all-green")
   '';
 
   node =
@@ -3580,7 +3631,21 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      import os
       import time
+
+      # Item 52: the gi15 driver's time budget (GI15_DRIVER_TIMEOUT_S below) is sized for KVM.
+      # A builder that advertises the `kvm` system feature but exposes no usable /dev/kvm makes
+      # QEMU print "falling back to tcg" and run several times slower, which turns the budget
+      # into a nondeterministic RED (z488xxv0... failed then passed on the same builder).
+      # Refuse to run under TCG instead of flaking.
+      if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+          raise Exception(
+              "KVM UNAVAILABLE: /dev/kvm is missing or inaccessible in this build sandbox, so QEMU "
+              "would fall back to TCG. genie-agent-expert-isolation is sized for KVM and refuses "
+              "to run under TCG. Fix the builder's KVM or drop `kvm` from its supportedFeatures."
+          )
+      print("[TIMING] host: /dev/kvm accessible; VMs will run under KVM")
 
       red = []
 
@@ -3684,10 +3749,24 @@ pkgs.testers.runNixOSTest {
            f"@trusted settings.json read fails; settings marker occurrences in trusted log = {tru_settings}")
 
       # Real node: GI-15 V3, V6.1–V6.11 and all 12 mutants
-      rc, driver_out = real.execute("${pkgs.python3}/bin/python3 -I /etc/genie-gi15-test/driver.py", timeout=600)
+      # Budget, measured as driver.py guest wall time:
+      #   KVM, cortex, gx2-rebased + this instrumentation (2026-11-05):  284.7 s  (GV1 + 2 mutants: 33.1 s)
+      #   KVM (afw1607g..., GX2 tree incl. GV1, 2026-11-02):  ~247 s
+      #   TCG (wfpp86gk..., uplink):  ~479 s;  TCG (z488xxv0..., uplink, gx2-rebased):  ~545 s pass, >600 s fail
+      # 600 s is ~2.1x the KVM runtime. TCG is refused up front (see the /dev/kvm check), not budgeted for.
+      # driver.py prints [TIMING] per cell and in total, also on red, on exception, and on SIGTERM.
+      GI15_DRIVER_TIMEOUT_S = 600
+      t_drv = time.monotonic()
+      rc, driver_out = real.execute("${pkgs.python3}/bin/python3 -I /etc/genie-gi15-test/driver.py", timeout=GI15_DRIVER_TIMEOUT_S)
+      drv_elapsed = time.monotonic() - t_drv
       print(driver_out)
+      timed_out = rc == 124
+      print(
+          f"[TIMING] gi15-driver rc={rc} host_elapsed={drv_elapsed:.1f}s budget={GI15_DRIVER_TIMEOUT_S}s"
+          + (" TIMEOUT: guest `timeout` killed driver.py (rc=124)" if timed_out else "")
+      )
       if rc != 0:
-          red.append("gi15-driver")
+          red.append("gi15-driver-timeout" if timed_out else f"gi15-driver(rc={rc})")
 
       # XH2: systemd-analyze security exposure check across genie-agent, genie-herdr@*, and genie-dispatcher@*
       for unit, max_score in [
