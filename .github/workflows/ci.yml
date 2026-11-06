@@ -230,11 +230,21 @@ jobs:
       - name: Integration, SEA, and tier-1 bridge checks
         run: |
           read -r -a integ <<< "$INTEGRATION_CHECKS"
-          refs=()
+          host_refs=()
+          vm_refs=()
           for c in "${integ[@]}"; do
-            refs+=("./ci#checks.x86_64-linux.$c")
+            if [ "$c" = "expert-isolation" ]; then
+              vm_refs+=("./ci#checks.x86_64-linux.$c")
+            else
+              host_refs+=("./ci#checks.x86_64-linux.$c")
+            fi
           done
-          nix build -L --keep-going --no-link --print-out-paths "${refs[@]}" | tee -a /tmp/attic-paths
+          rc=0
+          nix build -L --max-jobs 1 --keep-going --no-link --print-out-paths "${host_refs[@]}" | tee -a /tmp/attic-paths || rc=$?
+          if [ "${#vm_refs[@]}" -gt 0 ]; then
+            nix build -L --keep-going --no-link --print-out-paths "${vm_refs[@]}" | tee -a /tmp/attic-paths || rc=$?
+          fi
+          exit "$rc"
       - name: Push to Attic cache
         if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         env:
