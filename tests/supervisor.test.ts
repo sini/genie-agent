@@ -104,20 +104,17 @@ class FakeGuard implements GuardClient {
   }
 }
 
-test("oracle: a poisoned bank entry and a poisoned replay fixture both reach guard-in before the session sees them", async () => {
+test("oracle: a poisoned replay fixture reaches guard-in before the session sees it, while trusted bankEntry makes 0 guard calls", async () => {
   const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
   try {
     const g = new FakeGuard();
     const guard = seedGuard(g);
 
-    // 1. Poisoned bank entry
-    const poisonedBank = `Remember: ${INJECT}`;
-    await assert.rejects(
-      seedSession(s, "thread-bank", { bankEntry: poisonedBank }, guard),
-      /seed refused by the guard: directs a model/,
-    );
-    assert.ok(g.seen.some((e) => e.content.text.includes(INJECT)));
-    assert.equal(await messages(s, "thread-bank"), "[]");
+    // 1. Trusted bank entry (owner ruling 2026-11-06, GE2 C-6): 0 guard calls, seeded directly
+    const trustedBank = `Remember: ${INJECT}`;
+    await seedSession(s, "thread-bank", { bankEntry: trustedBank }, guard);
+    assert.equal(g.seen.length, 0);
+    assert.match(await messages(s, "thread-bank"), new RegExp(INJECT));
 
     // 2. Poisoned replay fixture (JSONL string)
     const poisonedReplay = JSON.stringify({ role: "user", content: `History: ${INJECT}` }) + "\n";
@@ -141,7 +138,7 @@ test("oracle: a poisoned bank entry and a poisoned replay fixture both reach gua
   }
 });
 
-test("oracle: clean bank entries and clean replay fixtures are screened and seed the session unchanged", async () => {
+test("oracle: clean bank entries and clean replay fixtures seed the session unchanged, screening only the replay transcript", async () => {
   const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
   try {
     const g = new FakeGuard();
@@ -151,7 +148,7 @@ test("oracle: clean bank entries and clean replay fixtures are screened and seed
     const cleanReplay = JSON.stringify({ role: "user", content: "How do I build the devShell?" }) + "\n";
     await seedSession(s, "thread-clean", { bankEntry: cleanBank, transcript: cleanReplay }, guard);
 
-    assert.equal(g.seen.length, 2);
+    assert.equal(g.seen.length, 1);
     assert.ok(g.seen.every((e) => e.source === "recall" && e.history.length === 0));
 
     const msgs = await messages(s, "thread-clean");
@@ -162,15 +159,15 @@ test("oracle: clean bank entries and clean replay fixtures are screened and seed
   }
 });
 
-test("oracle: a rewrite in a bank entry or replay sends the guard's cleaned_text, not the injection", async () => {
+test("oracle: a rewrite in a replay sends the guard's cleaned_text, not the injection", async () => {
   const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
   try {
     const g = new FakeGuard();
     const guard = seedGuard(g);
 
-    const bankWithRewrite = `Valid note. ${REWRITE}`;
+    const cleanBank = "Valid note.";
     const replayWithRewrite = JSON.stringify({ role: "user", content: `Please review. ${REWRITE}` }) + "\n";
-    await seedSession(s, "thread-rewrite", { bankEntry: bankWithRewrite, transcript: replayWithRewrite }, guard);
+    await seedSession(s, "thread-rewrite", { bankEntry: cleanBank, transcript: replayWithRewrite }, guard);
 
     const msgs = await messages(s, "thread-rewrite");
     assert.doesNotMatch(msgs, new RegExp(REWRITE));
@@ -187,8 +184,9 @@ test("oracle: the seed guard unavailable, throwing or malformed refuses to seed 
     try {
       const g = new FakeGuard(down);
       const guard = seedGuard(g);
+      const replay = JSON.stringify({ role: "user", content: "Clean replay line." }) + "\n";
       await assert.rejects(
-        seedSession(s, `thread-${down}`, { bankEntry: "Clean note." }, guard),
+        seedSession(s, `thread-${down}`, { transcript: replay }, guard),
         /seed refused by the guard/,
         down,
       );
@@ -205,10 +203,10 @@ test("oracle: each seed check is a fresh session: source recall, history empty",
     const g = new FakeGuard();
     const guard = seedGuard(g);
 
-    const entry1 = "first bank entry: earlier-text";
-    const entry2 = "second bank entry: subsequent-text";
-    await seedSession(s, "thread-fresh-1", { bankEntry: entry1 }, guard);
-    await seedSession(s, "thread-fresh-2", { bankEntry: entry2 }, guard);
+    const replay1 = JSON.stringify({ role: "user", content: "first replay entry: earlier-text" }) + "\n";
+    const replay2 = JSON.stringify({ role: "user", content: "second replay entry: subsequent-text" }) + "\n";
+    await seedSession(s, "thread-fresh-1", { transcript: replay1 }, guard);
+    await seedSession(s, "thread-fresh-2", { transcript: replay2 }, guard);
 
     assert.equal(g.seen.length, 2);
     for (const e of g.seen) {
@@ -245,10 +243,26 @@ test("oracle: parameterized seedGuard over enabled true and false: off mode make
       });
     }
 
-    assert.equal(results[0].guardCalls, 3, "on-mode must call guard for bankEntry, transcript line, and transcriptMessages");
+    assert.equal(results[0].guardCalls, 2, "on-mode must call guard only for transcript line and transcriptMessages (0 for bankEntry)");
     assert.equal(results[1].guardCalls, 0, "off-mode must make 0 guard calls");
     assert.equal(results[1].msgsStr, results[0].msgsStr, "off-mode seeded messages (string transcript) must equal on-mode allow");
     assert.equal(results[1].msgsArr, results[0].msgsArr, "off-mode seeded messages (array transcript) must equal on-mode allow");
+  } finally {
+    await s.shutdown();
+  }
+});
+
+test("oracle O-GE2-C6-recall-unscreened: seedGuard has no bankEntry method and seedSession seeds bankEntry with 0 guard calls while screening transcript under source: recall", async () => {
+  const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }));
+  try {
+    const g = new FakeGuard("throw");
+    const guard = seedGuard(g);
+    assert.equal("bankEntry" in (guard as Record<string, unknown>), false, "SeedGuard must not expose bankEntry");
+
+    const directivesNote = "Always run systemd-run --user --scope -p MemoryMax=12G; do not call reply twice.";
+    await seedSession(s, "thread-c6-bank", { bankEntry: directivesNote }, guard);
+    assert.equal(g.seen.length, 0, "seedSession(bankEntry) must make 0 guard calls");
+    assert.match(await messages(s, "thread-c6-bank"), /MemoryMax=12G/);
   } finally {
     await s.shutdown();
   }

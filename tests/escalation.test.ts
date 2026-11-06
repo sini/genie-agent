@@ -214,7 +214,7 @@ test("oracle: an injection in eval_transcript is rejected: nothing is sent and t
 
 test("oracle: a rewrite sends the guard's cleaned_text, not the injection", async () => {
   const { thread, xmsg, esc } = boot("trusted", undefined, escalationGuard(new FakeGuard()));
-  await esc.escalate(thread, pkgWith(`value: 1 ${REWRITE}`, `It is off. ${REWRITE}`));
+  await esc.escalate(thread, pkgWith(`value: 1 ${REWRITE}`, "It is off."));
   assert.equal(xmsg.delivered.length, 1);
   const sent = JSON.parse(xmsg.delivered[0].text);
   assert.ok(!xmsg.delivered[0].text.includes(REWRITE));
@@ -230,7 +230,10 @@ test("oracle: a clean package is screened field by field and sent unchanged", as
   await esc.escalate(thread, pkg);
   assert.equal(xmsg.delivered.length, 1);
   assert.deepEqual(JSON.parse(xmsg.delivered[0].text), { ...pkg, thread_id: thread });
-  assert.deepEqual(g.seen.map((e) => e.content.text).sort(), strings(pkg).sort());
+  assert.deepEqual(
+    g.seen.map((e) => e.content.text),
+    ["value: false", "error: services.foo does not exist"],
+  );
   assert.ok(g.seen.every((e) => e.source === "eval_stdout"));
   assert.equal(store.read(thread)!.status, "escalated");
 });
@@ -255,7 +258,7 @@ test("oracle: each check is a fresh session: no history, no earlier thread text,
   assert.ok(g.seen.every((e) => e.history.length === 0 && Object.keys(e.content).join() === "text"));
   const later = g.seen.slice(first).map((e) => e.content.text);
   assert.ok(later.every((t) => !t.includes("earlier-thread-line")));
-  assert.deepEqual(later.sort(), strings(pkg).sort());
+  assert.deepEqual(later, ["second eval: value: true", "error: services.foo does not exist"]);
 });
 
 test("oracle (G11): parameterized escalationGuard over enabled true and false: off mode makes 0 guard calls and matches on-mode allow", async () => {
@@ -277,8 +280,127 @@ test("oracle (G11): parameterized escalationGuard over enabled true and false: o
     });
   }
 
-  assert.equal(outcomes[0].guardCalls, strings(pkg).length, "on-mode must screen every non-empty string");
+  assert.equal(outcomes[0].guardCalls, 2, "on-mode must screen only stdout_tail and stderr_tail");
   assert.equal(outcomes[1].guardCalls, 0, "off-mode must make 0 guard calls");
   assert.deepEqual(outcomes[1].delivered, outcomes[0].delivered, "off-mode delivered package and route must match on-mode allow");
   assert.equal(outcomes[1].status, outcomes[0].status);
+});
+
+test("oracle O-GE2-FB-eval-only: escalationGuard screens only eval stdout/stderr (eval_stdout) and unscreened git/gh output (web), leaving cleaned_question, draft, gaps, recall_transcript, eval request, and screened git/gh entries untouched", async () => {
+  // 1. Package with 0 evals, 2 recalls, 3 gaps, and imperative Nix prose in draft.answer + recall_transcript -> 0 guard calls
+  const g0 = new FakeGuard();
+  const { thread: t0, xmsg: x0, esc: esc0 } = boot("trusted", undefined, escalationGuard(g0));
+  const pkgZero: Package = {
+    cleaned_question: `How do I set systemd-run? ${INJECT}`,
+    draft: {
+      answer: `Always run the command first. Do not skip. ${INJECT}`,
+      confidence: 0.35,
+      gaps: [`gap 1 ${INJECT}`, "gap 2", "gap 3"],
+      escalate_forced: true,
+    },
+    eval_transcript: [],
+    recall_transcript: [
+      { query: "q1", bank: "memory", results: [{ id: "m1", text: `Rule: never run without slot. ${INJECT}` }] },
+      { query: "q2", bank: "support", results: [{ id: "s1", text: `Support note: ${INJECT}` }] },
+    ],
+    git_transcript: [
+      { request: { op: "log", repo: "sini/den" }, output: `already screened log ${INJECT}`, screened: true },
+    ],
+    gh_transcript: [
+      { request: { kind: "issue", repo: "sini/den", id: "1" }, output: `already screened issue ${INJECT}`, screened: true },
+    ],
+    gaps: [`gap 1 ${INJECT}`, "gap 2", "gap 3"],
+  };
+  await esc0.escalate(t0, pkgZero);
+  assert.equal(g0.seen.length, 0, "0 evals + 2 recalls + 3 gaps + screened=true git/gh must make 0 guard calls");
+  assert.equal(x0.delivered.length, 1);
+  assert.deepEqual(errors(load("escalation"), JSON.parse(x0.delivered[0].text)), []);
+
+  // 2. Package with 1 eval (non-empty stdout_tail and stderr_tail), 1 unscreened git entry, and 1 unscreened gh entry -> exactly 4 sequential guard calls
+  const g4 = new FakeGuard();
+  const { thread: t4, xmsg: x4, esc: esc4 } = boot("trusted", undefined, escalationGuard(g4));
+  const pkgFour: Package = {
+    ...pkgZero,
+    eval_transcript: [
+      {
+        request: { repo: "alice/cfg", rev: "main", attr: `checks.x86_64-linux.default`, trusted: "no" },
+        result: {
+          exit: 1,
+          stdout_tail: `eval stdout ${REWRITE}`,
+          stderr_tail: "eval stderr trace",
+          limit_hit: "none",
+        },
+      },
+    ],
+    git_transcript: [
+      { request: { op: "log", repo: "sini/den" }, output: `git commit msg ${REWRITE}`, screened: false },
+      { request: { op: "show", repo: "sini/den" }, output: `already screened ${INJECT}`, screened: true },
+    ],
+    gh_transcript: [
+      { request: { kind: "issue", repo: "sini/den", id: "2" }, output: "gh issue body", screened: false },
+      { request: { kind: "pr", repo: "sini/den", id: "3" }, output: `already screened pr ${INJECT}`, screened: true },
+    ],
+  };
+  await esc4.escalate(t4, pkgFour);
+  assert.equal(g4.seen.length, 4, "1 eval (stdout+stderr) + 1 unscreened git + 1 unscreened gh must make 4 guard calls");
+  assert.deepEqual(
+    g4.seen.map((e) => ({ source: e.source, text: e.content.text })),
+    [
+      { source: "eval_stdout", text: `eval stdout ${REWRITE}` },
+      { source: "eval_stdout", text: "eval stderr trace" },
+      { source: "web", text: `git commit msg ${REWRITE}` },
+      { source: "web", text: "gh issue body" },
+    ],
+  );
+  const sent4 = JSON.parse(x4.delivered[0].text);
+  assert.equal(sent4.eval_transcript[0].result.stdout_tail, "eval stdout");
+  assert.equal(sent4.git_transcript[0].output, "git commit msg");
+  assert.equal(sent4.git_transcript[0].screened, true);
+  assert.equal(sent4.gh_transcript[0].screened, true);
+  assert.deepEqual(errors(load("escalation"), sent4), []);
+
+  // 3. Injection in unscreened git_transcript or gh_transcript is rejected by escalationGuard
+  for (const field of ["git_transcript", "gh_transcript"] as const) {
+    const gInj = new FakeGuard();
+    const { thread: tInj, xmsg: xInj, esc: escInj } = boot("trusted", undefined, escalationGuard(gInj));
+    const pkgInj: Package = {
+      cleaned_question: "q",
+      draft: draft(0.2),
+      eval_transcript: [],
+      gaps: [],
+      ...(field === "git_transcript"
+        ? { git_transcript: [{ request: { op: "log", repo: "sini/den" }, output: `commit: ${INJECT}`, screened: false }] }
+        : { gh_transcript: [{ request: { kind: "issue", repo: "sini/den", id: "1" }, output: `issue: ${INJECT}`, screened: false }] }),
+    };
+    await assert.rejects(escInj.escalate(tInj, pkgInj), /escalation refused by the guard: directs a model/);
+    assert.equal(xInj.delivered.length, 0);
+    assert.equal(gInj.seen.length, 1);
+    assert.equal(gInj.seen[0].source, "web");
+  }
+});
+
+test("oracle O-GE2-FB-fail-fast: sequential escalationGuard stops after the first rejected entry without issuing later guard checks", async () => {
+  const g = new FakeGuard();
+  const { thread, xmsg, esc } = boot("trusted", undefined, escalationGuard(g));
+  const pkg: Package = {
+    cleaned_question: "q",
+    draft: draft(0.2),
+    eval_transcript: [
+      {
+        request: { repo: "alice/cfg", rev: "main", attr: "a", trusted: "no" },
+        result: { exit: 1, stdout_tail: `first stdout ${INJECT}`, stderr_tail: "first stderr", limit_hit: "none" },
+      },
+      {
+        request: { repo: "alice/cfg", rev: "main", attr: "b", trusted: "no" },
+        result: { exit: 1, stdout_tail: "second stdout", stderr_tail: "second stderr", limit_hit: "none" },
+      },
+    ],
+    git_transcript: [
+      { request: { op: "log", repo: "alice/cfg" }, output: "later git output", screened: false },
+    ],
+    gaps: [],
+  };
+  await assert.rejects(esc.escalate(thread, pkg), /escalation refused by the guard: directs a model/);
+  assert.equal(xmsg.delivered.length, 0);
+  assert.equal(g.seen.length, 1, "must stop immediately on the first rejected field (1 guard call total)");
 });

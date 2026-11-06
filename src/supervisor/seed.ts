@@ -1,9 +1,10 @@
-// The seed guard (plan S6, design §4 step 2, §6, oracle 19): every recalled bank entry and every
-// replayed transcript passes guard-in before it seeds a session, because bank content and archived
-// transcripts carry attacker-derived text re-entering a fresh context.
+// The seed guard (plan S6, design §4 step 2, §6, oracle 19, GE2 C-6): every replayed S3 transcript
+// passes guard-in before it seeds a session, because archived transcripts carry user/room text
+// re-entering a fresh context. Hindsight recall banks (`genie` and `genie-memory`) are curated
+// trusted sources (owner ruling of 2026-11-06) and are not screened by guard-in.
 //
 // Each check is a fresh session: an independent request with `history: []`, so no earlier thread
-// text rides along. The source is `recall`, guard-in's evidence class for memory notes and past
+// text rides along. The source is `recall`, guard-in's evidence class for replayed past
 // transcripts. A reject, unavailable, a throw, or a reply that is not a verdict refuses the seed.
 import type { Verdict } from "../guard/verdict.ts";
 import { verdictErrors } from "../guard/verdict.ts";
@@ -19,7 +20,6 @@ export interface TranscriptMessage {
 }
 
 export interface SeedGuard {
-  bankEntry(entry: string | { text: string; [k: string]: unknown }): Promise<string>;
   transcript(transcript: string): Promise<string>;
   transcriptMessages<T extends TranscriptMessage>(messages: T[]): Promise<T[]>;
 }
@@ -55,13 +55,6 @@ export function seedGuard(
   };
 
   return {
-    async bankEntry(entry: string | { text: string; [k: string]: unknown }): Promise<string> {
-      const text = typeof entry === "string" ? entry : entry?.text;
-      if (typeof text !== "string") throw refused("bank entry is not text");
-      if (text === "") return "";
-      return screen(text);
-    },
-
     async transcript(raw: string): Promise<string> {
       if (typeof raw !== "string") throw refused("transcript is not a string");
       if (!raw.trim()) return raw;
@@ -117,12 +110,11 @@ export async function seedSession(
   guard?: SeedGuard,
 ): Promise<void> {
   if (seed.bankEntry !== undefined) {
-    const text = guard
-      ? await guard.bankEntry(seed.bankEntry)
-      : typeof seed.bankEntry === "string"
-        ? seed.bankEntry
-        : seed.bankEntry.text;
-    await supervisor.command(thread, { type: "prompt", message: text });
+    const text = typeof seed.bankEntry === "string" ? seed.bankEntry : seed.bankEntry?.text;
+    if (typeof text !== "string") throw new Error("seed refused: bank entry is not text");
+    if (text !== "") {
+      await supervisor.command(thread, { type: "prompt", message: text });
+    }
   }
 
   if (seed.transcript !== undefined) {

@@ -52,6 +52,52 @@
       "items": {
         "type": "object"
       }
+    },
+    "git_transcript": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request",
+          "output",
+          "screened"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "git-request.json"
+          },
+          "output": {
+            "type": "string"
+          },
+          "screened": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "gh_transcript": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request",
+          "output",
+          "screened"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "gh-read.json"
+          },
+          "output": {
+            "type": "string"
+          },
+          "screened": {
+            "type": "boolean"
+          }
+        }
+      }
     }
   }
 }

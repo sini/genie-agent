@@ -1113,7 +1113,7 @@ const [xmsgDir] = process.argv.slice(1);
       const expert2Json = JSON.stringify({ answer: "Expert answer for $th2", confidence: 0.9, gaps: [], tier: "expert" });
       assert.deepEqual(JSON.parse(fwd1All[1].text), { text: expert1Json });
       assert.deepEqual(JSON.parse(fwd2All[1].text), { text: expert2Json });
-      assert.ok(totalGuardIn >= 11, `expected >= 11 guard-in checks (3 parallel + 2 guardIn + 6 escalationGuard), got ${totalGuardIn}`);
+      assert.equal(totalGuardIn, 5, `expected 5 guard-in checks (3 parallel + 2 guardIn + 0 escalationGuard for empty eval/git/gh transcripts), got ${totalGuardIn}`);
 
       io.close();
       await runLoop;

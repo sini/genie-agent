@@ -23,12 +23,26 @@ export interface XmsgSend {
   send(to: string, text: string, key: string): Promise<string>;
 }
 
+export interface GitTranscriptEntry {
+  request: unknown;
+  output: string;
+  screened: boolean;
+}
+
+export interface GhTranscriptEntry {
+  request: unknown;
+  output: string;
+  screened: boolean;
+}
+
 // The package as tier 1's turn leaves it, before the guard and the stamp.
 export type Package = {
   cleaned_question: string;
   draft: Draft;
   eval_transcript: unknown[];
   recall_transcript?: unknown[];
+  git_transcript?: GitTranscriptEntry[];
+  gh_transcript?: GhTranscriptEntry[];
   gaps: string[];
 };
 
@@ -39,11 +53,13 @@ export interface EscalationOptions {
   guard: (pkg: Package) => Promise<Package>;
   // C6: the expert instance's xmsg address for the thread.
   route: (state: ThreadState) => string;
-  // The supervisor's record of the thread: its cleaned question, evals, and Hindsight recalls, in order.
+  // The supervisor's record of the thread: its cleaned question, evals, Hindsight recalls, and git/gh reads, in order.
   context: (thread: string) => {
     cleaned_question: string;
     eval_transcript: unknown[];
     recall_transcript?: unknown[];
+    git_transcript?: GitTranscriptEntry[];
+    gh_transcript?: GhTranscriptEntry[];
   };
   threshold?: number;
 }

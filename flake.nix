@@ -609,14 +609,15 @@
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 for cell in \
-                  "a poisoned bank entry and a poisoned replay fixture both reach guard-in before the session sees them" \
-                  "clean bank entries and clean replay fixtures are screened and seed the session unchanged" \
-                  "a rewrite in a bank entry or replay sends the guard's cleaned_text, not the injection" \
+                  "a poisoned replay fixture reaches guard-in before the session sees it, while trusted bankEntry makes 0 guard calls" \
+                  "clean bank entries and clean replay fixtures seed the session unchanged, screening only the replay transcript" \
+                  "a rewrite in a replay sends the guard's cleaned_text, not the injection" \
                   "the seed guard unavailable, throwing or malformed refuses to seed the session" \
                   "each seed check is a fresh session: source recall, history empty" \
                   "parameterized seedGuard over enabled true and false: off mode makes 0 guard calls and seeds session identically to on-mode allow"; do
                   sed -n 's/^ok [0-9]* - oracle: //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
                 done
+                grep -q '^ok [0-9]* - oracle O-GE2-C6-recall-unscreened: seedGuard has no bankEntry method and seedSession seeds bankEntry with 0 guard calls while screening transcript under source: recall$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The Host bridge (plan C3.1) under real pi with the tier-1 extension, as tier1Launch starts
@@ -908,6 +909,8 @@
                     ./schemas/escalation.json
                     ./schemas/eval-request.json
                     ./schemas/eval-result.json
+                    ./schemas/git-request.json
+                    ./schemas/gh-read.json
                     ./tests/escalation.test.ts
                   ];
                 };
@@ -938,6 +941,34 @@
                   sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "oracle: $cell" || { echo "missing cell: $cell"; exit 1; }
                 done
                 grep -q '^ok [0-9]* - oracle (G11): parameterized escalationGuard over enabled true and false: off mode makes 0 guard calls and matches on-mode allow$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FB-eval-only: escalationGuard screens only eval stdout/stderr (eval_stdout) and unscreened git/gh output (web), leaving cleaned_question, draft, gaps, recall_transcript, eval request, and screened git/gh entries untouched$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FB-fail-fast: sequential escalationGuard stops after the first rejected entry without issuing later guard checks$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-ge2-fb-draft
+                chmod -R u+w $TMPDIR/mut-ge2-fb-draft
+                substituteInPlace $TMPDIR/mut-ge2-fb-draft/src/escalation/guard.ts \
+                  --replace-fail 'const evalTranscript: unknown[] = [];' 'await screen(pkg.draft.answer, "eval_stdout"); const evalTranscript: unknown[] = [];'
+                if (cd $TMPDIR/mut-ge2-fb-draft && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-eval-only' tests/escalation.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FB-screen-draft survived in escalation" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fb-recall
+                chmod -R u+w $TMPDIR/mut-ge2-fb-recall
+                substituteInPlace $TMPDIR/mut-ge2-fb-recall/src/escalation/guard.ts \
+                  --replace-fail 'const evalTranscript: unknown[] = [];' 'if (pkg.recall_transcript) await screen(JSON.stringify(pkg.recall_transcript), "eval_stdout"); const evalTranscript: unknown[] = [];'
+                if (cd $TMPDIR/mut-ge2-fb-recall && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-eval-only' tests/escalation.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FB-screen-recall survived in escalation" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fb-parallel
+                chmod -R u+w $TMPDIR/mut-ge2-fb-parallel
+                substituteInPlace $TMPDIR/mut-ge2-fb-parallel/src/escalation/guard.ts \
+                  --replace-fail 'for (const entry of pkg.eval_transcript) {' 'await Promise.all(pkg.eval_transcript.map(async (entry) => {' \
+                  --replace-fail 'evalTranscript.push({ ...rec, result: res });' 'evalTranscript.push({ ...rec, result: res }); })); if (false) {' \
+                  --replace-fail 'continue;' 'return;'
+                if (cd $TMPDIR/mut-ge2-fb-parallel && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-fail-fast' tests/escalation.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FB-promise-all survived in escalation" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The thread's tier from the envelope's per-line tags: falls on a public line, rises only on a
@@ -1341,7 +1372,7 @@
                   "a tombstoned thread with S3 down is refused, not resumed fresh" \
                   "main launches real pi against a stub model" \
                   "at the 10m deadline, 1 notice is posted and 1 escalation is created with transcript, then teardown (C13 Oracle 3)" \
-                  "recall through main() hits stub hindsight, routes bank selectors, and withholds poisoned entries via seedGuard" \
+                  "recall through main() hits stub hindsight, routes bank selectors, and returns all entries with 0 guard calls" \
                   "tier1Launch seeds operating memory when tier1.memoryRoot is set" \
                   "close and gc.sweep() succeed with s3: null, and propose with no token is refused cleanly"; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
@@ -1363,6 +1394,10 @@
                 grep -q '^ok [0-9]* - oracle O-GE2-FA-deadline: a refused escalation at the 10m deadline posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GE2-FA-queue-timeout: a refused escalation at maxQueueWaitSecs posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GE2-FA-lifecycle-safety-net: when postEnvelope throws inside onDeadline, Lifecycle catches the error via onHandlerError with 0 unhandled rejections and still frees the turn slot$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FB-context-rebuild: Host.escalate rebuilds cleaned_question and transcripts from context(t), scrubs and guard-outs draft/gaps, and records post-screen git/gh outputs (C-1, C-2, N-1)$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-C6-recall-unscreened: Host.recall makes 0 guard calls when guard.enable is true and preserves directive-style recall items while replayResume still screens under source: recall$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FC-queue-timeout: XmsgGuardClient bounds total check(e) wall time across FIFO queue wait + sendAndAwait and wakes/times out idempotently (F-C, C-7)$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-today (Arm a): !t79jR_rVSlmFceMqpE shape (2 recalls, 0 evals, imperative Nix prose in draft.answer, 3 gaps, confidence 0.75) posts once and escalates once with 0 escalationGuard calls$' $TMPDIR/tap || exit 1
                 [ "$(grep -c 'escalation\.reply(' src/root/index.ts)" -eq 1 ] && awk '/const escalateAfterPost = async/,/^  };/' src/root/index.ts | grep -q 'escalation\.reply(' || {
                   echo "guard failed: every escalation.reply call in src/root/index.ts must sit inside escalateAfterPost" >&2
                   exit 1
@@ -1410,6 +1445,51 @@
                   --replace-fail '(this.o.onHandlerError ?? defaultHandlerErrorSink)("deadline", thread, e);' 'throw e;'
                 if (cd $TMPDIR/mut-ge2-fa-no-catch && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-lifecycle-safety-net' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-GE2-FA-deadline-no-catch survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fb-trust-pkg
+                chmod -R u+w $TMPDIR/mut-ge2-fb-trust-pkg
+                substituteInPlace $TMPDIR/mut-ge2-fb-trust-pkg/src/root/index.ts \
+                  --replace-fail 'eval_transcript: ctx.eval_transcript,' 'eval_transcript: p.eval_transcript,'
+                if (cd $TMPDIR/mut-ge2-fb-trust-pkg && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-context-rebuild' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FB-trust-pkg-transcript survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fb-skip-guard-out
+                chmod -R u+w $TMPDIR/mut-ge2-fb-skip-guard-out
+                substituteInPlace $TMPDIR/mut-ge2-fb-skip-guard-out/src/root/index.ts \
+                  --replace-fail 'draft: out.value.draft,' 'draft: p.draft,'
+                if (cd $TMPDIR/mut-ge2-fb-skip-guard-out && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-context-rebuild' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FB-escalate-skip-guard-out survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-n1-raw-git
+                chmod -R u+w $TMPDIR/mut-ge2-n1-raw-git
+                substituteInPlace $TMPDIR/mut-ge2-n1-raw-git/src/root/index.ts \
+                  --replace-fail '{ request: request as GitRequest, output: screened, screened: true },' '{ request: request as GitRequest, output: out.output, screened: true },'
+                if (cd $TMPDIR/mut-ge2-n1-raw-git && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FB-context-rebuild' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-N1-raw-git-output survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-c6-recall
+                chmod -R u+w $TMPDIR/mut-ge2-c6-recall
+                substituteInPlace $TMPDIR/mut-ge2-c6-recall/src/root/index.ts \
+                  --replace-fail 'const results: BankRecallItem[] = res.results ?? [];' 'await guard.transcript("recall"); const results: BankRecallItem[] = res.results ?? [];'
+                if (cd $TMPDIR/mut-ge2-c6-recall && node --test --test-force-exit --test-name-pattern='oracle O-GE2-C6-recall-unscreened' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-C6-readd-recall-screen survived O-GE2-C6-recall-unscreened in root" >&2
+                  exit 1
+                fi
+                if (cd $TMPDIR/mut-ge2-c6-recall && node --test --test-force-exit --test-name-pattern='oracle O-GE2-today \(Arm a\)' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-C6-readd-recall-screen survived O-GE2-today (Arm a) in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fc-timeout
+                chmod -R u+w $TMPDIR/mut-ge2-fc-timeout
+                substituteInPlace $TMPDIR/mut-ge2-fc-timeout/src/root/io.ts \
+                  --replace-fail 'const remainingMs = deadline - Date.now();' 'const remainingMs = this.timeoutMs;' \
+                  --replace-fail 'const waitMs = deadline - Date.now();' 'const waitMs = 600_000;'
+                if (cd $TMPDIR/mut-ge2-fc-timeout && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FC-queue-timeout' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FC-timeout-at-acquire survived in root" >&2
                   exit 1
                 fi
                 cp -r . $TMPDIR/mut-silent

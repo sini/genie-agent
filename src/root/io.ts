@@ -41,7 +41,7 @@ export class XmsgGuardClient implements GuardClient {
   private readonly timeoutMs: number;
   private active = 0;
   private peakActiveCount = 0;
-  private readonly queue: (() => void)[] = [];
+  private readonly queue: { wake: () => void; cancel: () => void }[] = [];
   private readonly pending = new Map<string, PendingGuard>();
   private readonly earlyReplies = new Map<string, string>();
   private seq = 0;
@@ -90,6 +90,9 @@ export class XmsgGuardClient implements GuardClient {
   }
 
   close(): void {
+    while (this.queue.length > 0) {
+      this.queue.shift()?.cancel();
+    }
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.resolve({ unavailable: "guard client closed" });
@@ -99,36 +102,68 @@ export class XmsgGuardClient implements GuardClient {
   }
 
   async check(e: Envelope): Promise<Verdict | Unavailable> {
-    await this.acquire();
+    const deadline = Date.now() + this.timeoutMs;
+    if (!(await this.acquire(deadline))) {
+      return { unavailable: `guard check timed out after ${this.timeoutMs}ms (queued)` };
+    }
     try {
-      return await this.sendAndAwait(e);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        return { unavailable: `guard check timed out after ${this.timeoutMs}ms` };
+      }
+      return await this.sendAndAwait(e, remainingMs);
     } finally {
       this.release();
     }
   }
 
-  private acquire(): Promise<void> {
+  private acquire(deadline: number): Promise<boolean> {
     if (this.active < this.maxConcurrency) {
       this.active++;
       if (this.active > this.peakActiveCount) this.peakActiveCount = this.active;
-      return Promise.resolve();
+      return Promise.resolve(true);
     }
-    return new Promise<void>((resolve) => {
-      this.queue.push(() => {
-        this.active++;
-        if (this.active > this.peakActiveCount) this.peakActiveCount = this.active;
-        resolve();
-      });
+    const waitMs = deadline - Date.now();
+    if (waitMs <= 0) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const entry = {
+        wake: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.active++;
+          if (this.active > this.peakActiveCount) this.peakActiveCount = this.active;
+          resolve(true);
+        },
+        cancel: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(false);
+        },
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const idx = this.queue.indexOf(entry);
+        if (idx !== -1) this.queue.splice(idx, 1);
+        resolve(false);
+      }, waitMs);
+      this.queue.push(entry);
     });
   }
 
   private release(): void {
     this.active--;
     const next = this.queue.shift();
-    if (next) next();
+    if (next) next.wake();
   }
 
-  private async sendAndAwait(e: Envelope): Promise<Verdict | Unavailable> {
+  private async sendAndAwait(e: Envelope, remainingMs: number): Promise<Verdict | Unavailable> {
+    const sendStart = Date.now();
     const key = `guard:${++this.seq}:${randomUUID()}`;
     let msgId: string;
     try {
@@ -143,6 +178,11 @@ export class XmsgGuardClient implements GuardClient {
       return parseGuardVerdictReply(early);
     }
 
+    const waitMs = Math.max(0, remainingMs - (Date.now() - sendStart));
+    if (waitMs <= 0) {
+      return { unavailable: `guard check timed out after ${this.timeoutMs}ms (${msgId})` };
+    }
+
     return new Promise<Verdict | Unavailable>((resolve) => {
       let settled = false;
       const done = (res: Verdict | Unavailable) => {
@@ -155,7 +195,7 @@ export class XmsgGuardClient implements GuardClient {
 
       const timer = setTimeout(() => {
         done({ unavailable: `guard check timed out after ${this.timeoutMs}ms (${msgId})` });
-      }, this.timeoutMs);
+      }, waitMs);
 
       this.pending.set(msgId, { resolve: done, timer });
     });

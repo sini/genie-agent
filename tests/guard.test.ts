@@ -158,7 +158,7 @@ test("oracle 1 (G9): an allow reply with empty cleaned_text is accepted, and the
   });
   const client = { check: async (e: Envelope) => parseVerdict(raw, e) };
   assert.equal(await webScreen(client)(original), original);
-  assert.equal(await seedGuard(client).bankEntry(original), original);
+  assert.equal((await seedGuard(client).transcript(original)).trimEnd(), original);
 });
 
 test("oracle 2 (G9): an allow reply with a slightly different cleaned_text is still accepted, and the original is forwarded", async () => {
@@ -173,7 +173,7 @@ test("oracle 2 (G9): an allow reply with a slightly different cleaned_text is st
   });
   const client = { check: async (e: Envelope) => parseVerdict(raw, e) };
   assert.equal(await webScreen(client)(original), original);
-  assert.equal(await seedGuard(client).bankEntry(original), original);
+  assert.equal((await seedGuard(client).transcript(original)).trimEnd(), original);
 });
 
 test("a reject forwards no text", () => {

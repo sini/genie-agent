@@ -25,7 +25,13 @@ import {
 import { pr } from "../broker/pr.ts";
 import { parseExpertReply, type ExpertReply } from "../dispatcher/reply.ts";
 import { escalationGuard } from "../escalation/guard.ts";
-import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts";
+import {
+  Escalation,
+  type GhTranscriptEntry,
+  type GitTranscriptEntry,
+  type Package,
+  type XmsgSend,
+} from "../escalation/index.ts";
 import { router } from "../escalation/route.ts";
 import { withCache } from "../eval/cache.ts";
 import { perThread, type Runner } from "../eval/lock.ts";
@@ -342,23 +348,33 @@ export function main(
       }
     : { enable: false };
 
-  // C5's record of the thread: its latest cleaned question, evals, and Hindsight recalls (GAP-5), beside P2's state.
+  // C5's record of the thread: its latest cleaned question, evals, Hindsight recalls (GAP-5), and git/gh reads (GE2), beside P2's state.
   type Context = {
     cleaned_question: string;
     eval_transcript: unknown[];
     recall_transcript: unknown[];
+    git_transcript: GitTranscriptEntry[];
+    gh_transcript: GhTranscriptEntry[];
     addressed?: boolean;
   };
   const file = (t: string) => `${store.dir(t)}/context.json`;
   const context = (t: string): Context => {
     if (!existsSync(file(t))) {
-      return { cleaned_question: "", eval_transcript: [], recall_transcript: [] };
+      return {
+        cleaned_question: "",
+        eval_transcript: [],
+        recall_transcript: [],
+        git_transcript: [],
+        gh_transcript: [],
+      };
     }
     const raw = JSON.parse(readFileSync(file(t), "utf8")) as Partial<Context>;
     return {
       cleaned_question: raw.cleaned_question ?? "",
       eval_transcript: raw.eval_transcript ?? [],
       recall_transcript: raw.recall_transcript ?? [],
+      git_transcript: raw.git_transcript ?? [],
+      gh_transcript: raw.gh_transcript ?? [],
       ...(raw.addressed !== undefined ? { addressed: raw.addressed } : {}),
     };
   };
@@ -382,11 +398,13 @@ export function main(
     guard: escalationGuard(io.guard, { enabled: guardEnable }),
     route: router(c.experts),
     context: (t) => {
-      const { cleaned_question, eval_transcript, recall_transcript } = context(t);
+      const { cleaned_question, eval_transcript, recall_transcript, git_transcript, gh_transcript } = context(t);
       return {
         cleaned_question,
         eval_transcript,
         ...(recall_transcript.length > 0 ? { recall_transcript } : {}),
+        ...(git_transcript.length > 0 ? { git_transcript } : {}),
+        ...(gh_transcript.length > 0 ? { gh_transcript } : {}),
       };
     },
   });
@@ -537,22 +555,15 @@ export function main(
         setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
         return result;
       },
-      // Recall from Hindsight ("support" -> genie, "memory" -> genie-memory), screening every
-      // returned entry's text through S6's seedGuard(io.guard); a withheld entry is dropped.
+      // Recall from Hindsight ("support" -> genie, "memory" -> genie-memory).
+      // Owner ruling of 2026-11-06 (GE2 C-6): Hindsight recall banks are curated trusted sources
+      // and are not screened by guard-in.
       recall: async (req) => {
         const query = typeof req === "string" ? req : req.query;
         const bank = typeof req === "string" ? undefined : req.bank;
         const client = new HindsightRecallClient(hindsightUrl, recallBankId(bank));
         const res = await client.recall({ query });
-        const results: BankRecallItem[] = [];
-        for (const item of res.results ?? []) {
-          try {
-            const text = await guard.bankEntry(item.text);
-            results.push({ ...item, text });
-          } catch (e) {
-            console.error(`thread ${t}: recall entry ${item.id ?? ""} withheld: ${e}`);
-          }
-        }
+        const results: BankRecallItem[] = res.results ?? [];
         setContext(t, {
           recall_transcript: [
             ...context(t).recall_transcript,
@@ -561,16 +572,37 @@ export function main(
         });
         return { ...(res.entities !== undefined ? { entities: res.entities } : {}), results };
       },
-      escalate: (pkg) => {
+      // GE2 (C-1 / C-2): rebuilds cleaned_question and transcripts unconditionally from context(t)
+      // and scrubs + guard-outs draft and gaps before Escalation.escalate.
+      escalate: async (pkg) => {
         withheldInTurn.delete(t);
         lifecycle.disarm(t);
         const p = pkg as Package;
-        const recalls = context(t).recall_transcript;
-        const merged: Package =
-          p.recall_transcript === undefined && recalls.length > 0
-            ? { ...p, recall_transcript: recalls }
-            : p;
-        return escalation.escalate(t, merged);
+        const ctx = context(t);
+        const out = await outbound(
+          ctx.cleaned_question,
+          (scrub) => ({
+            draft: {
+              ...p.draft,
+              answer: scrub(p.draft.answer),
+              gaps: p.draft.gaps.map(scrub),
+            },
+            gaps: p.gaps.map(scrub),
+          }),
+          guardOut,
+        );
+        if (!("value" in out)) {
+          throw new Error(`escalation refused: ${out.reason}`);
+        }
+        return escalation.escalate(t, {
+          cleaned_question: ctx.cleaned_question,
+          eval_transcript: ctx.eval_transcript,
+          ...(ctx.recall_transcript.length > 0 ? { recall_transcript: ctx.recall_transcript } : {}),
+          ...(ctx.git_transcript.length > 0 ? { git_transcript: ctx.git_transcript } : {}),
+          ...(ctx.gh_transcript.length > 0 ? { gh_transcript: ctx.gh_transcript } : {}),
+          draft: out.value.draft,
+          gaps: out.value.gaps,
+        });
       },
       // The draft leaves only as redacted and passed by guard-out. A withheld draft is neither posted
       // nor escalated on the spot: tier 1 receives {posted: false, reason} so it can retry, and WITHHELD
@@ -651,10 +683,23 @@ export function main(
           repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
           git: io.git,
         });
-        if ((c.gitScreen?.enable ?? false) && guardEnable) {
+        const screenedAtTool = (c.gitScreen?.enable ?? false) && guardEnable;
+        if (screenedAtTool) {
           const screened = await gitScreen(out.output);
+          setContext(t, {
+            git_transcript: [
+              ...context(t).git_transcript,
+              { request: request as GitRequest, output: screened, screened: true },
+            ],
+          });
           return { ...out, output: screened };
         }
+        setContext(t, {
+          git_transcript: [
+            ...context(t).git_transcript,
+            { request: request as GitRequest, output: out.output, screened: false },
+          ],
+        });
         return out;
       },
       gh_read: async (request) => {
@@ -664,14 +709,28 @@ export function main(
           githubApi: c.broker?.githubApi,
           tokenFile: c.githubReadTokenFile,
         });
-        if ((c.ghScreen?.enable ?? false) && guardEnable) {
-          const screened = await ghScreen(JSON.stringify(res));
+        const rawJson = JSON.stringify(res);
+        const screenedAtTool = (c.ghScreen?.enable ?? false) && guardEnable;
+        if (screenedAtTool) {
+          const screened = await ghScreen(rawJson);
+          setContext(t, {
+            gh_transcript: [
+              ...context(t).gh_transcript,
+              { request: request as GhReadRequest, output: screened, screened: true },
+            ],
+          });
           try {
             return JSON.parse(screened);
           } catch {
             return screened;
           }
         }
+        setContext(t, {
+          gh_transcript: [
+            ...context(t).gh_transcript,
+            { request: request as GhReadRequest, output: rawJson, screened: false },
+          ],
+        });
         return res;
       },
       screen,

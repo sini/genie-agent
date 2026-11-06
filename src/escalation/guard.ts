@@ -1,16 +1,17 @@
-// The escalation guard (plan S5, design §4 step 6, oracle 18): the package passes guard-in before
-// it leaves the pod, because tier 1 wrote it after reading eval stdout, and the whole package
-// comes from tier 1 on its `escalate` call, cleaned_question included. Every non-empty string in
-// it is one envelope, so a rewrite replaces exactly that string and the package keeps its shape.
-//
-// Each check is a fresh session: an independent request with `history: []`, so no thread text and
-// no other field of the package rides along. The source is `eval_stdout`, guard-in's evidence
-// class: text that addresses a model, or carries instructions for the expert, is an injection.
-// A reject, unavailable, a throw, or a reply that is not a verdict refuses the whole package.
-import type { Verdict } from "../guard/verdict.ts";
+// The escalation guard (plan S5, design §4 step 6, oracle 18, GE2 F-B): screens untrusted tool
+// output entering the expert escalation package before it leaves the pod:
+// - `eval_transcript[i].result.stdout_tail` and `stderr_tail` (non-empty strings) under
+//   `source: "eval_stdout"`, and
+// - `git_transcript[i].output` and `gh_transcript[i].output` (non-empty strings, only when
+//   `entry.screened !== true`) under `source: "web"` (orchestrator decision of 2026-11-06).
+// `cleaned_question` (already guard-in'd on intake), `draft` and `gaps` (already scrubbed and
+// guard-out'd), `recall_transcript` (trusted Hindsight bank content, owner ruling of 2026-11-06),
+// `eval_transcript[i].request`, and `screened: true` `git_transcript`/`gh_transcript` entries are
+// not re-screened. Checks run sequentially (`for ... of`) and fail fast on the first refusal.
+import type { Envelope, Verdict } from "../guard/verdict.ts";
 import { verdictErrors } from "../guard/verdict.ts";
 import type { GuardClient, Unavailable } from "../supervisor/guard-client.ts";
-import type { Package } from "./index.ts";
+import type { GhTranscriptEntry, GitTranscriptEntry, Package } from "./index.ts";
 
 export function escalationGuard(
   client: GuardClient | undefined,
@@ -18,12 +19,12 @@ export function escalationGuard(
 ): (pkg: Package) => Promise<Package> {
   const enabled = opts.enabled ?? true;
   const refused = (why: string) => new Error(`escalation refused by the guard: ${why}`);
-  const screen = async (text: string): Promise<string> => {
+  const screen = async (text: string, source: Envelope["source"]): Promise<string> => {
     if (!enabled) return text;
     if (!client) throw refused("unavailable (guard client not configured)");
     let v: Verdict | Unavailable;
     try {
-      v = await client.check({ source: "eval_stdout", history: [], content: { text } });
+      v = await client.check({ source, history: [], content: { text } });
     } catch (e) {
       v = { unavailable: e instanceof Error ? e.message : String(e) };
     }
@@ -34,12 +35,60 @@ export function escalationGuard(
     if (verdict.verdict === "rewrite") return verdict.cleaned_text;
     throw refused(verdict.reason);
   };
-  const walk = async (x: unknown): Promise<unknown> => {
-    if (typeof x === "string") return x === "" ? x : screen(x);
-    if (Array.isArray(x)) return Promise.all(x.map(walk));
-    if (typeof x === "object" && x !== null)
-      return Object.fromEntries(await Promise.all(Object.entries(x).map(async ([k, v]) => [k, await walk(v)])));
-    return x;
+
+  return async (pkg) => {
+    const evalTranscript: unknown[] = [];
+    for (const entry of pkg.eval_transcript) {
+      if (typeof entry !== "object" || entry === null) {
+        evalTranscript.push(entry);
+        continue;
+      }
+      const rec = entry as { request?: unknown; result?: unknown };
+      if (typeof rec.result !== "object" || rec.result === null) {
+        evalTranscript.push(entry);
+        continue;
+      }
+      const res = { ...(rec.result as Record<string, unknown>) };
+      if (typeof res.stdout_tail === "string" && res.stdout_tail !== "") {
+        res.stdout_tail = await screen(res.stdout_tail, "eval_stdout");
+      }
+      if (typeof res.stderr_tail === "string" && res.stderr_tail !== "") {
+        res.stderr_tail = await screen(res.stderr_tail, "eval_stdout");
+      }
+      evalTranscript.push({ ...rec, result: res });
+    }
+
+    let gitTranscript: GitTranscriptEntry[] | undefined;
+    if (pkg.git_transcript !== undefined) {
+      gitTranscript = [];
+      for (const entry of pkg.git_transcript) {
+        if (entry.screened !== true && typeof entry.output === "string" && entry.output !== "") {
+          const output = await screen(entry.output, "web");
+          gitTranscript.push({ ...entry, output, screened: true });
+        } else {
+          gitTranscript.push(entry);
+        }
+      }
+    }
+
+    let ghTranscript: GhTranscriptEntry[] | undefined;
+    if (pkg.gh_transcript !== undefined) {
+      ghTranscript = [];
+      for (const entry of pkg.gh_transcript) {
+        if (entry.screened !== true && typeof entry.output === "string" && entry.output !== "") {
+          const output = await screen(entry.output, "web");
+          ghTranscript.push({ ...entry, output, screened: true });
+        } else {
+          ghTranscript.push(entry);
+        }
+      }
+    }
+
+    return {
+      ...pkg,
+      eval_transcript: evalTranscript,
+      ...(gitTranscript !== undefined ? { git_transcript: gitTranscript } : {}),
+      ...(ghTranscript !== undefined ? { gh_transcript: ghTranscript } : {}),
+    };
   };
-  return async (pkg) => (await walk(pkg)) as Package;
 }
