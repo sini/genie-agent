@@ -1154,6 +1154,81 @@
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 grep -q '^ok [0-9]* - oracle GX1 (F4): repo coordinate, branch ref, file paths, and commits validated in schemas/proposal.json, broker, and pr sink$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GC1-pr-f6: publishPr and verifyBotIdentity enforce botLogin, forbiddenLogins, public-only, non-self upstream owner, Q1 permissions object, read-only upstream permissions, fork owner/full_name, and headOwner:branch ref, with zero write calls on refusal$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-pr-self-owner
+                chmod -R u+w $TMPDIR/mut-pr-self-owner
+                substituteInPlace $TMPDIR/mut-pr-self-owner/src/broker/pr.ts \
+                  --replace-fail 'String(upstream.owner?.login ?? "").toLowerCase() === botLogin.toLowerCase()' 'String(upstream.owner?.login ?? "").toLowerCase() === "__mutant_never__"'
+                if (cd $TMPDIR/mut-pr-self-owner && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-self-owner survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-private
+                chmod -R u+w $TMPDIR/mut-pr-private
+                substituteInPlace $TMPDIR/mut-pr-private/src/broker/pr.ts \
+                  --replace-fail 'if (upstream.private !== false)' 'if (upstream.private === "__mutant_never__")'
+                if (cd $TMPDIR/mut-pr-private && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-private survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-q1-perms
+                chmod -R u+w $TMPDIR/mut-pr-q1-perms
+                substituteInPlace $TMPDIR/mut-pr-q1-perms/src/broker/pr.ts \
+                  --replace-fail 'if (typeof upstream.permissions !== "object" || upstream.permissions === null) {' 'if (false) {' \
+                  --replace-fail 'if (upstream.permissions.push || upstream.permissions.maintain || upstream.permissions.admin) {' 'if (upstream.permissions?.push || upstream.permissions?.maintain || upstream.permissions?.admin) {'
+                if (cd $TMPDIR/mut-pr-q1-perms && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-q1-missing-perms survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-upstream-push
+                chmod -R u+w $TMPDIR/mut-pr-upstream-push
+                substituteInPlace $TMPDIR/mut-pr-upstream-push/src/broker/pr.ts \
+                  --replace-fail 'if (upstream.permissions.push || upstream.permissions.maintain || upstream.permissions.admin)' 'if (false)'
+                if (cd $TMPDIR/mut-pr-upstream-push && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-upstream-push survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-fork-owner
+                chmod -R u+w $TMPDIR/mut-pr-fork-owner
+                substituteInPlace $TMPDIR/mut-pr-fork-owner/src/broker/pr.ts \
+                  --replace-fail 'String(fork.owner?.login ?? "").toLowerCase() !== botLogin.toLowerCase()' 'String(fork.owner?.login ?? "").toLowerCase() === "__mutant_never__"'
+                if (cd $TMPDIR/mut-pr-fork-owner && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-fork-owner survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-fork-fullname
+                chmod -R u+w $TMPDIR/mut-pr-fork-fullname
+                substituteInPlace $TMPDIR/mut-pr-fork-fullname/src/broker/pr.ts \
+                  --replace-fail 'String(fork.full_name).toLowerCase() === p.repo.toLowerCase()' 'String(fork.full_name).toLowerCase() === "__mutant_never__"'
+                if (cd $TMPDIR/mut-pr-fork-fullname && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-fork-fullname survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-head-ref
+                chmod -R u+w $TMPDIR/mut-pr-head-ref
+                substituteInPlace $TMPDIR/mut-pr-head-ref/src/broker/pr.ts \
+                  --replace-fail 'head: `''${headOwner}:''${p.branch}`,' 'head: p.branch,'
+                if (cd $TMPDIR/mut-pr-head-ref && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-head-ref survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-forbidden-logins
+                chmod -R u+w $TMPDIR/mut-pr-forbidden-logins
+                substituteInPlace $TMPDIR/mut-pr-forbidden-logins/src/broker/index.ts \
+                  --replace-fail 'forbiddenLogins.some((f) => f.toLowerCase() === botLogin.toLowerCase())' 'false' \
+                  --replace-fail 'forbiddenLogins.some((f) => f.toLowerCase() === login.toLowerCase())' 'false'
+                if (cd $TMPDIR/mut-pr-forbidden-logins && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-forbidden-logins survived in pr" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-pr-bot-login-mismatch
+                chmod -R u+w $TMPDIR/mut-pr-bot-login-mismatch
+                substituteInPlace $TMPDIR/mut-pr-bot-login-mismatch/src/broker/index.ts \
+                  --replace-fail 'login.toLowerCase() !== botLogin.toLowerCase()' 'login.toLowerCase() === "__mutant_never__"'
+                if (cd $TMPDIR/mut-pr-bot-login-mismatch && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-bot-login-mismatch survived in pr" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The archive writer and replay-resume (plans P4, P5): one PUT per archive holding the

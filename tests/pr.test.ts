@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { broker, byKind, type Proposal } from "../src/broker/index.ts";
+import { broker, byKind, verifyBotIdentity, type Proposal } from "../src/broker/index.ts";
 import { gist } from "../src/broker/gist.ts";
 import { pr } from "../src/broker/pr.ts";
 import { errors, load } from "../src/tier1/schema.ts";
@@ -288,4 +288,158 @@ test("oracle GX1 (F4): repo coordinate, branch ref, file paths, and commits vali
     gh.close();
   }
 });
+
+test("oracle O-GC1-pr-f6: publishPr and verifyBotIdentity enforce botLogin, forbiddenLogins, public-only, non-self upstream owner, Q1 permissions object, read-only upstream permissions, fork owner/full_name, and headOwner:branch ref, with zero write calls on refusal", async () => {
+  let userLogin: unknown = "genie-bot";
+  let userStatus = 200;
+  let repoBody: Record<string, unknown> = {
+    private: false,
+    owner: { login: "alice" },
+    default_branch: "main",
+    permissions: { push: false, maintain: false, admin: false },
+  };
+  let forkBody: Record<string, unknown> = {
+    full_name: "genie-bot/flake",
+    owner: { login: "Genie-Bot" },
+  };
+
+  const gh = await github((r) => {
+    if (r.method === "GET" && r.url === "/user") {
+      return { status: userStatus, body: JSON.stringify({ login: userLogin }) };
+    }
+    if (r.method === "GET" && r.url === "/repos/alice/flake") {
+      return { status: 200, body: JSON.stringify(repoBody) };
+    }
+    if (r.method === "POST" && r.url === "/repos/alice/flake/forks") {
+      return { status: 202, body: JSON.stringify(forkBody) };
+    }
+    return undefined;
+  });
+
+  const writeReqs = () => gh.requests.filter((r) => r.method !== "GET");
+  const gitWriteReqs = () =>
+    gh.requests.filter(
+      (r) => r.method !== "GET" && !(r.method === "POST" && r.url === "/repos/alice/flake/forks"),
+    );
+
+  try {
+    const pObj: Proposal = JSON.parse(proposal);
+    const runPr = (botLogin = "genie-bot", forbiddenLogins: string[] = ["sini"]) =>
+      pr(link, gh.base, { pollMs: 10, forkWaitMs: 200, botLogin, forbiddenLogins })(pObj, "tok-f6", THREAD);
+
+    // 1. upstream.owner.login == botLogin (exact and case-insensitive) refused before any fork or push call (0 write requests)
+    for (const selfOwner of ["genie-bot", "Genie-Bot"]) {
+      gh.requests.length = 0;
+      repoBody = {
+        private: false,
+        owner: { login: selfOwner },
+        default_branch: "main",
+        permissions: { push: false, maintain: false, admin: false },
+      };
+      await assert.rejects(runPr(), /upstream repo alice\/flake is owned by genie-bot/);
+      assert.equal(writeReqs().length, 0, `self-owned upstream (${selfOwner}) must make 0 write requests`);
+    }
+
+    // 2. upstream.private !== false (true and undefined) refused before any fork or push call (0 write requests)
+    for (const priv of [true, undefined]) {
+      gh.requests.length = 0;
+      repoBody = {
+        private: priv,
+        owner: { login: "alice" },
+        default_branch: "main",
+        permissions: { push: false, maintain: false, admin: false },
+      };
+      await assert.rejects(runPr(), /alice\/flake is not public/);
+      assert.equal(writeReqs().length, 0, `non-public upstream (private=${String(priv)}) must make 0 write requests`);
+    }
+
+    // 3. Gate v1 Q1: upstream.permissions absent (undefined), null, or non-object refused before any fork or push call (0 write requests)
+    for (const badPerms of [undefined, null, "read"]) {
+      gh.requests.length = 0;
+      repoBody = {
+        private: false,
+        owner: { login: "alice" },
+        default_branch: "main",
+        permissions: badPerms,
+      };
+      await assert.rejects(runPr(), /missing permissions object/);
+      assert.equal(writeReqs().length, 0, `upstream with permissions=${String(badPerms)} must make 0 write requests`);
+    }
+
+    // 4. upstream.permissions.{push,maintain,admin} === true refused before any fork or push call (0 write requests)
+    for (const writePerm of [
+      { push: true, maintain: false, admin: false },
+      { push: false, maintain: true, admin: false },
+      { push: false, maintain: false, admin: true },
+    ]) {
+      gh.requests.length = 0;
+      repoBody = {
+        private: false,
+        owner: { login: "alice" },
+        default_branch: "main",
+        permissions: writePerm,
+      };
+      await assert.rejects(runPr(), /token has write permission on upstream repo/);
+      assert.equal(writeReqs().length, 0, `upstream with ${JSON.stringify(writePerm)} must make 0 write requests`);
+    }
+
+    // Restore valid upstream repoBody for fork / identity / head-ref checks
+    repoBody = {
+      private: false,
+      owner: { login: "alice" },
+      default_branch: "main",
+      permissions: { push: false, maintain: false, admin: false },
+    };
+
+    // 5. fork.owner.login != botLogin (and missing fork.owner) refused with 0 git write requests
+    for (const badForkOwner of ["sini", "alice", undefined]) {
+      gh.requests.length = 0;
+      forkBody = { full_name: "genie-bot/flake", owner: badForkOwner ? { login: badForkOwner } : undefined };
+      await assert.rejects(runPr(), /fork owner .* does not match genie-bot/);
+      assert.equal(gitWriteReqs().length, 0, `fork owner ${String(badForkOwner)} must make 0 git/PR write requests`);
+    }
+
+    // 6. fork.full_name == p.repo (exact and case-insensitive) refused with 0 git write requests
+    for (const sameName of ["alice/flake", "Alice/Flake"]) {
+      gh.requests.length = 0;
+      forkBody = { full_name: sameName, owner: { login: "genie-bot" } };
+      await assert.rejects(runPr(), /fork full_name .* matches upstream repo/);
+      assert.equal(gitWriteReqs().length, 0, `fork full_name ${sameName} must make 0 git/PR write requests`);
+    }
+    forkBody = { full_name: "genie-bot/flake", owner: { login: "Genie-Bot" } };
+
+    // 7. verifyBotIdentity: forbiddenLogins refused even when login === botLogin (e.g. botLogin="Sini", forbiddenLogins=["sini"], /user.login="Sini")
+    gh.requests.length = 0;
+    userLogin = "Sini";
+    await assert.rejects(runPr("Sini", ["sini"]), /forbidden/);
+    assert.equal(writeReqs().length, 0, "forbiddenLogins hit must make 0 write requests");
+
+    // 8. verifyBotIdentity: login !== botLogin refused when login ("alice") is not in forbiddenLogins (["sini"])
+    gh.requests.length = 0;
+    userLogin = "alice";
+    await assert.rejects(runPr("genie-bot", ["sini"]), /mismatch: expected genie-bot, got alice/);
+    assert.equal(writeReqs().length, 0, "botLogin mismatch must make 0 write requests");
+
+    // 9. verifyBotIdentity: invalid botLogin syntax and empty /user.login refused
+    gh.requests.length = 0;
+    await assert.rejects(verifyBotIdentity(gh.base, "tok", "-bad-login", []), /invalid broker\.botLogin/);
+    assert.equal(gh.requests.length, 0);
+    userLogin = "";
+    await assert.rejects(runPr("genie-bot", ["sini"]), /missing login/);
+    assert.equal(writeReqs().length, 0);
+
+    // 10. Positive control + head-ref construction: when userLogin="Genie-Bot" and fork.owner.login="Genie-Bot"
+    // with configured botLogin="genie-bot", PR succeeds and POST /pulls sends head: "genie-bot:fix"
+    gh.requests.length = 0;
+    userLogin = "Genie-Bot";
+    const ok = await runPr("genie-bot", ["sini"]);
+    assert.equal(ok.url, PR_URL);
+    const [pullReq] = pulls(gh.requests);
+    assert.ok(pullReq, "positive control must POST /repos/alice/flake/pulls");
+    assert.equal(JSON.parse(pullReq.body).head, "genie-bot:fix");
+  } finally {
+    gh.close();
+  }
+});
+
 
