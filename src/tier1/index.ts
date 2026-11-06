@@ -432,7 +432,12 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
       (v) => (v.bank !== undefined ? { query: v.query, bank: v.bank } : v.query),
     ),
     c1("escalate", "Hand this thread to the expert tier.", load("escalation"), whole),
-    c1("reply", "Post the final draft answer. Call exactly once, last.", load("draft"), whole),
+    c1(
+      "reply",
+      "Post the final draft answer. Call at most once, last: a result with posted: true means the answer is already posted to the room — do not call reply again even if escalated is false.",
+      load("draft"),
+      whole,
+    ),
     c1("propose", "Propose a gist or a pull request to the broker. A pull request needs repo and branch, plus inline files or worktreeSubdir.", load("proposal"), whole),
     c1("git", "Run a read-only git query (log, show, diff, blame, grep) against a repository already cloned in this thread.", load("git-request"), whole),
     c1("gh_read", "Read public GitHub issues, pull requests, diffs, check runs, gists, or workflow runs.", load("gh-read"), whole),

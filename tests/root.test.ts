@@ -3087,6 +3087,552 @@ console.log(JSON.stringify({
   assert.deepEqual(out.zombies, [], `expected 0 zombies on PID 1 after SIGKILL teardown, got ${JSON.stringify(out.zombies)}`);
 });
 
+test("oracle O-GE2-FA-reply: a refused escalation after reply post resolves non-error with { posted: true, escalated: false, escalation: 'refused: ...' } and persists refused on EscalationRecord", async () => {
+  const faTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-fa-reply-`);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${faTmp}/${f}-key`, "k\n");
+  const cfg = `${faTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${faTmp}/state`,
+      storeRoot: `${faTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${faTmp}/worktrees` },
+      pi,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${faTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: null,
+      broker: {
+        tokenFile: `${faTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const faBatches: Inbound[][] = [];
+  const faPosts: [string, unknown][] = [];
+  const faSends: { to: string; text: string }[] = [];
+  let allowEvalStdout = false;
+  const faGuard = {
+    check: async (e: Envelope): Promise<Verdict> => {
+      checked.push(e);
+      if (e.source === "eval_stdout" && !allowEvalStdout && e.content.text.includes("INJECT")) {
+        return { verdict: "reject", reason: "r", cleaned_text: "" };
+      }
+      return {
+        verdict: e.source !== "eval_stdout" && e.content.text.includes("INJECT") ? "reject" : "allow",
+        reason: "r",
+        cleaned_text: "",
+      };
+    },
+  };
+  const faRoot = main(
+    cfg,
+    {
+      intake: { next: async () => faBatches.shift() ?? null },
+      post: { post: async (t, m) => (faPosts.push([t, m]), `$ev_${faPosts.length}`) },
+      guard: faGuard,
+      xmsg: { send: async (to, text) => `m${faSends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval stdout", stderr_tail: "", limit_hit: "none" }),
+  );
+  const faHost = async (thread: string, method: string, arg: unknown) =>
+    JSON.parse(
+      (
+        (await faRoot.supervisor.command(thread, {
+          type: "host",
+          title: BRIDGE,
+          placeholder: JSON.stringify({ method, arg }),
+        })).data as any
+      ).value,
+    );
+
+  try {
+    const thread = "ge2_fa_reply";
+    faBatches.push([{ thread, envelope: envelope(BOB, "how does gen work?") }]);
+    await faRoot.run();
+
+    await faHost(thread, "eval", { repo: "o/r", rev: "main", attr: "x", trusted: "no" });
+    const lowConfDraft = {
+      answer: "gen provides flake-parts modules.",
+      confidence: 0.5,
+      gaps: ["verify at HEAD"],
+      escalate_forced: false,
+    };
+    const replyRes = await faHost(thread, "reply", lowConfDraft);
+    assert.equal(replyRes.error, undefined, `reply must not return a bridge error after postEnvelope succeeds: ${JSON.stringify(replyRes)}`);
+    assert.ok(replyRes.ok, "reply must resolve with ok payload");
+    assert.equal(replyRes.ok.posted, true);
+    assert.equal(replyRes.ok.escalated, false);
+    assert.match(String(replyRes.ok.escalation ?? ""), /^refused: /);
+
+    assert.equal(faPosts.length, 1, "draft must be posted once to the room");
+    assert.equal(faSends.length, 0, "refused escalation must not be sent over xmsg");
+    const escRec = faRoot.store.escalation(thread);
+    assert.ok(escRec, "escalation record must be persisted on disk");
+    assert.match(String(escRec.refused ?? ""), /refused by the guard/);
+    assert.equal(escRec.body, undefined);
+
+    // P-13 rider: if a later 🔍 (deeper) succeeds, refused is cleared from the persisted EscalationRecord
+    allowEvalStdout = true;
+    faBatches.push([{ thread, control: "deeper" }]);
+    await faRoot.run();
+    assert.equal(faSends.length, 1, "later deeper send succeeds once guard allows");
+    const escAfterDeeper = faRoot.store.escalation(thread);
+    assert.ok(escAfterDeeper?.body, "body must be persisted after successful deeper send");
+    assert.equal(escAfterDeeper?.refused, undefined, "refused must be cleared on a later successful send (P-13)");
+  } finally {
+    await faRoot.stop();
+  }
+});
+
+test("oracle O-GE2-FA-settled: a refused escalation after WITHHELD on agent_settled still runs lifecycle.event, clears pending, and releases the turn slot", async () => {
+  const faSetTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-fa-settled-`);
+  const piHold = `${faSetTmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${faSetTmp}/${f}-key`, "k\n");
+  const cfg = `${faSetTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${faSetTmp}/state`,
+      storeRoot: `${faSetTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${faSetTmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${faSetTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], maxConcurrentTurns: 1, maxQueueWaitSecs: 180 },
+      s3: null,
+      broker: {
+        tokenFile: `${faSetTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const faBatches: Inbound[][] = [];
+  const faPosts: [string, unknown][] = [];
+  const faSends: { to: string; text: string }[] = [];
+  const faRoot = main(
+    cfg,
+    {
+      intake: { next: async () => faBatches.shift() ?? null },
+      post: { post: async (t, m) => (faPosts.push([t, m]), `$ev_${faPosts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${faSends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval stdout", stderr_tail: "", limit_hit: "none" }),
+  );
+  const faHost = async (thread: string, method: string, arg: unknown) =>
+    JSON.parse(
+      (
+        (await faRoot.supervisor.command(thread, {
+          type: "host",
+          title: BRIDGE,
+          placeholder: JSON.stringify({ method, arg }),
+        })).data as any
+      ).value,
+    );
+
+  try {
+    faBatches.push([
+      { thread: "t1", envelope: envelope(BOB, "question on t1") },
+      { thread: "t2", envelope: envelope(BOB, "queued question on t2") },
+    ]);
+    await faRoot.run();
+    assert.deepEqual(faRoot.lifecycle.activeTurns(), ["t1"]);
+    assert.deepEqual(faRoot.lifecycle.queuedThreads(), ["t2"]);
+
+    // t1 runs an eval whose stdout_tail contains INJECT, then attempts a reply blocked by guardOut
+    await faHost("t1", "eval", { repo: "o/r", rev: "main", attr: "x", trusted: "no" });
+    const blockedRes = await faHost("t1", "reply", {
+      answer: "BLOCK me",
+      confidence: 0.5,
+      gaps: [],
+      escalate_forced: true,
+    });
+    assert.deepEqual(blockedRes.ok, { posted: false, reason: "guard-out: leak" });
+
+    // Settle t1: posts WITHHELD, attempts escalation.reply (which guard refuses because of INJECT in eval_transcript),
+    // and MUST still run lifecycle.event("t1", r) to clear pending("t1") and release the turn slot to t2.
+    await faRoot.supervisor.command("t1", { type: "settle" });
+    for (let i = 0; i < 40 && faRoot.store.pending("t1").length > 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    assert.deepEqual(faPosts.filter(([t]) => t === "t1"), [["t1", { text: WITHHELD }]]);
+    assert.equal(faSends.length, 0);
+    assert.match(String(faRoot.store.escalation("t1")?.refused ?? ""), /refused by the guard/);
+    assert.deepEqual(faRoot.store.pending("t1"), [], "lifecycle.event must clear pending('t1') even when escalation after WITHHELD fails");
+    assert.deepEqual(faRoot.lifecycle.activeTurns(), ["t2"], "t1's turn slot must be released and acquired by queued thread t2");
+    assert.ok(faRoot.supervisor.pid("t2") !== undefined, "t2 must be launched after t1 settles");
+  } finally {
+    await faRoot.stop();
+  }
+});
+
+test("oracle O-GE2-today (Arm b): a genuine escalation refusal on a low-confidence reply terminates the turn loop in 1 reply with 1 post and 0 sends", async () => {
+  const loopTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-today-b-`);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${loopTmp}/${f}-key`, "k\n");
+  const cfg = `${loopTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${loopTmp}/state`,
+      storeRoot: `${loopTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${loopTmp}/worktrees` },
+      pi,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${loopTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+      s3: null,
+      broker: {
+        tokenFile: `${loopTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const loopBatches: Inbound[][] = [];
+  const loopPosts: [string, unknown][] = [];
+  const loopSends: { to: string; text: string }[] = [];
+  const loopRoot = main(
+    cfg,
+    {
+      intake: { next: async () => loopBatches.shift() ?? null },
+      post: { post: async (t, m) => (loopPosts.push([t, m]), `$ev_${loopPosts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${loopSends.push({ to, text })}` },
+    },
+    async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval output", stderr_tail: "", limit_hit: "none" }),
+  );
+  const loopHost = async (thread: string, method: string, arg: unknown) =>
+    JSON.parse(
+      (
+        (await loopRoot.supervisor.command(thread, {
+          type: "host",
+          title: BRIDGE,
+          placeholder: JSON.stringify({ method, arg }),
+        })).data as any
+      ).value,
+    );
+
+  try {
+    const thread = "ge2_today_b";
+    loopBatches.push([{ thread, envelope: envelope(BOB, "Tell me about gen") }]);
+    await loopRoot.run();
+    await loopHost(thread, "eval", { repo: "o/r", rev: "main", attr: "x", trusted: "no" });
+
+    // Turn-loop driver modelling pi pid 1293699: retries reply with a reworded draft up to 4 times
+    // whenever the bridge returns { error } (isError: true), and settles once a reply succeeds with posted: true.
+    const candidateDrafts = [1, 2, 3, 4].map((attempt) => ({
+      answer: `Draft attempt #${attempt}: gen is a NixOS module framework.`,
+      confidence: 0.75,
+      gaps: ["Check the hub repository at HEAD"],
+      escalate_forced: false,
+    }));
+    let replyCalls = 0;
+    let lastReplyRes: any;
+    for (const d of candidateDrafts) {
+      replyCalls++;
+      lastReplyRes = await loopHost(thread, "reply", d);
+      if (!lastReplyRes.error && lastReplyRes.ok?.posted === true) {
+        break;
+      }
+    }
+    await loopRoot.supervisor.command(thread, { type: "settle" });
+    while (loopRoot.store.pending(thread).length > 0) await new Promise((r) => setTimeout(r, 5));
+
+    assert.equal(replyCalls, 1, "turn loop must terminate after 1 reply call without retrying");
+    assert.equal(loopPosts.length, 1, "room must receive 1 post, not 4 duplicates");
+    assert.equal(loopSends.length, 0, "refused escalation must not be sent");
+    assert.equal(lastReplyRes.ok?.posted, true);
+    assert.equal(lastReplyRes.ok?.escalated, false);
+    assert.match(String(lastReplyRes.ok?.escalation ?? ""), /^refused: /);
+  } finally {
+    await loopRoot.stop();
+  }
+});
+
+test("oracle O-GE2-FA-deadline: a refused escalation at the 10m deadline posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord", async () => {
+  const dlTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-fa-deadline-`);
+  const piHold = `${dlTmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${dlTmp}/${f}-key`, "k\n");
+  const cfg = `${dlTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${dlTmp}/state`,
+      storeRoot: `${dlTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${dlTmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${dlTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], maxConcurrentTurns: 1 },
+      s3: null,
+      broker: {
+        tokenFile: `${dlTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-11-06T00:00:00Z"));
+  const dlBatches: Inbound[][] = [];
+  const dlPosts: [string, unknown][] = [];
+  const dlSends: { to: string; text: string }[] = [];
+  const handlerErrors: { kind: string; thread: string; err: unknown }[] = [];
+  const dlRoot = main(
+    cfg,
+    {
+      intake: { next: async () => dlBatches.shift() ?? null },
+      post: { post: async (t, m) => (dlPosts.push([t, m]), `$ev_${dlPosts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${dlSends.push({ to, text })}` },
+      onHandlerError: (kind, thread, err) => handlerErrors.push({ kind, thread, err }),
+    },
+    async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval stdout at deadline", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    const thread = "ge2_fa_deadline";
+    dlBatches.push([{ thread, envelope: envelope(BOB, "question that times out at 10m after poisoned eval") }]);
+    await dlRoot.run();
+    assert.deepEqual(dlRoot.lifecycle.activeTurns(), [thread]);
+
+    await dlRoot.supervisor.command(thread, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "eval", arg: { repo: "o/r", rev: "main", attr: "x", trusted: "no" } }),
+    });
+
+    await clock.advance(QUESTION_TIMEOUT_MS);
+
+    assert.deepEqual(handlerErrors, [], "deadline handler must not throw into Lifecycle's catch sink when escalation is refused");
+    assert.equal(dlPosts.length, 1, "at 10m deadline, DEADLINE_NOTICE must be posted exactly once");
+    assert.deepEqual(dlPosts[0], [thread, { text: DEADLINE_NOTICE }]);
+    assert.equal(dlSends.length, 0, "refused deadline escalation must not send to expert");
+    assert.deepEqual(dlRoot.lifecycle.activeTurns(), [], "lifecycle must free the turn slot after refused deadline escalation");
+    assert.equal(dlRoot.supervisor.pid(thread), undefined, "pi process must be torn down after deadline");
+
+    const st = dlRoot.store.read(thread);
+    assert.equal(st?.status, "active");
+    const escRec = dlRoot.store.escalation(thread);
+    assert.ok(escRec, "escalation record must be persisted on disk");
+    assert.match(String(escRec.refused ?? ""), /refused by the guard/);
+    assert.equal(escRec.body, undefined);
+  } finally {
+    await dlRoot.stop();
+  }
+});
+
+test("oracle O-GE2-FA-queue-timeout: a refused escalation at maxQueueWaitSecs posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord", async () => {
+  const qtTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-fa-qtimeout-`);
+  const piHold = `${qtTmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${qtTmp}/${f}-key`, "k\n");
+  const cfg = `${qtTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${qtTmp}/state`,
+      storeRoot: `${qtTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${qtTmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${qtTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], maxConcurrentTurns: 1, maxQueueWaitSecs: 180 },
+      s3: null,
+      broker: {
+        tokenFile: `${qtTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const clock = new FakeClock(Date.parse("2026-11-06T00:00:00Z"));
+  const qtBatches: Inbound[][] = [];
+  const qtPosts: [string, unknown][] = [];
+  const qtSends: { to: string; text: string }[] = [];
+  const handlerErrors: { kind: string; thread: string; err: unknown }[] = [];
+  const qtRoot = main(
+    cfg,
+    {
+      intake: { next: async () => qtBatches.shift() ?? null },
+      post: { post: async (t, m) => (qtPosts.push([t, m]), `$ev_${qtPosts.length}`) },
+      guard,
+      xmsg: { send: async (to, text) => `m${qtSends.push({ to, text })}` },
+      onHandlerError: (kind, thread, err) => handlerErrors.push({ kind, thread, err }),
+    },
+    async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval stdout before queue timeout", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    const thread = "ge2_fa_qtimeout";
+    const holdThread = "ge2_fa_qhold";
+
+    // Turn 1 on `thread`: runs eval (recording poisoned eval_transcript in context.json), replies with high confidence (no escalation), and settles
+    qtBatches.push([{ thread, envelope: envelope(BOB, "turn 1 records eval") }]);
+    await qtRoot.run();
+    await qtRoot.supervisor.command(thread, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "eval", arg: { repo: "o/r", rev: "main", attr: "x", trusted: "no" } }),
+    });
+    await qtRoot.supervisor.command(thread, {
+      type: "host",
+      title: BRIDGE,
+      placeholder: JSON.stringify({ method: "reply", arg: draft(false) }),
+    });
+    await qtRoot.supervisor.command(thread, { type: "settle" });
+    while (qtRoot.store.pending(thread).length > 0) await new Promise((r) => setTimeout(r, 5));
+    await qtRoot.supervisor.teardown(thread);
+    qtPosts.length = 0;
+    qtSends.length = 0;
+
+    // Now `holdThread` occupies the single concurrency slot, and Turn 2 on `thread` is queued behind it
+    qtBatches.push([
+      { thread: holdThread, envelope: envelope(BOB, "occupy the single turn slot") },
+      { thread, envelope: envelope(BOB, "turn 2 waits in queue for 180s") },
+    ]);
+    await qtRoot.run();
+    assert.deepEqual(qtRoot.lifecycle.activeTurns(), [holdThread]);
+    assert.deepEqual(qtRoot.lifecycle.queuedThreads(), [thread]);
+
+    // Advance 180s: `onQueueTimeout` fires for `thread`, posting DEADLINE_NOTICE once and hitting guard refusal on `eval_transcript`
+    await clock.advance(180_000);
+
+    assert.deepEqual(handlerErrors, [], "queue-timeout handler must not throw into Lifecycle's catch sink when escalation is refused");
+    assert.equal(qtPosts.length, 1, "at queue timeout, DEADLINE_NOTICE must be posted exactly once");
+    assert.deepEqual(qtPosts[0], [thread, { text: DEADLINE_NOTICE }]);
+    assert.equal(qtSends.length, 0, "refused queue-timeout escalation must not send to expert");
+    assert.deepEqual(qtRoot.lifecycle.queuedThreads(), [], "queued thread must be removed from queue");
+    assert.deepEqual(qtRoot.store.pending(thread), [], "queued thread pending messages must be cleared");
+    assert.equal(qtRoot.supervisor.pid(thread), undefined, "queued thread must not spawn a tier-1 process");
+
+    const st = qtRoot.store.read(thread);
+    assert.equal(st?.status, "active");
+    const escRec = qtRoot.store.escalation(thread);
+    assert.ok(escRec, "escalation record must be persisted on disk");
+    assert.match(String(escRec.refused ?? ""), /refused by the guard/);
+    assert.equal(escRec.body, undefined);
+
+    // Freeing the held slot leaves 0 active turns
+    await qtRoot.supervisor.teardown(holdThread);
+    assert.deepEqual(qtRoot.lifecycle.activeTurns(), []);
+  } finally {
+    await qtRoot.stop();
+  }
+});
+
+test("oracle O-GE2-FA-lifecycle-safety-net: when postEnvelope throws inside onDeadline, Lifecycle catches the error via onHandlerError with 0 unhandled rejections and still frees the turn slot", async () => {
+  const snTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-ge2-fa-safety-net-`);
+  const piHold = `${snTmp}/pi-hold`;
+  writeFileSync(
+    piHold,
+    `#!/bin/sh\nexport PI_SETTLE=never\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`,
+  );
+  chmodSync(piHold, 0o755);
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${snTmp}/${f}-key`, "k\n");
+  const cfg = `${snTmp}/config.json`;
+  writeFileSync(
+    cfg,
+    JSON.stringify({
+      stateRoot: `${snTmp}/state`,
+      storeRoot: `${snTmp}/store`,
+      mirror: { mirrorRoot: `${tmp}/mirrors`, worktreeRoot: `${snTmp}/worktrees` },
+      pi: piHold,
+      model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: `${snTmp}/model-key` },
+      tier1: { searxngUrl: "http://127.0.0.1", cluster: [], maxConcurrentTurns: 1 },
+      s3: null,
+      broker: {
+        tokenFile: `${snTmp}/token-key`,
+        githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
+        threadLink: "https://chat.example.org/thread/{thread}",
+        guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
+      },
+    }),
+  );
+
+  const baseClock = new FakeClock(Date.parse("2026-11-06T00:00:00Z"));
+  // Match systemClock.setTimeout (`setTimeout(() => void f(), ms)`) so an uncaught rejection inside a
+  // timer callback surfaces on process.on("unhandledRejection") exactly as it would in production.
+  const clock: Clock = {
+    now: () => baseClock.now(),
+    setTimeout: (f, ms) => baseClock.setTimeout(() => void f(), ms),
+    clearTimeout: (id) => baseClock.clearTimeout(id),
+  };
+  const snBatches: Inbound[][] = [];
+  const handlerErrors: { kind: string; thread: string; err: unknown }[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+
+  const snRoot = main(
+    cfg,
+    {
+      intake: { next: async () => snBatches.shift() ?? null },
+      post: {
+        post: async () => {
+          throw new Error("matrix post transport failure at deadline");
+        },
+      },
+      guard,
+      xmsg: { send: async () => "m1" },
+      onHandlerError: (kind, thread, err) => handlerErrors.push({ kind, thread, err }),
+    },
+    async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
+    clock,
+  );
+
+  try {
+    const thread = "ge2_fa_safety_net";
+    snBatches.push([{ thread, envelope: envelope(BOB, "question whose deadline post throws") }]);
+    await snRoot.run();
+    assert.deepEqual(snRoot.lifecycle.activeTurns(), [thread]);
+
+    await baseClock.advance(CHECKIN_MS);
+    await new Promise((r) => setTimeout(r, 20));
+    await baseClock.advance(QUESTION_TIMEOUT_MS - CHECKIN_MS);
+    for (let i = 0; i < 60 && (snRoot.lifecycle.activeTurns().length > 0 || handlerErrors.length === 0); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.deepEqual(unhandled, [], "onDeadline throw must be caught by TurnController.fireDeadline with 0 unhandled rejections");
+    assert.equal(handlerErrors.length, 1, "onDeadline throw must be routed once to onHandlerError");
+    assert.equal(handlerErrors[0].kind, "deadline");
+    assert.equal(handlerErrors[0].thread, thread);
+    assert.match(String(handlerErrors[0].err), /matrix post transport failure at deadline/);
+    assert.deepEqual(snRoot.lifecycle.activeTurns(), [], "turn slot must still be freed when postEnvelope throws inside onDeadline");
+    assert.equal(snRoot.supervisor.pid(thread), undefined, "pi process must still be torn down when postEnvelope throws inside onDeadline");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await snRoot.stop();
+  }
+});
+
+
 
 
 

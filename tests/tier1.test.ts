@@ -994,4 +994,12 @@ test("oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API
   assert.equal(redirectHits.length, 0, "redirect target must receive 0 requests under redirect: manual");
 });
 
+test("oracle O-GE2-FA-reply: reply tool description warns that posted: true means already posted and not to call reply again", () => {
+  const replyTool = load1().tools.get("reply")!;
+  assert.ok(replyTool, "reply tool must be registered");
+  assert.match(replyTool.description, /posted:\s*true/i, "reply description must mention posted: true");
+  assert.match(replyTool.description, /do not call reply again/i, "reply description must instruct not to call reply again");
+  assert.match(replyTool.description, /escalated is false/i, "reply description must mention escalated is false");
+});
+
 

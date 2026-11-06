@@ -59,6 +59,14 @@ export interface TurnStatus {
   repliedAfterCheckin: boolean;
 }
 
+export type HandlerErrorKind = "checkin" | "deadline" | "queue_timeout";
+export type HandlerErrorSink = (kind: HandlerErrorKind, thread: string, err: unknown) => void;
+
+const defaultHandlerErrorSink: HandlerErrorSink = (kind, thread, err) => {
+  const label = kind === "checkin" ? "check-in" : kind === "queue_timeout" ? "queue timeout" : "deadline";
+  console.error(`thread ${thread}: ${label} failed: ${err}`);
+};
+
 export interface TurnControllerOptions {
   clock?: Clock;
   questionTimeoutMs?: number;
@@ -66,6 +74,7 @@ export interface TurnControllerOptions {
   checkinPrompt?: string;
   onCheckin: (thread: string, message: string) => Promise<unknown> | unknown;
   onDeadline: (thread: string) => Promise<unknown> | unknown;
+  onHandlerError?: HandlerErrorSink;
 }
 
 interface TurnState {
@@ -160,7 +169,7 @@ export class TurnController {
     try {
       await this.o.onCheckin(thread, prompt);
     } catch (e) {
-      console.error(`thread ${thread}: check-in failed: ${e}`);
+      (this.o.onHandlerError ?? defaultHandlerErrorSink)("checkin", thread, e);
     }
   }
 
@@ -172,7 +181,7 @@ export class TurnController {
     try {
       await this.o.onDeadline(thread);
     } catch (e) {
-      console.error(`thread ${thread}: deadline failed: ${e}`);
+      (this.o.onHandlerError ?? defaultHandlerErrorSink)("deadline", thread, e);
     }
   }
 }
@@ -193,6 +202,7 @@ export interface LifecycleOptions {
   maxQueueWaitSecs?: number;
   onDeadline?: (thread: string) => Promise<unknown> | unknown;
   onQueueTimeout?: (thread: string) => Promise<unknown> | unknown;
+  onHandlerError?: HandlerErrorSink;
   replayResume?: (thread: string) => Promise<unknown>;
   resync?: (thread: string) => Promise<string | void>;
 }
@@ -233,6 +243,7 @@ export class Lifecycle {
       questionTimeoutMs: o.questionTimeoutMs,
       checkinMs: o.checkinMs,
       checkinPrompt: o.checkinPrompt,
+      onHandlerError: o.onHandlerError,
       onCheckin: async (thread, message) => {
         await this.o.supervisor.command(thread, { type: "prompt", message, streamingBehavior: "steer" });
       },
@@ -421,7 +432,7 @@ export class Lifecycle {
     try {
       await this.o.onQueueTimeout?.(thread);
     } catch (e) {
-      console.error(`thread ${thread}: queue timeout failed: ${e}`);
+      (this.o.onHandlerError ?? defaultHandlerErrorSink)("queue_timeout", thread, e);
     }
     const st = this.o.store.read(thread);
     if (!st || st.status === "closed") return;
@@ -443,7 +454,7 @@ export class Lifecycle {
         try {
           await this.o.onDeadline?.(thread);
         } catch (e) {
-          console.error(`thread ${thread}: deadline failed: ${e}`);
+          (this.o.onHandlerError ?? defaultHandlerErrorSink)("deadline", thread, e);
         }
       }
       const st = this.o.store.read(thread);

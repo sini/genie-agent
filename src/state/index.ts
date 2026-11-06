@@ -37,11 +37,13 @@ export interface ThreadState {
 }
 
 // The thread's latest escalation package and the sequence number of its draft (C5); body is the
-// package as guarded and stamped, kept so a resend repeats it byte for byte.
+// package as guarded and stamped, kept so a resend repeats it byte for byte. When the guard or
+// schema validation refuses the package, refused records the reason for the archive (GE2 P-3).
 export interface EscalationRecord {
   seq: number;
   pkg: unknown;
   body?: string;
+  refused?: string;
 }
 
 // The thread tier's state beside sender_tier (C7, src/tier): the senders whose text the thread has

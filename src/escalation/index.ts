@@ -89,11 +89,18 @@ export class Escalation {
     if (!rec || !st) throw new Error(`thread ${thread}: no draft to escalate`);
     let body = rec.body;
     if (body === undefined) {
-      const stamped = { ...(await guard(rec.pkg as Package)), thread_id: thread };
-      const bad = errors(schema, stamped);
-      if (bad.length) throw new Error(`thread ${thread}: escalation refused: ${bad.join("; ")}`);
+      let stamped: Record<string, unknown>;
+      try {
+        stamped = { ...(await guard(rec.pkg as Package)), thread_id: thread };
+        const bad = errors(schema, stamped);
+        if (bad.length) throw new Error(`thread ${thread}: escalation refused: ${bad.join("; ")}`);
+      } catch (e) {
+        const refused = e instanceof Error ? e.message : String(e);
+        store.setEscalation(thread, { seq: rec.seq, pkg: rec.pkg, refused });
+        throw e;
+      }
       body = JSON.stringify(stamped);
-      store.setEscalation(thread, { ...rec, body });
+      store.setEscalation(thread, { seq: rec.seq, pkg: rec.pkg, body });
     }
     const id = await xmsg.send(route(st), body, `${thread}#${rec.seq}`);
     store.write({ ...st, status: "escalated" });

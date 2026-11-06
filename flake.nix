@@ -559,6 +559,7 @@
                   && grep -q '^ok [0-9]* - oracle (GI-8 e): tier1 prompts contain the verbatim room_context cue and room_context tool registration has no room parameter, boolean, or \$ref$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (GI-11): all three tier1 prompt variants carry the verbatim self-description cue$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API, sends read token from host without mounting it in pi jail, refuses path-traversal id and 302 redirects (F8), and mutants M-gh-read-bypass-id-validation and M-gh-read-follow-redirect go RED$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle O-GE2-FA-reply: reply tool description warns that posted: true means already posted and not to call reply again$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
@@ -1356,6 +1357,61 @@
                 grep -q '^ok [0-9]* - oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.json before any approval notice, screens the notice through redact() and outbound(), caps pending actions at 1 per thread, and mutant goes RED$' $TMPDIR/tap || exit 1
                 grep -q "^ok [0-9]* - oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED$" $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies$' $TMPDIR/tap || exit 1
+                grep -q "^ok [0-9]* - oracle O-GE2-FA-reply: a refused escalation after reply post resolves non-error with { posted: true, escalated: false, escalation: 'refused: ...' } and persists refused on EscalationRecord$" $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FA-settled: a refused escalation after WITHHELD on agent_settled still runs lifecycle.event, clears pending, and releases the turn slot$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-today (Arm b): a genuine escalation refusal on a low-confidence reply terminates the turn loop in 1 reply with 1 post and 0 sends$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FA-deadline: a refused escalation at the 10m deadline posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FA-queue-timeout: a refused escalation at maxQueueWaitSecs posts DEADLINE_NOTICE once, throws no error, frees the turn slot, and persists refused on EscalationRecord$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GE2-FA-lifecycle-safety-net: when postEnvelope throws inside onDeadline, Lifecycle catches the error via onHandlerError with 0 unhandled rejections and still frees the turn slot$' $TMPDIR/tap || exit 1
+                [ "$(grep -c 'escalation\.reply(' src/root/index.ts)" -eq 1 ] && awk '/const escalateAfterPost = async/,/^  };/' src/root/index.ts | grep -q 'escalation\.reply(' || {
+                  echo "guard failed: every escalation.reply call in src/root/index.ts must sit inside escalateAfterPost" >&2
+                  exit 1
+                }
+                cp -r . $TMPDIR/mut-ge2-fa-rethrow
+                chmod -R u+w $TMPDIR/mut-ge2-fa-rethrow
+                substituteInPlace $TMPDIR/mut-ge2-fa-rethrow/src/root/index.ts \
+                  --replace-fail 'return { posted: true, ...(await escalateAfterPost(t, out.value)) };' 'return { posted: true, escalated: await escalation.reply(t, out.value) };'
+                if (cd $TMPDIR/mut-ge2-fa-rethrow && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-reply' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-rethrow survived O-GE2-FA-reply in root" >&2
+                  exit 1
+                fi
+                if (cd $TMPDIR/mut-ge2-fa-rethrow && node --test --test-force-exit --test-name-pattern='oracle O-GE2-today \(Arm b\)' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-rethrow survived O-GE2-today (Arm b) in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fa-settled
+                chmod -R u+w $TMPDIR/mut-ge2-fa-settled
+                substituteInPlace $TMPDIR/mut-ge2-fa-settled/src/root/index.ts \
+                  --replace-fail 'await escalateAfterPost(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });' 'await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });' \
+                  --replace-fail '} finally {' '} catch (e) { throw e; } {'
+                if (cd $TMPDIR/mut-ge2-fa-settled && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-settled' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-settled-unhandled survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fa-deadline
+                chmod -R u+w $TMPDIR/mut-ge2-fa-deadline
+                sed -i '/onDeadline: async/,/onQueueTimeout: async/s/await escalateAfterPost(t, { answer: "", confidence: 0, gaps: \[\], escalate_forced: true });/await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });/' $TMPDIR/mut-ge2-fa-deadline/src/root/index.ts
+                grep -q 'await escalation\.reply(t, { answer: "", confidence: 0, gaps: \[\], escalate_forced: true });' $TMPDIR/mut-ge2-fa-deadline/src/root/index.ts || exit 1
+                if (cd $TMPDIR/mut-ge2-fa-deadline && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-deadline' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-deadline survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fa-qtimeout
+                chmod -R u+w $TMPDIR/mut-ge2-fa-qtimeout
+                substituteInPlace $TMPDIR/mut-ge2-fa-qtimeout/src/root/index.ts \
+                  --replace-fail 'await escalateAfterPost(t, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });' 'await escalation.reply(t, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });'
+                if (cd $TMPDIR/mut-ge2-fa-qtimeout && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-queue-timeout' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-queue-timeout survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-ge2-fa-no-catch
+                chmod -R u+w $TMPDIR/mut-ge2-fa-no-catch
+                substituteInPlace $TMPDIR/mut-ge2-fa-no-catch/src/lifecycle/index.ts \
+                  --replace-fail '(this.o.onHandlerError ?? defaultHandlerErrorSink)("deadline", thread, e);' 'throw e;'
+                if (cd $TMPDIR/mut-ge2-fa-no-catch && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FA-lifecycle-safety-net' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GE2-FA-deadline-no-catch survived in root" >&2
+                  exit 1
+                fi
                 cp -r . $TMPDIR/mut-silent
                 chmod -R u+w $TMPDIR/mut-silent
                 substituteInPlace $TMPDIR/mut-silent/src/root/index.ts \

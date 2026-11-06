@@ -32,7 +32,8 @@ import { perThread, type Runner } from "../eval/lock.ts";
 import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
-import { type Clock, Lifecycle } from "../lifecycle/index.ts";
+import { type Clock, type HandlerErrorKind, type HandlerErrorSink, Lifecycle } from "../lifecycle/index.ts";
+export type { HandlerErrorKind, HandlerErrorSink };
 import {
   gitRead,
   type GitRequest,
@@ -104,6 +105,7 @@ export interface Io {
   xmsg: XmsgSend;
   request?: (thread: string, payload: unknown) => Promise<string>;
   git?: GitRunner;
+  onHandlerError?: HandlerErrorSink;
 }
 
 // Every secret is a file path, read at start or at use, never argv or the environment.
@@ -447,6 +449,21 @@ export function main(
     return io.post.post(thread, { edit: targetId, text });
   };
   const withheldInTurn = new Set<string>();
+  const escalateAfterPost = async (
+    t: string,
+    draft: Draft,
+  ): Promise<{ escalated: string | null } | { escalated: false; escalation: string }> => {
+    try {
+      return { escalated: await escalation.reply(t, draft) };
+    } catch (e) {
+      const rawMsg = e instanceof Error ? e.message : String(e);
+      const reason = rawMsg
+        .replace(/^escalation refused by the guard:\s*/i, "")
+        .replace(/^thread\s+\S+:\s*escalation refused:\s*/i, "");
+      console.error(`thread ${t}: escalation after reply failed: ${rawMsg}`);
+      return { escalated: false, escalation: `refused: ${reason}` };
+    }
+  };
 
   const supervisor: Supervisor = new Supervisor(
     (t) => {
@@ -454,14 +471,17 @@ export function main(
       return { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
     },
     async (t, r) => {
-      if (r.type === "agent_settled" && withheldInTurn.delete(t)) {
-        const st = store.read(t);
-        if (st && st.status !== "closed") {
-          await postEnvelope(t, WITHHELD);
-          await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+      try {
+        if (r.type === "agent_settled" && withheldInTurn.delete(t)) {
+          const st = store.read(t);
+          if (st && st.status !== "closed") {
+            await postEnvelope(t, WITHHELD);
+            await escalateAfterPost(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+          }
         }
+      } finally {
+        await lifecycle.event(t, r);
       }
-      await lifecycle.event(t, r);
     },
     (t) => ({
       // The tier is the thread's, from P2's state, never the request's (E4's effectiveTier clamps it).
@@ -573,7 +593,7 @@ export function main(
         }
         withheldInTurn.delete(t);
         await postEnvelope(t, out.value);
-        return { posted: true, escalated: await escalation.reply(t, out.value) };
+        return { posted: true, ...(await escalateAfterPost(t, out.value)) };
       },
       propose: async (p) => {
         if (!c.broker.tokenFile) {
@@ -713,6 +733,7 @@ export function main(
     checkinMs: c.tier1.checkinMs,
     maxConcurrentTurns: c.tier1.maxConcurrentTurns,
     maxQueueWaitSecs: c.tier1.maxQueueWaitSecs,
+    onHandlerError: io.onHandlerError,
     onDeadline: async (t) => {
       const out = await outbound(context(t).cleaned_question, (scrub) => scrub(DEADLINE_NOTICE), guardOut);
       if (!("value" in out)) {
@@ -721,7 +742,7 @@ export function main(
       } else {
         await postEnvelope(t, out.value);
       }
-      await escalation.reply(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
+      await escalateAfterPost(t, { answer: "", confidence: 0, gaps: [], escalate_forced: true });
     },
     onQueueTimeout: async (t) => {
       const out = await outbound(context(t).cleaned_question, (scrub) => scrub(DEADLINE_NOTICE), guardOut);
@@ -731,7 +752,7 @@ export function main(
       } else {
         await postEnvelope(t, out.value);
       }
-      await escalation.reply(t, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });
+      await escalateAfterPost(t, { answer: "", confidence: 0, gaps: ["tier-1 busy"], escalate_forced: true });
     },
     deeper: (t) => escalation.deeper(t),
     replayResume: c.s3
