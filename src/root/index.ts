@@ -115,7 +115,7 @@ export interface Config {
   pi: string;
   // Tier 1's OpenAI-compatible model.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
-  tier1: Omit<Tier1Config, "root"> & { sandbox?: Pick<PiSandbox, "bwrap"> };
+  tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string } };
   // Inbound guard-in screening switch (G11; default true).
   guard?: { enable?: boolean };
   // Optional guard-in screening switch for `git` read outputs (GC1 OQ-2; default false).
