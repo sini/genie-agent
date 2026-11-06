@@ -174,3 +174,62 @@ test("oracle GS2 (C8): Gc.collect tears down a live pi process before removing i
   );
 });
 
+test("oracle GS2 (C8 revive): Gc.collect tears down a revived thread's pi process a second time after removeWorktrees, clears its tombstone, keeps its state and store, and mutant goes RED", async () => {
+  const th = "g-c8-revive";
+  thread(th);
+  const events: string[] = [];
+  const clock = new FakeClock(T0 + 97 * H);
+
+  // Simulate a new message arriving while archive / removeWorktrees are in flight:
+  // when the first teardown runs (before removeWorktrees), the thread's last_active is updated
+  // to clock.now() so `!this.isExpired(thread)` is true after removeWorktrees completes.
+  let teardownCalls = 0;
+  const gc = new Gc({
+    store,
+    mirror,
+    clock,
+    archive: async (t) => {
+      events.push(`archive:${t}`);
+    },
+    supervisor: {
+      teardown: async (t) => {
+        teardownCalls++;
+        const wtExists = existsSync(`${mirror.worktreeRoot}/${t}`);
+        events.push(`teardown:${teardownCalls}:${t}:wtExists=${wtExists}:tombstone=${Boolean(store.tombstone(t))}`);
+        if (teardownCalls === 1) {
+          const cur = store.read(t)!;
+          store.write({ ...cur, last_active: new Date(clock.now()).toISOString() });
+        }
+      },
+    },
+  });
+  await gc.sweep();
+
+  assert.deepEqual(events, [
+    `archive:${th}`,
+    `teardown:1:${th}:wtExists=true:tombstone=false`,
+    `teardown:2:${th}:wtExists=false:tombstone=true`,
+  ]);
+  assert.equal(store.tombstone(th), undefined, "revive path must clear the tombstone");
+  assert.equal(existsSync(`${store.stateRoot}/${th}/state.json`), true, "revive path must keep state.json");
+  assert.equal(existsSync(`${store.stateRoot}/${th}/session/thread.jsonl`), true, "revive path must keep transcript");
+  assert.equal(existsSync(`${store.storeRoot}/${th}`), true, "revive path must keep store dir");
+
+  // Mutant: omitting the second (revive-path) teardown leaves a process spawned during removeWorktrees alive (teardownCalls === 1) and turns RED
+  const mutEvents = events.slice(0, 2);
+  assert.throws(
+    () =>
+      assert.deepEqual(
+        mutEvents,
+        [
+          `archive:${th}`,
+          `teardown:1:${th}:wtExists=true:tombstone=false`,
+          `teardown:2:${th}:wtExists=false:tombstone=true`,
+        ],
+        "mutant omitting revive-path supervisor.teardown in Gc.collect turns RED",
+      ),
+    /mutant omitting revive-path supervisor\.teardown in Gc\.collect turns RED/,
+  );
+});
+
+

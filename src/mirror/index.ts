@@ -187,7 +187,7 @@ export const git: Runner = (args, signal) => {
     child.stderr.on("data", (d) => (stderr += d));
     const kill = () => {
       try {
-        process.kill(-child.pid!, "SIGKILL");
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
       } catch {} // the group has already exited
     };
     if (signal?.aborted) kill();

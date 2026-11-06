@@ -24,6 +24,7 @@ export interface PiSandbox {
   rwAgentDir?: boolean;
   exposeStateRoot?: boolean;
   omitPiOffline?: boolean;
+  omitUnsharePid?: boolean;
 }
 
 const CA_CANDIDATES = [
@@ -227,7 +228,7 @@ export function tier1Launch(o: {
       "--die-with-parent",
       "--new-session",
       "--unshare-user",
-      "--unshare-pid",
+      ...(!sb.omitUnsharePid ? ["--unshare-pid"] : []),
       "--ro-bind", "/nix/store", "/nix/store",
       ...(resolvConf ? ["--ro-bind-try", resolvConf, "/etc/resolv.conf"] : []),
       ...(etcHosts ? ["--ro-bind-try", etcHosts, "/etc/hosts"] : []),

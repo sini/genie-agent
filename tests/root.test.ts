@@ -5,7 +5,7 @@
 // bridge dialog, as tier 1's extension sends them. Run with `node --test tests/root.test.ts`; needs
 // git on PATH.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -2558,7 +2558,7 @@ test("oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.j
   await root.supervisor.teardown(th);
 });
 
-test("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all four mutants go RED", async () => {
+test("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED", async () => {
   const gs2Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-gs2-root-test-`);
   const memDir = `${gs2Tmp}/memory`;
   mkdirSync(memDir, { recursive: true });
@@ -2584,7 +2584,7 @@ test("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, wo
 
   for (const f of ["model", "s3", "token"]) writeFileSync(`${gs2Tmp}/${f}-key`, "secret-credential-value\n");
 
-  const probeSource = `import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+  const probeSource = `import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
 const arg = (flag) => process.argv[process.argv.indexOf(flag) + 1];
 const sessionDir = arg("--session-dir");
 const sessionId = arg("--session-id");
@@ -2599,6 +2599,7 @@ const wtDir = process.cwd();
 const tryWrite = (p) => {
   try {
     writeFileSync(p, "probe");
+    try { unlinkSync(p); } catch {}
     return "WRITABLE";
   } catch (e) {
     return e.code || "ERR";
@@ -2685,6 +2686,15 @@ process.stdin.on("data", async (chunk) => {
         webFetchOk = res.ok;
       }
       const selfEnviron = readFileSync("/proc/self/environ", "utf8").split("\\0");
+      const selfStatus = readFileSync("/proc/self/status", "utf8");
+      const nspids = (selfStatus.match(/^NSpid:\\s+(.*)$/m)?.[1] ?? "").trim().split(/\\s+/).map(Number).filter((x) => x > 0);
+      let killParentErr = "NONE";
+      try {
+        process.kill(Number(parentPid), 0);
+        killParentErr = "OK";
+      } catch (e) {
+        killParentErr = e.code || "ERR";
+      }
       const report = {
         nixStoreRead: existsSync(process.execPath),
         nixStoreWrite: tryWrite("/nix/store/.gs2-probe"),
@@ -2702,6 +2712,9 @@ process.stdin.on("data", async (chunk) => {
         runUser: tryReaddir("/run/user"),
         parentProcEnviron: tryRead("/proc/" + parentPid + "/environ"),
         parentProcFd0: tryReadlink("/proc/" + parentPid + "/fd/0"),
+        nspidDepth: nspids.length,
+        innerPid: nspids.at(-1) ?? 0,
+        killParentErr,
         piOffline: selfEnviron.includes("PI_OFFLINE=1"),
         etcEntries: tryReaddir("/etc"),
         etcPasswd: tryRead("/etc/passwd"),
@@ -2807,6 +2820,9 @@ process.stdin.on("end", () => process.exit(0));
     assert.equal(rep.runUser.ok, false, "/run/user must be hidden");
     assert.equal(rep.parentProcEnviron.ok, false, "parent /proc/<pid>/environ must be inaccessible");
     assert.equal(rep.parentProcFd0.ok, false, "dereferencing parent /proc/<pid>/fd/0 must be denied");
+    assert.ok(rep.nspidDepth >= 2, "pi must run in a child PID namespace (NSpid depth >= 2)");
+    assert.ok(rep.innerPid >= 2, "bwrap (not pi) must be PID 1 inside the jail (pi inner PID >= 2)");
+    assert.equal(rep.killParentErr, "ESRCH", "kill(parentPid, 0) from inside the PID namespace must fail with ESRCH");
     assert.equal(rep.piOffline, true, "PI_OFFLINE=1 must be in /proc/self/environ");
     assert.equal(rep.etcPasswd.ok, false, "/etc/passwd must not be bound into /etc");
     assert.ok(
@@ -2849,11 +2865,120 @@ process.stdin.on("end", () => process.exit(0));
     const noOfflineReport = await runProbe("m-no-offline", { omitPiOffline: true });
     assert.throws(() => assertIsolated(noOfflineReport), /AssertionError/, "M-no-pi-offline must turn oracle RED");
     assert.equal(noOfflineReport.piOffline, false, "M-no-pi-offline: PI_OFFLINE=1 is absent");
+
+    // 7. Mutant M-no-unshare-pid (omitUnsharePid: true) turns RED
+    const noUnsharePidReport = await runProbe("m-no-unshare-pid", { omitUnsharePid: true });
+    assert.throws(() => assertIsolated(noUnsharePidReport), /AssertionError/, "M-no-unshare-pid must turn oracle RED");
+    assert.equal(noUnsharePidReport.killParentErr, "OK", "M-no-unshare-pid: parent PID becomes signalable (rc 0)");
   } finally {
     model.close();
     searx.closeAllConnections?.();
     searx.close();
   }
+});
+
+test("oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies", () => {
+  const n3Script = `${tmp}/gs2-n3-reap.mjs`;
+  writeFileSync(
+    n3Script,
+    `import { spawn, spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import { Supervisor } from ${JSON.stringify(new URL("../src/supervisor/index.ts", import.meta.url).href)};
+import { tier1Launch } from ${JSON.stringify(new URL("../src/tier1/launch.ts", import.meta.url).href)};
+import { nixArgv } from ${JSON.stringify(new URL("../src/eval/run.ts", import.meta.url).href)};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const countZombies = () => {
+  const z = [];
+  for (const d of readdirSync("/proc")) {
+    if (!/^\\d+$/.test(d)) continue;
+    try {
+      const st = readFileSync("/proc/" + d + "/status", "utf8");
+      const state = st.match(/^State:\\s+(\\S+)/m)?.[1];
+      const ppid = Number(st.match(/^PPid:\\s+(\\d+)/m)?.[1] ?? "0");
+      const comm = st.match(/^Name:\\s+(\\S+)/m)?.[1] ?? d;
+      if (state === "Z" && ppid === process.pid) z.push(d + ":" + comm);
+    } catch {}
+  }
+  return z;
+};
+
+// 1. Verify neither tier1Launch nor runEval passes --as-pid-1
+const launch = tier1Launch({
+  pi: process.execPath,
+  config: () => ({ searxngUrl: "http://127.0.0.1:9", cluster: [] }),
+});
+const lSpec = launch("th_n3");
+const hasAsPid1 = lSpec.args.includes("--as-pid-1");
+
+// 2. Spawn a stubborn bwrap child via Supervisor that ignores stdin EOF, and verify bwrap is inner PID 1
+const sup = new Supervisor(() => ({
+  command: "bwrap",
+  args: [
+    "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
+    "--ro-bind", "/nix/store", "/nix/store",
+    "--ro-bind-try", "/bin", "/bin", "--ro-bind-try", "/usr", "/usr",
+    "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
+    "--", process.execPath, "-e",
+    "import { readFileSync } from 'node:fs'; " +
+    "const st = readFileSync('/proc/self/status', 'utf8'); " +
+    "const nsp = (st.match(/^NSpid:\\\\s+(.*)$/m)?.[1] ?? '').trim().split(/\\\\s+/).map(Number); " +
+    "const p1 = readFileSync('/proc/' + process.ppid + '/status', 'utf8'); " +
+    "const p1nsp = (p1.match(/^NSpid:\\\\s+(.*)$/m)?.[1] ?? '').trim().split(/\\\\s+/).map(Number); " +
+    "process.stdout.write(JSON.stringify({ type: 'response', id: 'c0', success: true, data: { childInnerPid: nsp.at(-1), bwrapInnerPid: p1nsp.at(-1) } }) + '\\\\n'); " +
+    "setInterval(() => {}, 1000);",
+  ],
+}));
+const cmdRes = await sup.command("t_stubborn", { type: "get_state" });
+await sup.teardown("t_stubborn", 10);
+
+// 3. Also test mirror git-style detached process group kill with children
+const grp = spawn("sh", ["-c", "${process.execPath} -e 'setInterval(()=>{},1000)' & ${process.execPath} -e 'setInterval(()=>{},1000)' & sleep 0.1; echo READY; wait"], {
+  detached: true,
+  stdio: ["ignore", "pipe", "ignore"],
+});
+await new Promise((resolve) => grp.stdout.on("data", (d) => String(d).includes("READY") && resolve()));
+const gpid = grp.pid;
+let killedGrpChild = false;
+try {
+  const children = readFileSync("/proc/" + gpid + "/task/" + gpid + "/children", "utf8").trim().split(/\\s+/);
+  for (const c of children) {
+    if (Number(c) > 0) {
+      try {
+        process.kill(Number(c), "SIGKILL");
+        killedGrpChild = true;
+      } catch {}
+    }
+  }
+} catch {}
+if (killedGrpChild) {
+  setTimeout(() => { try { process.kill(-gpid, "SIGKILL"); } catch {} }, 50).unref?.();
+} else {
+  try { process.kill(-gpid, "SIGKILL"); } catch {}
+}
+await new Promise((resolve) => grp.on("close", resolve));
+await sleep(100);
+
+const zombies = countZombies();
+console.log(JSON.stringify({
+  pid: process.pid,
+  hasAsPid1,
+  innerPids: cmdRes.data,
+  zombies,
+}));
+`,
+  );
+
+  const r = spawnSync("unshare", ["-U", "--map-current-user", "-p", "-f", "--mount-proc", process.execPath, n3Script], {
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, `unshare failed: ${r.stderr}`);
+  const out = JSON.parse(r.stdout.trim().split("\n").at(-1)!);
+  assert.equal(out.pid, 1, "node must run as PID 1 inside the unshare namespace");
+  assert.equal(out.hasAsPid1, false, "tier1Launch must not pass --as-pid-1");
+  assert.equal(out.innerPids.bwrapInnerPid, 1, "bwrap-init must be PID 1 inside the inner PID namespace");
+  assert.ok(out.innerPids.childInnerPid >= 2, "payload process inside bwrap must have inner PID >= 2");
+  assert.deepEqual(out.zombies, [], `expected 0 zombies on PID 1 after SIGKILL teardown, got ${JSON.stringify(out.zombies)}`);
 });
 
 

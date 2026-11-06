@@ -218,7 +218,7 @@ jobs:
           if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nix-daemon 2>/dev/null; then
             sudo systemctl restart nix-daemon
           fi
-      # GS2: root, tier1, tier1-bridge, and xmsg-integration launch pi inside bwrap (--unshare-all).
+      # GS2: root, tier1, tier1-bridge, and xmsg-integration launch pi inside bwrap (--unshare-user --unshare-pid --unshare-uts --unshare-cgroup-try).
       - name: Admit bubblewrap to user namespaces
         run: |
           bwrap="$(nix build --no-link --print-out-paths --inputs-from ./ci nixpkgs#bubblewrap)/bin/bwrap"

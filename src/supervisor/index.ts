@@ -4,7 +4,42 @@
 // (C4), escalation (C5), the thread's tier (C7) and the thread state on disk (P2) are not here:
 // each enters through `launch` or by calling `teardown`.
 import { type ChildProcess, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { Host } from "../tier1/index.ts";
+
+// When genie-root runs as PID 1 (PrivatePIDs=true), killing a direct child (such as bwrap-outer)
+// simultaneously with its own child (bwrap-init) orphans the inner child to PID 1 before the
+// direct child wakes up in waitpid(), and Node does not reap reparented grandchildren.
+// Killing the direct child's children first and giving the direct child a brief window to reap
+// them and exit cleanly avoids leaving zombies on PID 1.
+export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKILL" = "SIGKILL"): void {
+  const pid = child.pid;
+  let killedChild = false;
+  if (pid !== undefined) {
+    try {
+      const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/);
+      for (const c of children) {
+        const cpid = Number(c);
+        if (cpid > 0) {
+          try {
+            process.kill(cpid, signal);
+            killedChild = true;
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+  if (killedChild) {
+    const t = setTimeout(() => {
+      try {
+        child.kill(signal);
+      } catch {}
+    }, 50);
+    (t as unknown as { unref?: () => void }).unref?.();
+  } else {
+    child.kill(signal);
+  }
+}
 
 // How a thread's process starts, e.g. `pi --mode rpc -e <tier-1 extension> --session-dir <store>`.
 // C4's resume and P2's per-thread state change the arguments, not the supervisor. env is added
@@ -66,7 +101,7 @@ export class Supervisor {
     if (!p) return;
     this.procs.delete(thread);
     p.child.stdin.end();
-    const timer = setTimeout(() => p.child.kill("SIGKILL"), graceMs);
+    const timer = setTimeout(() => killWithChildren(p.child, "SIGKILL"), graceMs);
     await p.exited;
     clearTimeout(timer);
   }

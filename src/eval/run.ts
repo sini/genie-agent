@@ -274,7 +274,22 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   const flakeRef = options.localFlake ? "path:/src" : `github:${request.repo}/${request.rev}`;
   const nix = which("nix");
   const caBundle = resolveCaBundle(options.caBundle);
+  const resolveEtc = (p: string): string => {
+    try {
+      return existsSync(p) ? realpathSync(p) : p;
+    } catch {
+      return p;
+    }
+  };
+  const resolvConf = resolveEtc("/etc/resolv.conf");
+  const etcHosts = resolveEtc("/etc/hosts");
+  const nsswitchConf = resolveEtc("/etc/nsswitch.conf");
   const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-`);
+  mkdirSync(`${tmp}/conf`, { recursive: true });
+  // The bwrap jail already isolates user/pid/ipc/uts/mount namespaces; disable Nix's inner
+  // CLONE_NEWUSER build sandbox so local IFD builds do not write /proc/<inner_pid>/uid_map
+  // against the outer-namespace /proc bind mount.
+  writeFileSync(`${tmp}/conf/nix.conf`, "sandbox = false\n");
   if (request.secrets === "stub") {
     const secretsDir = `${tmp}/secrets`;
     mkdirSync(secretsDir);
@@ -284,13 +299,16 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   // closure if this runner leaves the gVisor Job.
   const bwrap = [
     "--unshare-user",
+    "--unshare-pid",
     "--unshare-ipc",
     "--unshare-uts",
     "--unshare-cgroup-try",
     "--share-net",
     "--die-with-parent",
     "--ro-bind", "/nix/store", "/nix/store",
-    "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
+    "--ro-bind-try", resolvConf, "/etc/resolv.conf",
+    "--ro-bind-try", etcHosts, "/etc/hosts",
+    "--ro-bind-try", nsswitchConf, "/etc/nsswitch.conf",
     // E1.1: bind the resolved CA bundle file, not the /etc/ssl/certs symlink into /etc/static.
     "--ro-bind-try", caBundle, caBundle,
     "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
@@ -325,24 +343,56 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
           NIX_SSL_CERT_FILE: caBundle,
         },
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: options.timeoutMs ?? 120_000,
-        killSignal: "SIGKILL",
       });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        const pid = child.pid;
+        let killedChild = false;
+        if (pid !== undefined) {
+          try {
+            const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/);
+            for (const c of children) {
+              const cpid = Number(c);
+              if (cpid > 0) {
+                try {
+                  process.kill(cpid, "SIGKILL");
+                  killedChild = true;
+                } catch {}
+              }
+            }
+          } catch {}
+        }
+        if (killedChild) {
+          const t = setTimeout(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {}
+          }, 50);
+          (t as unknown as { unref?: () => void }).unref?.();
+        } else {
+          child.kill("SIGKILL");
+        }
+      }, options.timeoutMs ?? 120_000);
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d) => (stdout = tail(stdout + d)));
       child.stderr.on("data", (d) => (stderr = tail(stderr + d)));
-      child.on("error", reject);
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
       // A killed child has no exit code; 124 is timeout(1)'s.
       child.on("close", (code, signal) => {
-        const exit = code ?? 124;
+        clearTimeout(timer);
+        const exit = timedOut ? 124 : (code ?? 124);
         // bwrap reports a command killed by SIGKILL as 128 + 9.
-        const sigkilled = signal === "SIGKILL" || code === 137;
+        const sigkilled = timedOut || signal === "SIGKILL" || code === 137;
         const evalOoms = cg ? oomKills(cg) : -1;
         const oomAfter = oomKills(whole);
         const limit_hit = limitHit({
-          // Only this runner's own timeout sets `killed`; a kill from anywhere else leaves it false.
-          deadline: child.killed,
+          // Only this runner's own timeout sets `timedOut`; a kill from anywhere else leaves it false.
+          deadline: timedOut,
           sigkilled,
           oomKilled: oomCounted(evalOoms, oomBefore, oomAfter),
           fetchRefused: exit !== 0 && fetchRefused(stderr),

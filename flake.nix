@@ -907,6 +907,7 @@
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
                 grep -q '^ok [0-9]* - oracle GS2 (C8): Gc.collect tears down a live pi process before removing its worktrees, and mutant goes RED$' $TMPDIR/tap || exit 1
+                grep -q "^ok [0-9]* - oracle GS2 (C8 revive): Gc.collect tears down a revived thread's pi process a second time after removeWorktrees, clears its tombstone, keeps its state and store, and mutant goes RED$" $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The broker: a proposal failing guard-out is never acted on, a passing one is acted on once
@@ -1059,6 +1060,7 @@
                   pkgs.nodejs
                   pkgs.git
                   pkgs.bubblewrap
+                  pkgs.util-linux
                 ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
@@ -1110,7 +1112,8 @@
                 grep -q "^ok [0-9]* - oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts the 10m timer at slot acquisition, and fast-escalates queued turns past tier1.maxQueueWaitSecs with 'tier-1 busy'$" $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GX2 (F2): propose on a public thread creates a PendingAction requiring a trusted !approve, refuses disallowed repos before notice or act, and mutant goes RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.json before any approval notice, screens the notice through redact() and outbound(), caps pending actions at 1 per thread, and mutant goes RED$' $TMPDIR/tap || exit 1
-                grep -q "^ok [0-9]* - oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all four mutants go RED$" $TMPDIR/tap || exit 1
+                grep -q "^ok [0-9]* - oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED$" $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
