@@ -1171,6 +1171,9 @@
                   echo "mutant M-pr-private survived in pr" >&2
                   exit 1
                 fi
+                # M-pr-q1-missing-perms edits two sites: the Q1 typeof/null guard, plus optional
+                # chaining at the permissions.push check so undefined/null permissions do not throw
+                # a TypeError and instead the oracle is what drives the mutant red.
                 cp -r . $TMPDIR/mut-pr-q1-perms
                 chmod -R u+w $TMPDIR/mut-pr-q1-perms
                 substituteInPlace $TMPDIR/mut-pr-q1-perms/src/broker/pr.ts \
@@ -1212,10 +1215,17 @@
                   echo "mutant M-pr-head-ref survived in pr" >&2
                   exit 1
                 fi
+                cp -r . $TMPDIR/mut-pr-forbidden-bot-login
+                chmod -R u+w $TMPDIR/mut-pr-forbidden-bot-login
+                substituteInPlace $TMPDIR/mut-pr-forbidden-bot-login/src/broker/index.ts \
+                  --replace-fail 'forbiddenLogins.some((f) => f.toLowerCase() === botLogin.toLowerCase())' 'false'
+                if (cd $TMPDIR/mut-pr-forbidden-bot-login && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-pr-forbidden-bot-login survived in pr" >&2
+                  exit 1
+                fi
                 cp -r . $TMPDIR/mut-pr-forbidden-logins
                 chmod -R u+w $TMPDIR/mut-pr-forbidden-logins
                 substituteInPlace $TMPDIR/mut-pr-forbidden-logins/src/broker/index.ts \
-                  --replace-fail 'forbiddenLogins.some((f) => f.toLowerCase() === botLogin.toLowerCase())' 'false' \
                   --replace-fail 'forbiddenLogins.some((f) => f.toLowerCase() === login.toLowerCase())' 'false'
                 if (cd $TMPDIR/mut-pr-forbidden-logins && node --test --test-force-exit --test-name-pattern='oracle O-GC1-pr-f6' tests/pr.test.ts >/dev/null 2>&1); then
                   echo "mutant M-pr-forbidden-logins survived in pr" >&2

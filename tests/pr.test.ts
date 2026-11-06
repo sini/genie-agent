@@ -399,20 +399,47 @@ test("oracle O-GC1-pr-f6: publishPr and verifyBotIdentity enforce botLogin, forb
       assert.equal(gitWriteReqs().length, 0, `fork owner ${String(badForkOwner)} must make 0 git/PR write requests`);
     }
 
-    // 6. fork.full_name == p.repo (exact and case-insensitive) refused with 0 git write requests
+    // 6. fork.full_name == p.repo (exact and case-insensitive) or invalid coordinate refused with 0 git write requests
     for (const sameName of ["alice/flake", "Alice/Flake"]) {
       gh.requests.length = 0;
       forkBody = { full_name: sameName, owner: { login: "genie-bot" } };
       await assert.rejects(runPr(), /fork full_name .* matches upstream repo/);
       assert.equal(gitWriteReqs().length, 0, `fork full_name ${sameName} must make 0 git/PR write requests`);
     }
+    gh.requests.length = 0;
+    forkBody = { full_name: "invalid-coord", owner: { login: "genie-bot" } };
+    await assert.rejects(runPr(), /invalid fork full_name/);
+    assert.equal(gitWriteReqs().length, 0);
     forkBody = { full_name: "genie-bot/flake", owner: { login: "Genie-Bot" } };
 
-    // 7. verifyBotIdentity: forbiddenLogins refused even when login === botLogin (e.g. botLogin="Sini", forbiddenLogins=["sini"], /user.login="Sini")
+    // 6b. Invalid upstream default_branch refused before any fork call (0 write requests)
+    gh.requests.length = 0;
+    repoBody = {
+      private: false,
+      owner: { login: "alice" },
+      default_branch: "HEAD",
+      permissions: { push: false, maintain: false, admin: false },
+    };
+    await assert.rejects(runPr(), /invalid upstream default_branch/);
+    assert.equal(writeReqs().length, 0);
+    repoBody = {
+      private: false,
+      owner: { login: "alice" },
+      default_branch: "main",
+      permissions: { push: false, maintain: false, admin: false },
+    };
+
+    // 7a. verifyBotIdentity: configured botLogin in forbiddenLogins refused before GET /user (0 HTTP requests)
     gh.requests.length = 0;
     userLogin = "Sini";
-    await assert.rejects(runPr("Sini", ["sini"]), /forbidden/);
-    assert.equal(writeReqs().length, 0, "forbiddenLogins hit must make 0 write requests");
+    await assert.rejects(runPr("Sini", ["sini"]), /broker\.botLogin Sini is in forbiddenLogins/);
+    assert.equal(gh.requests.length, 0, "forbidden configured botLogin must make 0 HTTP requests");
+
+    // 7b. verifyBotIdentity: /user.login in forbiddenLogins refused before any repo/write call (0 write requests)
+    gh.requests.length = 0;
+    userLogin = "sini";
+    await assert.rejects(runPr("genie-bot", ["sini"]), /broker token identity forbidden: sini/);
+    assert.equal(writeReqs().length, 0, "forbidden /user login must make 0 write requests");
 
     // 8. verifyBotIdentity: login !== botLogin refused when login ("alice") is not in forbiddenLogins (["sini"])
     gh.requests.length = 0;
