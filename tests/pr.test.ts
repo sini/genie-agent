@@ -417,7 +417,7 @@ test("oracle O-GC1-pr-f6: publishPr and verifyBotIdentity enforce botLogin, forb
     repoBody = {
       private: false,
       owner: { login: "alice" },
-      default_branch: "HEAD",
+      default_branch: "../bad",
       permissions: { push: false, maintain: false, admin: false },
     };
     await assert.rejects(runPr(), /invalid upstream default_branch/);
