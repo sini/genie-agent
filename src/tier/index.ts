@@ -67,7 +67,11 @@ export function parseEnvelope(raw: string): Envelope {
   let into: Line[] | undefined;
   let headerTier: Tier | undefined;
   for (const l of raw.split("\n")) {
-    if (l === "<request>" || /^<request\s+screened="false"(?:\s+note="[^"]*")?>$/.test(l)) into = req;
+    if (
+      l === "<request>" ||
+      /^<request(?:\s+(?:addressed="(?:true|false)"|screened="(?:true|false)"|note="[^"]*"))+>$/.test(l)
+    )
+      into = req;
     else if (l.startsWith("<context ")) {
       const role = / role="([a-z]+)"/.exec(l)?.[1];
       if (role !== "thread" && role !== "background") throw new Error(`thread tier: unknown context role in ${l}`);
@@ -76,7 +80,7 @@ export function parseEnvelope(raw: string): Envelope {
     } else if (l === "</request>" || l === "</context>") into = undefined;
     else if (into && l) into.push(line(l));
     else if (!into && l.startsWith("[matrix] ")) {
-      const hm = /^\[matrix\]\s+room=\S+\s+thread=\S+\s+user=.+\s+\((trusted|public)\)$/.exec(l);
+      const hm = /^\[matrix\]\s+room=\S+\s+thread=\S+\s+user=.+\s+\((trusted|public)\)(?:\s+addressed="(?:true|false)")?$/.exec(l);
       if (!hm) throw new Error(`thread tier: invalid [matrix] header: ${l}`);
       headerTier = hm[1] as Tier;
     } else if (l) throw new Error(`thread tier: unexpected envelope line: ${l}`);

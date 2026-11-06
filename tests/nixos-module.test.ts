@@ -218,7 +218,7 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
   );
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.broker).sort(),
-    ["allowedRepos", "githubApi", "guardOut", "threadLink", "tokenFile"],
+    ["allowedRepos", "botLogin", "githubApi", "guardOut", "threadLink", "tokenFile"],
   );
   assert.deepEqual(summary.localRootAttrs.broker.allowedRepos, []);
   assert.deepEqual(summary.fullRootAttrs.broker.allowedRepos, []);

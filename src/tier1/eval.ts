@@ -831,6 +831,14 @@ async function executePiArm(opts: PiArmOptions): Promise<{
         if (opts.hostOverrides?.room_context) return opts.hostOverrides.room_context(req);
         throw new Error("room_context is unavailable in this evaluation");
       },
+      git: async (req) => {
+        if (opts.hostOverrides?.git) return opts.hostOverrides.git(req);
+        throw new Error("git is unavailable in this evaluation");
+      },
+      gh_read: async (req) => {
+        if (opts.hostOverrides?.gh_read) return opts.hostOverrides.gh_read(req);
+        throw new Error("gh_read is unavailable in this evaluation");
+      },
     }),
   );
 

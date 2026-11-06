@@ -1,0 +1,5 @@
+{
+  "repo": "sini/genie-agent",
+  "op": "log",
+  "rev": "--output=/tmp/pwn"
+}

@@ -271,6 +271,30 @@ export class ThreadStateStore {
     }
     return undefined;
   }
+
+  // Last reply message id recorded by XmsgIo.post / postEnvelope for GAP-6 redact/edit.
+  lastReplyMessageId(thread: string): string | undefined {
+    return readJson<{ id?: string }>(`${this.dir(thread)}/last_reply.json`)?.id;
+  }
+
+  setLastReplyMessageId(thread: string, id: string): void {
+    writeAtomic(this.dir(thread), "last_reply.json", JSON.stringify({ id }));
+  }
+
+  // Per-thread daily proposal counter for broker.maxProposalsPerThreadPerDay (GC1 §2.6.2.4).
+  proposalCount(thread: string, day = new Date().toISOString().slice(0, 10)): number {
+    const counts = readJson<Record<string, number>>(`${this.dir(thread)}/proposals_by_day.json`) ?? {};
+    return counts[day] ?? 0;
+  }
+
+  recordProposal(thread: string, day = new Date().toISOString().slice(0, 10)): number {
+    const d = this.dir(thread);
+    const counts = readJson<Record<string, number>>(`${d}/proposals_by_day.json`) ?? {};
+    const next = (counts[day] ?? 0) + 1;
+    counts[day] = next;
+    writeAtomic(d, "proposals_by_day.json", JSON.stringify(counts));
+    return next;
+  }
 }
 
 const cacheKey = ({ repo, rev, attr, flags }: CacheKey) => JSON.stringify([repo, rev, attr, flags]);

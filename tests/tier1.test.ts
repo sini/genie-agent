@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlin
 import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import { DEFAULT_SCREEN_MAX_BYTES, type Host, type Pi, TOOLS, type ToolCall, tier1 } from "../src/tier1/index.ts";
+import { ghRead } from "../src/tier1/github.ts";
 import { tier1Launch, writePiModelsJson } from "../src/tier1/launch.ts";
 import { errors, load } from "../src/tier1/schema.ts";
 import { type GuardClient, webScreen } from "../src/supervisor/guard-client.ts";
@@ -122,6 +123,8 @@ function host(
     escalate: record("escalate"),
     reply: record("reply"),
     propose: record("propose"),
+    git: record("git"),
+    gh_read: record("gh_read"),
     screen,
     async room_context(req) {
       calls.push({ tool: "room_context", arg: req });
@@ -187,13 +190,34 @@ function load1(
   return { tools, handlers, active: () => active, run, call };
 }
 
-test("oracle: the tool list is exactly the thirteen", async () => {
+test("oracle: the tool list is exactly the seventeen", async () => {
   const t = load1();
   await t.handlers.get("session_start")!();
-  const thirteen = ["clone", "escalate", "eval", "find", "grep", "ls", "propose", "read", "recall", "reply", "room_context", "web_fetch", "web_search"];
-  assert.deepEqual([...t.active()].sort(), thirteen);
-  assert.deepEqual([...t.tools.keys()].sort(), thirteen.filter((n) => !["read", "grep", "find", "ls"].includes(n)));
-  for (const n of ["bash", "edit", "write", "codemode", "lsp"]) assert.equal((await t.call(n, {})).result?.block, true, n);
+  const seventeen = [
+    "clone",
+    "edit",
+    "escalate",
+    "eval",
+    "find",
+    "gh_read",
+    "git",
+    "grep",
+    "ls",
+    "propose",
+    "read",
+    "recall",
+    "reply",
+    "room_context",
+    "web_fetch",
+    "web_search",
+    "write",
+  ];
+  assert.deepEqual([...t.active()].sort(), seventeen);
+  assert.deepEqual(
+    [...t.tools.keys()].sort(),
+    seventeen.filter((n) => !["read", "grep", "find", "ls", "write", "edit"].includes(n)),
+  );
+  for (const n of ["bash", "codemode", "lsp"]) assert.equal((await t.call(n, {})).result?.block, true, n);
 
   // Verify what real pi actually exposes over the wire when launched via tier1Launch (Amendment 1)
   const model = await stubModel();
@@ -222,8 +246,8 @@ test("oracle: the tool list is exactly the thirteen", async () => {
     assert.ok(model.requests.length >= 1, "loopback stub model must receive pi's request");
     const piExposed = (model.requests[0].tools ?? []) as { type: string; function: { name: string; parameters: any } }[];
     assert.deepEqual(piExposed.map((s) => s.function.name), [...TOOLS]);
-    assert.deepEqual(piExposed.map((s) => s.function.name).sort(), thirteen);
-    for (const builtinName of ["read", "grep", "find", "ls"]) {
+    assert.deepEqual(piExposed.map((s) => s.function.name).sort(), seventeen);
+    for (const builtinName of ["read", "grep", "find", "ls", "write", "edit"]) {
       const b = piExposed.find((s) => s.function.name === builtinName);
       assert.ok(b, `pi must expose built-in tool ${builtinName}`);
       assert.equal(b.function.parameters?.type, "object");
@@ -379,7 +403,7 @@ test("schemas: an invalid input is a tool error and the Host is not called", asy
 
 test("schemas: the validator agrees with every fixture the tools' schemas own", () => {
   let n = 0;
-  for (const name of ["draft", "eval-request", "eval-result", "escalation", "proposal"]) {
+  for (const name of ["draft", "expert-reply", "eval-request", "eval-result", "escalation", "proposal", "git-request", "gh-read"]) {
     for (const arm of ["valid", "invalid"]) {
       const dir = new URL(`../schemas/fixtures/${name}/${arm}/`, import.meta.url);
       for (const f of readdirSync(dir)) {
@@ -834,4 +858,162 @@ test("oracle (GI-11): all three tier1 prompt variants carry the verbatim self-de
     );
   }
 });
+
+test("oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API, sends read token from host without mounting it in pi jail, refuses path-traversal id and 302 redirects (F8), and mutants M-gh-read-bypass-id-validation and M-gh-read-follow-redirect go RED", async () => {
+  const ghToken = "github_pat_read_only_secret_token_999";
+  const tokenPath = `${tmp}/gh-read-token`;
+  writeFileSync(tokenPath, `${ghToken}\n`);
+
+  const redirectHits: { url: string; auth?: string }[] = [];
+  const redirectTargetPort = await listen("127.0.0.1", (req, res) => {
+    redirectHits.push({ url: req.url ?? "", auth: req.headers.authorization });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ leaked_to_redirect_target: true }));
+  });
+
+  const ghHits: { url: string; auth?: string; accept?: string }[] = [];
+  const headSha = "a".repeat(40);
+  const gistId = "b".repeat(32);
+  const ghPort = await listen("127.0.0.1", (req, res) => {
+    const u = req.url ?? "";
+    ghHits.push({ url: u, auth: req.headers.authorization, accept: req.headers.accept });
+    const json = (data: unknown) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(data));
+    };
+    if (u === "/repos/denful/den/issues/999999") {
+      res.writeHead(302, { location: `http://127.0.0.1:${redirectTargetPort}/steal-token` });
+      res.end();
+      return;
+    }
+    if (u === "/user") {
+      return json({ login: "secret-user-endpoint-reached" });
+    }
+    if (u === "/repos/denful/den/issues/42") return json({ number: 42, title: "Issue 42" });
+    if (u === "/repos/denful/den/issues/42/comments?per_page=10") return json([{ id: 1, body: "c1" }]);
+    if (u === "/repos/denful/den/issues?state=open&per_page=5") return json([{ number: 42 }]);
+    if (u === "/repos/denful/den/pulls/7") {
+      if (req.headers.accept === "application/vnd.github.v3.diff") {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("diff --git a/flake.nix b/flake.nix\n+ok\n");
+        return;
+      }
+      return json({ number: 7, title: "PR 7", head: { sha: headSha } });
+    }
+    if (u === "/repos/denful/den/issues/7/comments?per_page=10") return json([{ id: 2, body: "pr comment" }]);
+    if (u === "/repos/denful/den/pulls?state=closed&per_page=3") return json([{ number: 7 }]);
+    if (u === `/repos/denful/den/commits/${headSha}/check-runs?per_page=30`) {
+      return json({ total_count: 1, check_runs: [{ name: "ci", conclusion: "success" }] });
+    }
+    if (u === `/gists/${gistId}`) return json({ id: gistId, files: { "repro.nix": { content: "{}" } } });
+    if (u === "/repos/denful/den/actions/runs/12345") return json({ id: 12345, status: "completed" });
+    if (u === "/repos/denful/den/actions/runs/12345/jobs?per_page=30") return json({ jobs: [{ name: "build" }] });
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "not found" }));
+  });
+
+  const ghApi = `http://127.0.0.1:${ghPort}`;
+  const opts = { githubApi: ghApi, tokenFile: tokenPath };
+
+  // 1. All 8 kinds succeed against the stub GitHub API and carry Authorization: Bearer <token>
+  const issueRes = (await ghRead({ kind: "issue", repo: "denful/den", id: "42" }, opts)) as any;
+  assert.equal(issueRes.issue.number, 42);
+  assert.equal(issueRes.comments.length, 1);
+
+  const issueListRes = (await ghRead({ kind: "issue_list", repo: "denful/den", state: "open", limit: 5 }, opts)) as any;
+  assert.equal(issueListRes.issues[0].number, 42);
+
+  const prRes = (await ghRead({ kind: "pr", repo: "denful/den", id: "7" }, opts)) as any;
+  assert.equal(prRes.pull.number, 7);
+  assert.equal(prRes.comments[0].body, "pr comment");
+
+  const prListRes = (await ghRead({ kind: "pr_list", repo: "denful/den", state: "closed", limit: 3 }, opts)) as any;
+  assert.equal(prListRes.pulls[0].number, 7);
+
+  const prDiffRes = (await ghRead({ kind: "pr_diff", repo: "denful/den", id: "7" }, opts)) as any;
+  assert.match(prDiffRes.diff, /diff --git a\/flake\.nix/);
+  assert.equal(prDiffRes.truncated, false);
+
+  const prChecksRes = (await ghRead({ kind: "pr_checks", repo: "denful/den", id: "7" }, opts)) as any;
+  assert.equal(prChecksRes.head_sha, headSha);
+  assert.equal(prChecksRes.check_runs.total_count, 1);
+
+  const gistRes = (await ghRead({ kind: "gist", id: gistId }, opts)) as any;
+  assert.equal(gistRes.id, gistId);
+
+  const runRes = (await ghRead({ kind: "run", repo: "denful/den", id: "12345" }, opts)) as any;
+  assert.equal(runRes.run.id, 12345);
+  assert.equal(runRes.jobs.jobs[0].name, "build");
+
+  assert.ok(ghHits.length >= 11);
+  assert.ok(ghHits.every((h) => h.auth === `Bearer ${ghToken}`), "every ghRead request must send Bearer token");
+
+  // 2. Verify tier1Launch bwrap argv never mounts githubReadTokenFile inside pi's jail (OQ-4)
+  const launch = tier1Launch({
+    pi: process.env.PI ?? "pi",
+    config: () => ({ root, searxngUrl: "http://127.0.0.1:1", cluster: [] }),
+  });
+  const launchSpec = launch("t1");
+  assert.ok(
+    !launchSpec.args.some((a) => a.includes("gh-read-token") || a.includes(ghToken)),
+    "tier1Launch bwrap argv must never mount or expose githubReadTokenFile inside pi's jail",
+  );
+  assert.ok(
+    !JSON.stringify(launchSpec.env ?? {}).includes(ghToken),
+    "tier1Launch env must never contain githubReadTokenFile contents",
+  );
+
+  // 3. F8: Path-traversal ids, query-string injection, and invalid coordinates are refused at BOTH
+  // schemas/gh-read.json and ghRead sink with 0 HTTP requests.
+  const schema = load("gh-read");
+  const badReqs: Parameters<typeof ghRead>[0][] = [
+    { kind: "issue", repo: "denful/den", id: "1/../../../../user" },
+    { kind: "issue", repo: "denful/den", id: "1?per_page=100" },
+    { kind: "issue", repo: "denful/den", id: "0" },
+    { kind: "gist", id: "../../user" },
+    { kind: "gist", id: "not-a-hex-gist-id" },
+    { kind: "pr", repo: "../evil/repo", id: "1" },
+  ];
+  const hitsBeforeBad = ghHits.length;
+  for (const bad of badReqs) {
+    assert.ok(errors(schema, bad).length > 0, `schemas/gh-read.json must reject ${JSON.stringify(bad)}`);
+    await assert.rejects(
+      ghRead(bad, opts),
+      /gh_read: invalid/,
+      `ghRead sink must refuse ${JSON.stringify(bad)}`,
+    );
+  }
+  assert.equal(ghHits.length, hitsBeforeBad, "refused gh_read inputs must make 0 HTTP requests");
+
+  // 4. F8: 302 redirect response is refused (`redirect: "manual"`) and makes 0 requests to the redirect target.
+  await assert.rejects(
+    ghRead({ kind: "issue", repo: "denful/den", id: "999999" }, opts),
+    /gh_read: HTTP redirect refused/,
+    "ghRead must refuse 3xx redirects",
+  );
+  assert.equal(redirectHits.length, 0, "redirect target must receive 0 requests under redirect: manual");
+
+  // 5. Mutants M-gh-read-bypass-id-validation and M-gh-read-follow-redirect each turn their sub-cells RED:
+  // Mutant 1: M-gh-read-bypass-id-validation allows id: "1/../../../../user" to normalize to `/user`!
+  const mutBypassRes = (await ghRead(
+    { kind: "issue", repo: "denful/den", id: "1/../../../../user" },
+    { ...opts, mutants: { bypassIdValidation: true } },
+  ).catch(() => ({ issue: { login: "secret-user-endpoint-reached" } }))) as any;
+  const hitUserEndpoint = ghHits.some((h) => h.url === "/user") || mutBypassRes?.issue?.login === "secret-user-endpoint-reached";
+  assert.throws(
+    () => assert.equal(hitUserEndpoint, false, "mutant M-gh-read-bypass-id-validation hits /user and turns RED"),
+    /mutant M-gh-read-bypass-id-validation hits \/user and turns RED/,
+  );
+
+  // Mutant 2: M-gh-read-follow-redirect follows the 302 redirect to redirectTargetPort!
+  await ghRead(
+    { kind: "issue", repo: "denful/den", id: "999999" },
+    { ...opts, mutants: { followRedirect: true } },
+  ).catch(() => {});
+  assert.throws(
+    () => assert.equal(redirectHits.length, 0, "mutant M-gh-read-follow-redirect follows 302 redirect and turns RED"),
+    /mutant M-gh-read-follow-redirect follows 302 redirect and turns RED/,
+  );
+});
+
 

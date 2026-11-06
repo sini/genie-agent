@@ -1,0 +1,6 @@
+{
+  "worktreeSubdir": "github.com-sini-genie-agent-1234567890ab",
+  "attr": "packages.x86_64-linux.default",
+  "trusted": "yes",
+  "apply": "x: builtins.attrNames x"
+}

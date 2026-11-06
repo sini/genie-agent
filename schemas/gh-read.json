@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tier-1 read-only GitHub REST API query",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "issue",
+        "issue_list",
+        "pr",
+        "pr_list",
+        "pr_diff",
+        "pr_checks",
+        "gist",
+        "run"
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*\\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9]+$"
+    },
+    "state": {
+      "enum": [
+        "open",
+        "closed",
+        "all"
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "enum": [
+            "issue",
+            "pr",
+            "pr_diff",
+            "pr_checks",
+            "run"
+          ]
+        },
+        "id": {
+          "pattern": "^[1-9][0-9]{0,11}$"
+        }
+      },
+      "required": [
+        "repo",
+        "id"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "enum": [
+            "issue_list",
+            "pr_list"
+          ]
+        },
+        "id": false
+      },
+      "required": [
+        "repo"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "gist"
+        },
+        "repo": false,
+        "id": {
+          "pattern": "^[0-9a-f]{20,64}$"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  ]
+}

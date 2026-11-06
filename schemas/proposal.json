@@ -1,12 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "typed action proposal for the broker",
-  "description": "A gist needs no repository; a PR needs the repository and the branch it opens from.",
+  "description": "A gist needs no repository; a PR needs the repository and the branch it opens from, plus either files or worktreeSubdir.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "kind",
-    "files",
     "title",
     "body"
   ],
@@ -43,6 +42,12 @@
         "type": "string"
       }
     },
+    "worktreeSubdir": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!\\.\\.?(?:\\/|$))(?!.*\\/\\.\\.?(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$"
+    },
     "title": {
       "type": "string",
       "minLength": 1
@@ -63,5 +68,44 @@
       "repo",
       "branch"
     ]
-  }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "const": "gist"
+        },
+        "worktreeSubdir": false
+      },
+      "required": [
+        "files"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "pr"
+        },
+        "worktreeSubdir": false
+      },
+      "required": [
+        "repo",
+        "branch",
+        "files"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "pr"
+        },
+        "files": false
+      },
+      "required": [
+        "repo",
+        "branch",
+        "worktreeSubdir"
+      ]
+    }
+  ]
 }

@@ -255,7 +255,7 @@ export function tier1Launch(o: {
       ...(!agentDirContainsRoots
         ? [sb.rwAgentDir ? "--bind" : "--ro-bind", agentDir, agentDir]
         : []),
-      sb.rwWorktree ? "--bind" : "--ro-bind", threadWorktree, threadWorktree,
+      (sb.rwWorktree ?? true) ? "--bind" : "--ro-bind", threadWorktree, threadWorktree,
       ...(memRoot && existsSync(memRoot) ? ["--ro-bind", memRoot, memRoot] : []),
       ...(repoDir && !repoDir.startsWith("/nix/store/") && existsSync(repoDir)
         ? ["--ro-bind", repoDir, repoDir]

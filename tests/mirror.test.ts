@@ -3,23 +3,26 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { after, before, test } from "node:test";
 import {
   diskBytes,
   git,
+  gitRead,
   MirrorOverCap,
   MirrorOverQuota,
   MirrorRefused,
   mirrorKey,
+  readMirrorPin,
   removeWorktrees,
   sanitizeGitStderr,
   worktreeFor,
   type MirrorConfig,
   type Runner,
 } from "../src/mirror/index.ts";
+import { errors, load } from "../src/tier1/schema.ts";
 import { Lifecycle } from "../src/lifecycle/index.ts";
 import { parseMatrixForward } from "../src/root/io.ts";
 import { ThreadStateStore } from "../src/state/index.ts";
@@ -98,7 +101,17 @@ function setup(fetchCap?: number, quota?: number) {
   const mirrors = () => readdirSync(cfg.mirrorRoot).filter((d) => !d.startsWith("."));
   return { cfg, calls, run, clones, mirrors };
 }
-const head = (p: string) => sh(["rev-parse", "HEAD"], p);
+const head = (p: string) => {
+  // Under C1 (`ls-tree` + `cat-file --batch`), `<worktreeRoot>/<thread>/<key>` has no `.git` metadata;
+  // read the pinned commit from `<mirrorRoot>/<key>/genie-pins/<thread>`.
+  const parts = p.split("/");
+  const key = parts.at(-1)!;
+  const thread = parts.at(-2)!;
+  const caseRoot = parts.slice(0, -3).join("/");
+  const pin = readMirrorPin(`${caseRoot}/mirrors/${key}`, thread);
+  if (pin) return pin.rev;
+  return sh(["rev-parse", "HEAD"], p);
+};
 
 test("oracle: two threads on one repo share one clone, each with its own worktree", async () => {
   const rev = fixture("shared");
@@ -592,16 +605,13 @@ test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked syml
   assert.equal(st.isSymbolicLink(), false, "tracked symlink must not be checked out as S_IFLNK");
   assert.equal(st.isFile(), true, "tracked symlink must be checked out as a regular file under core.symlinks=false");
   assert.equal(readFileSync(`${wt.path}/linked-file`, "utf8").trim(), "/etc/hosts");
-  assert.ok(
-    calls.some((a) => a.includes("worktree") && a.includes("core.symlinks=false")),
-    "worktree add argv must carry -c core.symlinks=false",
-  );
+  assert.equal(existsSync(`${wt.path}/.git`), false, "writable worktree must contain zero .git metadata (F2)");
   // C4: bare mirror config persists core.symlinks=false (--config core.symlinks=false on clone)
   const mirrorCfgText = readFileSync(`${cfg.mirrorRoot}/${mirrorKey(`${base}/gs2symlinks`)}/config`, "utf8");
   assert.match(mirrorCfgText, /symlinks\s*=\s*false/, "bare mirror config must persist core.symlinks=false");
 
-  // C4 two-call cell: upstream commit adds a second symlink, and a second worktreeFor call on the same (url, thread)
-  // takes the `if (existsSync(path)) checkout --force --detach` branch and still keeps symlinks as regular files.
+  // Two-call cell: upstream commit adds a second symlink, and a second worktreeFor call on the same (url, thread)
+  // re-extracts the tree and still keeps symlinks as regular files.
   symlinkSync("/etc/resolv.conf", `${work}/second-link`);
   sh(["add", "second-link"], work);
   sh(["commit", "-q", "-m", "add-second-symlink"], work);
@@ -612,28 +622,10 @@ test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked syml
   const st2 = lstatSync(`${wt2.path}/second-link`);
   assert.equal(st2.isSymbolicLink(), false, "re-checkout branch must not check out tracked symlink as S_IFLNK");
   assert.equal(st2.isFile(), true, "re-checkout branch must check out tracked symlink as regular file");
-  assert.ok(
-    calls.some((a) => a.includes("checkout") && a.includes("core.symlinks=false")),
-    "checkout argv must carry -c core.symlinks=false",
-  );
 
-  // Mutant M-symlinks-true (both clone/worktree and checkout branches): forcing core.symlinks=true materializes S_IFLNK and turns RED
-  const { cfg: mutCfg } = setup();
-  const mutRun: Runner = (args, signal) =>
-    git(
-      [
-        "-c",
-        "protocol.git.allow=always",
-        // Overrides the runner's own leading -c core.symlinks=false (a later -c wins).
-        "-c",
-        "core.symlinks=true",
-        ...args
-          .map((a) => (a === "core.symlinks=false" ? "core.symlinks=true" : a))
-          .map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:")),
-      ],
-      signal,
-    );
-  const mutWt = await worktreeFor(mutCfg, `${base}/gs2symlinks`, "thread-gs2-mut", mutRun);
+  // Mutant M-symlinks-true / C1 archive mutant: extracting via `git archive | tar` materializes S_IFLNK and turns RED
+  const { cfg: mutCfg, run: mutRun } = setup();
+  const mutWt = await worktreeFor(mutCfg, `${base}/gs2symlinks`, "thread-gs2-mut", mutRun, { worktreeGitArchive: true });
   const mutSt = lstatSync(`${mutWt.path}/linked-file`);
   assert.throws(
     () => assert.equal(mutSt.isSymbolicLink(), false, "mutant M-symlinks-true materializes S_IFLNK and turns RED"),
@@ -645,17 +637,136 @@ test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked syml
     /mutant M-symlinks-true on second-link turns RED/,
   );
 
-  // Checkout-branch-only mutant: only the re-checkout of the existing thread worktree forces
-  // core.symlinks=true; the new link it brings in materializes as S_IFLNK.
+  // Re-extraction mutant: second call uses worktreeGitArchive, materializing third-link as S_IFLNK.
   symlinkSync("/etc/hostname", `${work}/third-link`);
   sh(["add", "third-link"], work);
   sh(["commit", "-q", "-m", "add-third-symlink"], work);
   sh(["push", "-q", "origin", "HEAD:main"], work);
-  const coMutRun: Runner = (args, signal) => (args.includes("checkout") ? mutRun(args, signal) : run(args, signal));
-  const wt3 = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", coMutRun);
+  const wt3 = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", run, { worktreeGitArchive: true });
   assert.equal(wt3.path, wt.path);
   assert.equal(lstatSync(`${wt3.path}/third-link`).isSymbolicLink(), true, "checkout-branch mutant materializes S_IFLNK (RED)");
 });
+
+test("oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/show/diff/blame/grep on bare mirror (including C-N1 single-rev diff), refuses flag-injection at schema and sink (F3), cleans stale genie-pins (Q5), and mutant M-git-allow-leading-dash goes RED", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  const rev1 = fixture("alice/gc1git");
+  const work = `${tmp}/work-alice/gc1git`;
+  writeFileSync(`${work}/src.nix`, "{ a = 1; }\n");
+  sh(["add", "src.nix"], work);
+  sh(["commit", "-q", "-m", "first src.nix commit"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+  const c1 = sh(["rev-parse", "HEAD"], work);
+
+  writeFileSync(`${work}/src.nix`, "{ a = 1;\n  b = 2;\n}\n");
+  sh(["add", "src.nix"], work);
+  sh(["commit", "-q", "-m", "second src.nix commit adding b"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+  const c2 = sh(["rev-parse", "HEAD"], work);
+  assert.notEqual(rev1, c1);
+  assert.notEqual(c1, c2);
+
+  const repoCoord = "alice/gc1git";
+  const url = `${base}/${repoCoord}`;
+  const { cfg, run } = setup();
+  const optsFor = (thread: string, mutants?: { allowLeadingDash?: boolean }) => ({
+    mirrorRoot: cfg.mirrorRoot,
+    worktreeRoot: cfg.worktreeRoot,
+    thread,
+    repoUrlBase: base,
+    mutants,
+  });
+
+  // 1. P7: Calling gitRead on a repo not cloned by this thread is refused before spawning git,
+  // even when another thread ("thread-other") HAS cloned that same repo.
+  await worktreeFor(cfg, url, "thread-other", run);
+  await assert.rejects(
+    gitRead({ repo: repoCoord, op: "log" }, optsFor("thread-uncloned")),
+    /clone https:\/\/github\.com\/alice\/gc1git in this thread before calling git/,
+    "gitRead must refuse a repo not cloned by the calling thread",
+  );
+
+  // 2. Clone in thread-a and exercise all 5 read-only operations against the bare mirror:
+  // log, show, diff (both single-rev C-N1 and range), blame, grep.
+  await worktreeFor(cfg, url, "thread-a", run);
+
+  const logOut = await gitRead({ repo: repoCoord, op: "log", maxCount: 5, path: "src.nix" }, optsFor("thread-a"));
+  assert.match(logOut.output, /second src\.nix commit adding b/);
+  assert.match(logOut.output, /first src\.nix commit/);
+
+  const showOut = await gitRead({ repo: repoCoord, op: "show", rev: c2, path: "src.nix" }, optsFor("thread-a"));
+  assert.match(showOut.output, /second src\.nix commit adding b/);
+  assert.match(showOut.output, /\+  b = 2;/);
+
+  // C-N1: single-rev diff (e.g. rev: "HEAD" or rev: c2) on a bare mirror is rewritten to `${rev}~1..${rev}`
+  // so git diff does not fail with "fatal: this operation must be run in a work tree".
+  const diffSingleHead = await gitRead({ repo: repoCoord, op: "diff", rev: "HEAD", path: "src.nix" }, optsFor("thread-a"));
+  assert.match(diffSingleHead.output, /\+  b = 2;/, "single-rev diff on HEAD must diff HEAD~1..HEAD on bare mirror");
+  const diffSingleSha = await gitRead({ repo: repoCoord, op: "diff", rev: c2 }, optsFor("thread-a"));
+  assert.match(diffSingleSha.output, /\+  b = 2;/, "single-rev diff on commit SHA must diff sha~1..sha on bare mirror");
+
+  // Range diff: rev: "${c1}..${c2}"
+  const diffRange = await gitRead({ repo: repoCoord, op: "diff", rev: `${c1}..${c2}`, path: "src.nix" }, optsFor("thread-a"));
+  assert.match(diffRange.output, /\+  b = 2;/, "range diff c1..c2 must succeed on bare mirror");
+
+  const blameOut = await gitRead({ repo: repoCoord, op: "blame", rev: "HEAD", path: "src.nix" }, optsFor("thread-a"));
+  assert.match(blameOut.output, /b = 2;/);
+
+  const grepOut = await gitRead({ repo: repoCoord, op: "grep", rev: "HEAD", query: "b = 2", path: "src.nix" }, optsFor("thread-a"));
+  assert.match(grepOut.output, /src\.nix:.*b = 2;/);
+
+  // 3. F3: Flag-injection payloads in rev, query, and path (including git pathspec magic `:(top)`)
+  // are refused at BOTH schemas/git-request.json AND gitRead sink before spawning git.
+  const schema = load("git-request");
+  const badInputs: { label: string; req: Parameters<typeof gitRead>[0] }[] = [
+    { label: "rev --ext-diff", req: { repo: repoCoord, op: "diff", rev: "--ext-diff" } },
+    { label: "rev --stat", req: { repo: repoCoord, op: "show", rev: "--stat" } },
+    { label: "rev -O/bin/sh", req: { repo: repoCoord, op: "show", rev: "-O/bin/sh" } },
+    { label: "rev range right-hand flag", req: { repo: repoCoord, op: "diff", rev: "HEAD..--ext-diff" } },
+    { label: "query -O/bin/sh", req: { repo: repoCoord, op: "grep", query: "-O/bin/sh" } },
+    { label: "path -f", req: { repo: repoCoord, op: "log", path: "-f" } },
+    { label: "path pathspec magic", req: { repo: repoCoord, op: "log", path: ":(top)src.nix" } },
+    { label: "path .. traversal", req: { repo: repoCoord, op: "blame", path: "../etc/passwd" } },
+  ];
+  for (const { label, req } of badInputs) {
+    assert.ok(errors(schema, req).length > 0, `schemas/git-request.json must reject ${label}`);
+    await assert.rejects(
+      gitRead(req, optsFor("thread-a")),
+      /git: invalid (rev|query|path)/,
+      `gitRead sink must refuse ${label}`,
+    );
+  }
+
+  // Mutant M-git-allow-leading-dash (driven directly at the gitRead sink per Gate v1 Q3, bypassing schema):
+  // when allowLeadingDash is true, `rev: "--stat"` is accepted as a git flag on `git show` and succeeds instead of rejecting,
+  // turning the refusal assertion RED.
+  let mutRejected = true;
+  try {
+    await gitRead({ repo: repoCoord, op: "show", rev: "--stat" }, optsFor("thread-a", { allowLeadingDash: true }));
+    mutRejected = false;
+  } catch {}
+  assert.throws(
+    () => assert.equal(mutRejected, true, "mutant M-git-allow-leading-dash interprets --stat as a git flag and turns RED"),
+    /mutant M-git-allow-leading-dash interprets --stat as a git flag and turns RED/,
+  );
+
+  // 4. Q5: Stale genie-pins/<dead-thread> where <worktreeRoot>/<dead-thread>/<key> does not exist
+  // is unlinked when liveWorktree inspects the mirror during eviction.
+  const key = mirrorKey(url);
+  const mirrorDir = `${cfg.mirrorRoot}/${key}`;
+  const stalePinPath = `${mirrorDir}/genie-pins/dead-thread-orphan`;
+  writeFileSync(stalePinPath, `${c2}\n`);
+  assert.equal(existsSync(stalePinPath), true);
+  // Remove the live worktrees for thread-other and thread-a so only the orphan pin remains, then trigger eviction
+  await removeWorktrees(cfg, "thread-other", run);
+  await removeWorktrees(cfg, "thread-a", run);
+  fixture("evictor");
+  commit("evictor", 2048);
+  cfg.quota = diskBytes(mirrorDir) + 8192;
+  await worktreeFor(cfg, `${base}/evictor`, "thread-evict", run);
+  assert.equal(existsSync(stalePinPath), false, "stale genie-pins/<dead-thread> must be cleaned up by liveWorktree");
+});
+
 
 
 

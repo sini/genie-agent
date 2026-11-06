@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tier-1 read-only git inspection request against a pinned bare mirror",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo",
+    "op"
+  ],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*\\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]+)*$"
+    },
+    "op": {
+      "enum": [
+        "log",
+        "show",
+        "diff",
+        "blame",
+        "grep"
+      ]
+    },
+    "rev": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\\.[A-Za-z0-9_/~^-]+)*(?:\\.\\.\\.?[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\\.[A-Za-z0-9_/~^-]+)*)?$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!-)(?!\\/)(?!:)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))[^\\u0000\\r\\n]+$"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!-)[^\\u0000\\r\\n]+$"
+    },
+    "maxCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "op": {
+          "enum": [
+            "log",
+            "show",
+            "diff"
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "op": {
+          "const": "blame"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    {
+      "properties": {
+        "op": {
+          "const": "grep"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  ]
+}

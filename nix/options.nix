@@ -241,6 +241,40 @@ rec {
         description = "Hindsight dataplane URL for Tier 1 recall.";
       };
 
+      gitScreen = lib.mkOption {
+        default = { };
+        description = "Optional guard-in screening toggle for Tier 1 `git` read outputs (GC1 OQ-2; default disabled).";
+        type = lib.types.submodule {
+          options = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether to screen Tier 1 `git` tool outputs through guard-in.";
+            };
+          };
+        };
+      };
+
+      ghScreen = lib.mkOption {
+        default = { };
+        description = "Optional guard-in screening toggle for Tier 1 `gh_read` outputs (GC1 OQ-2; default disabled).";
+        type = lib.types.submodule {
+          options = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether to screen Tier 1 `gh_read` tool outputs through guard-in.";
+            };
+          };
+        };
+      };
+
+      githubReadTokenFile = lib.mkOption {
+        type = lib.types.nullOr secretPath;
+        default = null;
+        description = "Optional fine-grained zero-permission GitHub read token file for `gh_read` (GC1 OQ-4; must not be in /nix/store).";
+      };
+
       s3 = lib.mkOption {
         default = null;
         description = "Optional S3 transcript archiver configuration (null disables S3 archiving in local mode).";
@@ -283,6 +317,24 @@ rec {
               type = lib.types.nullOr secretPath;
               default = null;
               description = "Optional GitHub PAT file for propose actions (null disables propose in local mode before I11).";
+            };
+
+            botLogin = lib.mkOption {
+              type = lib.types.str;
+              default = "genie-bot";
+              description = "GitHub service account login enforced via GET /user and fork ownership on propose actions (GC1 OQ-3).";
+            };
+
+            forbiddenLogins = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "GitHub logins explicitly forbidden from being used as broker.botLogin or authenticated /user (GC1 Q3).";
+            };
+
+            maxProposalsPerThreadPerDay = lib.mkOption {
+              type = lib.types.nullOr lib.types.ints.positive;
+              default = null;
+              description = "Optional per-thread daily cap on acted proposals (GC1 OQ-3).";
             };
 
             githubApi = lib.mkOption {
@@ -570,6 +622,7 @@ rec {
       modelKeyFile,
       guardOutKeyFile ? null,
       brokerTokenFile ? null,
+      githubReadTokenFile ? null,
       s3SecretKeyFile ? null,
     }:
     let
@@ -612,8 +665,15 @@ rec {
 
       brokerAttrs = {
         tokenFile = brokerTokenFile;
+        botLogin = cfg.broker.botLogin;
         allowedRepos = cfg.broker.allowedRepos;
         guardOut = guardOutAttrs;
+      }
+      // lib.optionalAttrs (cfg.broker.forbiddenLogins != [ ]) {
+        forbiddenLogins = cfg.broker.forbiddenLogins;
+      }
+      // lib.optionalAttrs (cfg.broker.maxProposalsPerThreadPerDay != null) {
+        maxProposalsPerThreadPerDay = cfg.broker.maxProposalsPerThreadPerDay;
       }
       // lib.optionalAttrs (cfg.broker.githubApi != null) {
         githubApi = cfg.broker.githubApi;
@@ -648,6 +708,13 @@ rec {
       guard = {
         enable = cfg.guard.enable;
       };
+      gitScreen = {
+        enable = cfg.gitScreen.enable;
+      };
+      ghScreen = {
+        enable = cfg.ghScreen.enable;
+      };
+      githubReadTokenFile = githubReadTokenFile;
       hindsightUrl = cfg.hindsightUrl;
       s3 =
         if cfg.s3 == null then

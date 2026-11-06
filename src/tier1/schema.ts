@@ -11,7 +11,8 @@ export type Schema = { [k: string]: any };
 // this validator would silently ignore never reads as a pass.
 const known = new Set([
   "$schema", "title", "description", "type", "required", "properties", "additionalProperties",
-  "items", "enum", "const", "minLength", "minimum", "maximum", "minProperties", "minItems", "pattern", "$ref", "if", "then",
+  "items", "enum", "const", "minLength", "maxLength", "minimum", "maximum", "minProperties", "minItems",
+  "pattern", "$ref", "if", "then", "else", "oneOf", "not",
 ]);
 
 const dir = process.env.GENIE_REPO_ROOT
@@ -54,6 +55,7 @@ export function errors(s: Schema, value: unknown, at = "$"): string[] {
   if (s.enum && !s.enum.includes(value)) out.push(`${at} not in ${s.enum.join("|")}`);
   if ("const" in s && value !== s.const) out.push(`${at} is not ${JSON.stringify(s.const)}`);
   if (typeof value === "string" && value.length < (s.minLength ?? 0)) out.push(`${at} is shorter than ${s.minLength}`);
+  if (typeof value === "string" && value.length > (s.maxLength ?? Infinity)) out.push(`${at} is longer than ${s.maxLength}`);
   if (typeof value === "string" && typeof s.pattern === "string" && !new RegExp(s.pattern).test(value)) {
     out.push(`${at} does not match ${s.pattern}`);
   }
@@ -66,12 +68,23 @@ export function errors(s: Schema, value: unknown, at = "$"): string[] {
     for (const k of s.required ?? []) if (!(k in v)) out.push(`${at}.${k} is missing`);
     if (Object.keys(v).length < (s.minProperties ?? 0)) out.push(`${at} has fewer than ${s.minProperties} members`);
     for (const [k, m] of Object.entries(v)) {
-      const p = s.properties?.[k] ?? s.additionalProperties;
+      const p = s.properties ? (k in s.properties ? s.properties[k] : s.additionalProperties) : s.additionalProperties;
       if (p === false) out.push(`${at}.${k} is not allowed`);
       else if (p && p !== true) out.push(...errors(p, m, `${at}.${k}`));
     }
   }
-  if (s.if && errors(s.if, value, at).length === 0 && s.then) out.push(...errors(s.then, value, at));
+  if (s.not && errors(s.not, value, at).length === 0) out.push(`${at} matches prohibited schema`);
+  if (s.if) {
+    if (errors(s.if, value, at).length === 0) {
+      if (s.then) out.push(...errors(s.then, value, at));
+    } else if (s.else) {
+      out.push(...errors(s.else, value, at));
+    }
+  }
+  if (Array.isArray(s.oneOf)) {
+    const matches = s.oneOf.filter((sub: Schema) => errors(sub, value, at).length === 0);
+    if (matches.length !== 1) out.push(`${at} matched ${matches.length} oneOf branches`);
+  }
   return out;
 }
 
@@ -82,7 +95,7 @@ export function forModel(s: Schema): Schema {
   if (s.type === "boolean") return { ...(s.description ? { description: s.description } : {}), enum: ["yes", "no"] };
   const out: Schema = {};
   for (const [k, v] of Object.entries(s)) {
-    if (["$schema", "$ref", "if", "then"].includes(k)) continue;
+    if (["$schema", "$ref", "if", "then", "else", "oneOf", "not"].includes(k)) continue;
     if (k === "properties") out[k] = Object.fromEntries(Object.entries(v).map(([p, ps]) => [p, forModel(ps as Schema)]));
     else if ((k === "items" || k === "additionalProperties") && typeof v === "object") out[k] = forModel(v);
     else out[k] = v;

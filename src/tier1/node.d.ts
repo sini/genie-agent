@@ -41,11 +41,12 @@ declare module "node:fs" {
     isDirectory(): boolean;
   }
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
-  export function statSync(path: string): { isFile(): boolean; isDirectory(): boolean; mtimeMs: number };
+  export function statSync(path: string): { size: number; blocks: number; mode: number; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; mtimeMs: number };
 }
 declare module "node:path" {
   export function dirname(path: string): string;
   export function isAbsolute(path: string): boolean;
+  export function relative(from: string, to: string): string;
   export function resolve(...paths: string[]): string;
 }
 declare module "node:url" {

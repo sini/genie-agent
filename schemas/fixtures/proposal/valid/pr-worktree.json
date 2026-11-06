@@ -1,0 +1,8 @@
+{
+  "kind": "pr",
+  "repo": "sini/genie-agent",
+  "branch": "fix-something",
+  "worktreeSubdir": "github.com-sini-genie-agent-1234567890ab",
+  "title": "Fix something",
+  "body": "Body"
+}

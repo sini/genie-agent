@@ -1,15 +1,20 @@
 // The local eval runner: one launch (an eval-request and its sender tier) evaluated by Nix inside bubblewrap, starting from an
 // empty throwaway store, and reported as an eval-result.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const threadName = /^(?!.*\.\.)[A-Za-z0-9_$!][A-Za-z0-9._:$!-]*$/;
 
 export type Tier = "public" | "trusted";
 
 // schemas/eval-request.json
 export interface EvalRequest {
-  repo: string;
-  rev: string;
+  repo?: string;
+  rev?: string;
+  worktreeSubdir?: string;
   attr: string;
+  apply?: string;
   trusted: "yes" | "no";
   secrets?: "stub" | "none";
 }
@@ -18,6 +23,7 @@ export interface EvalRequest {
 export interface Launch {
   request: EvalRequest;
   sender_tier: Tier;
+  thread?: string;
 }
 
 // schemas/eval-result.json's limit_hit enum, which tests/eval-limits.test.ts holds equal to this.
@@ -31,10 +37,19 @@ export interface EvalResult {
   limit_hit: (typeof LIMITS)[number];
 }
 
+export interface EvalMutants {
+  // M-eval-impure: flips pure-eval to false in nixArgv.
+  evalImpure?: boolean;
+  // M-worktree-subdir-no-prefix-check: skips resolveWorktreeSubdir validation/prefix check.
+  worktreeSubdirNoPrefixCheck?: boolean;
+}
+
 export interface RunOptions {
   timeoutMs?: number;
   // A local flake directory evaluated in place of github:<repo>/<rev>. Tests only.
   localFlake?: string;
+  // Root directory of per-thread worktrees (<worktreeRoot>/<thread>/<subdir>) for worktreeSubdir evals (GC1 §2.2).
+  worktreeRoot?: string;
   // The remote builders a trusted eval builds its IFD on (design §5.3), in Nix's `builders` syntax:
   // the launcher's deployment config, never the request. Unset, a trusted eval builds in its own store.
   builders?: string;
@@ -44,6 +59,8 @@ export interface RunOptions {
   memoryMax?: number;
   // Optional CA bundle file override. Tests only.
   caBundle?: string;
+  // Test-only source mutant hooks.
+  mutants?: EvalMutants;
 }
 
 export const TAIL_CHARS = 4096;
@@ -64,9 +81,40 @@ const which = (name: string, resolve = true): string => {
 };
 
 // The model writes the request; nothing in it may reach Nix as anything but a github coordinate
-// and a dotted attribute path (GX1 F2).
+// and a dotted attribute path (GX1 F2), or a confined relative worktreeSubdir (GC1 §2.2, F4).
 const coordinate = /^[A-Za-z0-9._-]+$/;
 export const ATTR_PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_][A-Za-z0-9_-]*)*$/;
+export const WORKTREE_SUBDIR_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+
+export function resolveWorktreeSubdir(
+  worktreeRoot: string,
+  thread: string,
+  subdir: string,
+  mutants?: Pick<EvalMutants, "worktreeSubdirNoPrefixCheck">,
+): string {
+  if (!threadName.test(thread)) {
+    throw new Error(`invalid thread for worktreeSubdir: ${thread}`);
+  }
+  if (!mutants?.worktreeSubdirNoPrefixCheck) {
+    if (!WORKTREE_SUBDIR_RE.test(subdir) || subdir.split("/").some((s) => s === "." || s === "..")) {
+      throw new Error(`invalid worktreeSubdir: ${subdir}`);
+    }
+  }
+  const threadRoot = realpathSync(`${worktreeRoot}/${thread}`);
+  const candidate = resolve(threadRoot, subdir);
+  if (!mutants?.worktreeSubdirNoPrefixCheck) {
+    if (candidate !== threadRoot && !candidate.startsWith(`${threadRoot}/`)) {
+      throw new Error(`worktreeSubdir escapes thread worktree: ${subdir}`);
+    }
+  }
+  const real = realpathSync(candidate);
+  if (!mutants?.worktreeSubdirNoPrefixCheck) {
+    if (!real.startsWith(`${threadRoot}/`) && real !== threadRoot) {
+      throw new Error(`worktreeSubdir symlink escapes thread worktree: ${subdir}`);
+    }
+  }
+  return real;
+}
 
 // Generates a Nix wrapper expression to evaluate a NixOS configuration with agenix and sops-nix
 // secret paths overridden to placeholder store files and placeholder values substituted (plan E5, design §5.7).
@@ -164,14 +212,32 @@ in
 }
 
 // The effective tier is the only thing that opens the trusted path; a public eval's argv is E1's.
-export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string[] {
+export function nixArgv(
+  launch: Launch,
+  flakeRef: string,
+  builders = "",
+  mutants?: Pick<EvalMutants, "evalImpure">,
+): string[] {
   const { request } = launch;
   if (!ATTR_PATH_RE.test(request.attr)) {
     throw new Error(`not an attr path: ${request.attr}`);
   }
+  if (request.apply !== undefined) {
+    if (
+      typeof request.apply !== "string" ||
+      request.apply.length < 1 ||
+      request.apply.length > 4096 ||
+      request.apply.includes("\0")
+    ) {
+      throw new Error("invalid apply expression");
+    }
+    if (request.attr === "checks") {
+      throw new Error("apply cannot be combined with attr === 'checks'");
+    }
+  }
   const trusted = effectiveTier(launch) === "trusted";
   const settings = {
-    "pure-eval": "true",
+    "pure-eval": mutants?.evalImpure ? "false" : "true",
     "allow-import-from-derivation": trusted ? "true" : "false",
     builders: trusted ? builders : "",
     substituters: "",
@@ -188,23 +254,13 @@ export function nixArgv(launch: Launch, flakeRef: string, builders = ""): string
     command = ["flake", "check", "--no-build", flakeRef];
   } else if (request.secrets === "stub") {
     const nixosMatch = request.attr.match(/^nixosConfigurations\.([^.]+)\.(.*)$/);
-    if (nixosMatch) {
-      const host = nixosMatch[1];
-      const subpath = nixosMatch[2];
-      command = [
-        "eval",
-        `${flakeRef}#nixosConfigurations.${host}`,
-        "--apply",
-        wrapperForNixOS(subpath),
-      ];
-    } else {
-      command = [
-        "eval",
-        `${flakeRef}#${request.attr}`,
-        "--apply",
-        wrapperForTarget(),
-      ];
-    }
+    const targetRef = nixosMatch ? `${flakeRef}#nixosConfigurations.${nixosMatch[1]}` : `${flakeRef}#${request.attr}`;
+    const stubExpr = nixosMatch ? wrapperForNixOS(nixosMatch[2]) : wrapperForTarget();
+    const applyExpr =
+      request.apply !== undefined ? `(__genie_x: (${request.apply}) ((${stubExpr}) __genie_x))` : stubExpr;
+    command = ["eval", targetRef, "--apply", applyExpr];
+  } else if (request.apply !== undefined) {
+    command = ["eval", `${flakeRef}#${request.attr}`, "--apply", request.apply];
   } else {
     command = ["eval", `${flakeRef}#${request.attr}`];
   }
@@ -271,6 +327,7 @@ export interface BwrapArgvOptions {
   nsswitchConf?: string;
   localFlake?: string;
   builders?: string;
+  mutants?: Pick<EvalMutants, "evalImpure">;
 }
 
 // Builds the bubblewrap argv for runEval. Extracted so unit tests (tests/eval-argv.test.ts) and
@@ -304,7 +361,7 @@ export function bwrapArgv(launch: Launch, flakeRef: string, opts: BwrapArgvOptio
     "--bind", opts.tmp, "/work",
     ...(opts.localFlake ? ["--ro-bind", opts.localFlake, "/src"] : []),
     nix,
-    ...nixArgv(launch, flakeRef, opts.builders),
+    ...nixArgv(launch, flakeRef, opts.builders, opts.mutants),
   ];
 }
 
@@ -313,11 +370,28 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   if (!ATTR_PATH_RE.test(request.attr)) {
     throw new Error(`not an attr path: ${request.attr}`);
   }
-  const [owner, name, ...rest] = request.repo.split("/");
-  if (!options.localFlake && !(rest.length === 0 && [owner, name, request.rev].every((s) => coordinate.test(s ?? "")))) {
-    throw new Error(`not a github coordinate: ${request.repo}/${request.rev}`);
+  let boundFlake = options.localFlake;
+  if (request.worktreeSubdir !== undefined) {
+    if (request.repo !== undefined || request.rev !== undefined) {
+      throw new Error("worktreeSubdir is mutually exclusive with repo and rev");
+    }
+    if (!options.worktreeRoot || !launch.thread) {
+      throw new Error("worktreeSubdir requires worktreeRoot and thread");
+    }
+    const flakeDir = resolveWorktreeSubdir(options.worktreeRoot, launch.thread, request.worktreeSubdir, options.mutants);
+    const flakeNix = `${flakeDir}/flake.nix`;
+    const st = lstatSync(flakeNix, { throwIfNoEntry: false });
+    if (!st || !st.isFile() || st.isSymbolicLink()) {
+      throw new Error(`worktreeSubdir has no regular flake.nix: ${request.worktreeSubdir}`);
+    }
+    boundFlake = flakeDir;
+  } else if (!boundFlake) {
+    const [owner, name, ...rest] = (request.repo ?? "").split("/");
+    if (!(rest.length === 0 && [owner, name, request.rev].every((s) => coordinate.test(s ?? "")))) {
+      throw new Error(`not a github coordinate: ${request.repo ?? ""}/${request.rev ?? ""}`);
+    }
   }
-  const flakeRef = options.localFlake ? "path:/src" : `github:${request.repo}/${request.rev}`;
+  const flakeRef = boundFlake ? "path:/src" : `github:${request.repo}/${request.rev}`;
   const nix = which("nix");
   const caBundle = resolveCaBundle(options.caBundle);
   const resolveEtc = (p: string): string => {
@@ -327,11 +401,15 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
       return p;
     }
   };
-  const resolvConf = resolveEtc("/etc/resolv.conf");
-  const etcHosts = resolveEtc("/etc/hosts");
-  const nsswitchConf = resolveEtc("/etc/nsswitch.conf");
   const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-`);
   mkdirSync(`${tmp}/conf`, { recursive: true });
+  let resolvConf = resolveEtc("/etc/resolv.conf");
+  if (!existsSync(resolvConf)) {
+    resolvConf = `${tmp}/resolv.conf`;
+    writeFileSync(resolvConf, "# sandbox\n");
+  }
+  const etcHosts = resolveEtc("/etc/hosts");
+  const nsswitchConf = resolveEtc("/etc/nsswitch.conf");
   // The bwrap jail already isolates user/pid/ipc/uts/mount namespaces; disable Nix's inner
   // CLONE_NEWUSER build sandbox so local IFD builds do not write /proc/<inner_pid>/uid_map
   // against the outer-namespace /proc bind mount.
@@ -350,8 +428,9 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     resolvConf,
     etcHosts,
     nsswitchConf,
-    localFlake: options.localFlake,
+    localFlake: boundFlake,
     builders: options.builders,
+    mutants: options.mutants,
   });
   const cg = evalCgroup();
   // The whole cgroup's count: the only one without an eval cgroup, and the fallback when systemd takes

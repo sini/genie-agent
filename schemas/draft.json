@@ -26,6 +26,9 @@
     },
     "escalate_forced": {
       "type": "boolean"
+    },
+    "silent": {
+      "type": "boolean"
     }
   }
 }

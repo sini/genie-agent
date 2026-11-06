@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -18,6 +19,36 @@ import {
   writeFileSync,
 } from "node:fs";
 import { BlockList, isIP } from "node:net";
+import { dirname } from "node:path";
+
+const REPO_COORD_RE =
+  /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
+
+export function isValidRepoCoord(repo: unknown): repo is string {
+  if (typeof repo !== "string" || !REPO_COORD_RE.test(repo) || repo.includes("..")) return false;
+  const parts = repo.split("/");
+  return (
+    parts.length === 2 &&
+    parts.every((seg) => seg.length > 0 && seg !== "." && seg !== ".." && !seg.startsWith("-") && !seg.endsWith(".lock"))
+  );
+}
+
+function isValidGitPath(path: unknown): path is string {
+  if (
+    typeof path !== "string" ||
+    path.length === 0 ||
+    path.includes("\0") ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.startsWith("-") ||
+    path.startsWith(":")
+  ) {
+    return false;
+  }
+  const parts = path.split("/");
+  return parts.every((seg) => seg.length > 0 && seg !== "." && seg !== ".." && !seg.startsWith("-"));
+}
 
 export type Address = { address: string; family: number };
 export type Resolver = (hostname: string) => Promise<Address[]>;
@@ -86,6 +117,8 @@ export interface MirrorConfig {
   refused?: BlockList;
   // Addresses let through the refusal. Tests only: production leaves it empty.
   exempt?: string[];
+  // Optional base URL override for mapping `owner/name` -> URL in `git` and `propose` (default "https://github.com").
+  repoUrlBase?: string;
 }
 
 // 2 GiB: above the bare mirror of any ordinary project (and of every gen library), below the
@@ -325,15 +358,42 @@ function touch(dir: string, mirrorRoot: string): void {
   writeFileSync(`${dir}/${USED}`, `${lastUsed}\n`);
 }
 
-// Whether a worktree made from the mirror still exists. Read from git's own registry in the mirror,
-// <dir>/worktrees/*/gitdir, the record that makes the worktree work; a removed one goes stale there,
-// as `git worktree prune` would judge it.
+// Whether a worktree made from the mirror still exists. Read from <dir>/genie-pins/<thread>
+// (line 1 = base rev, line 2 = checkout path), pruning stale pin files whose checkout directory
+// is gone (Q5). Also checks legacy <dir>/worktrees/*/gitdir if present.
+const PINS = "genie-pins";
+
+export function readMirrorPin(dir: string, thread: string): { rev: string; path: string } | null {
+  const pinFile = `${dir}/${PINS}/${thread}`;
+  if (!existsSync(pinFile)) return null;
+  const lines = readFileSync(pinFile, "utf8").split(/\r?\n/);
+  const rev = (lines[0] ?? "").trim();
+  const path = (lines[1] ?? "").trim();
+  if (!rev || !path) return null;
+  if (!existsSync(path)) {
+    rmSync(pinFile, { force: true });
+    return null;
+  }
+  return { rev, path };
+}
+
 export function liveWorktree(dir: string): boolean {
-  if (!existsSync(`${dir}/worktrees`)) return false;
-  return readdirSync(`${dir}/worktrees`).some((w) => {
-    const gitdir = `${dir}/worktrees/${w}/gitdir`;
-    return existsSync(gitdir) && existsSync(readFileSync(gitdir, "utf8").trim());
-  });
+  let live = false;
+  const pinsDir = `${dir}/${PINS}`;
+  if (existsSync(pinsDir)) {
+    for (const w of readdirSync(pinsDir)) {
+      if (readMirrorPin(dir, w) !== null) {
+        live = true;
+      }
+    }
+  }
+  if (!live && existsSync(`${dir}/worktrees`)) {
+    live = readdirSync(`${dir}/worktrees`).some((w) => {
+      const gitdir = `${dir}/worktrees/${w}/gitdir`;
+      return existsSync(gitdir) && existsSync(readFileSync(gitdir, "utf8").trim());
+    });
+  }
+  return live;
 }
 
 // Holds the mirrors under quota after a fetch into keep, evicting least-recently-used first. A
@@ -373,18 +433,198 @@ function locked<T>(key: string, f: () => Promise<T>): Promise<T> {
   return next;
 }
 
-// Removes every worktree the thread holds, from git's registry in its mirror as well as from disk,
+// Removes every worktree the thread holds, from <mirror>/genie-pins/<thread> as well as from disk,
 // which unpins the mirror for eviction. Keyed as worktreeFor keys them: <worktreeRoot>/<thread>/<key>
 // from the mirror <mirrorRoot>/<key>. Shared by C4's close and P3's collection.
-export async function removeWorktrees(cfg: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">, thread: string, run: Runner = git): Promise<void> {
+export async function removeWorktrees(
+  cfg: Pick<MirrorConfig, "mirrorRoot" | "worktreeRoot">,
+  thread: string,
+  run: Runner = git,
+): Promise<void> {
   if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
+  if (existsSync(cfg.mirrorRoot)) {
+    for (const key of readdirSync(cfg.mirrorRoot)) {
+      if (key.startsWith(".")) continue;
+      rmSync(`${cfg.mirrorRoot}/${key}/${PINS}/${thread}`, { force: true });
+    }
+  }
   const dir = `${cfg.worktreeRoot}/${thread}`;
   for (const key of existsSync(dir) ? readdirSync(dir) : []) {
     const m = `${cfg.mirrorRoot}/${key}`;
-    if (existsSync(m)) await run(["-C", m, "worktree", "remove", "--force", `${dir}/${key}`]);
-    else rmSync(`${dir}/${key}`, { recursive: true, force: true });
+    rmSync(`${m}/${PINS}/${thread}`, { force: true });
+    if (existsSync(`${m}/worktrees`)) {
+      await run(["-C", m, "worktree", "remove", "--force", `${dir}/${key}`]).catch(() => {});
+    }
+    rmSync(`${dir}/${key}`, { recursive: true, force: true });
   }
   rmSync(dir, { recursive: true, force: true });
+}
+
+export interface MirrorTreeEntry {
+  mode: "100644" | "100755" | "120000";
+  sha: string;
+  path: string;
+}
+
+// Lists tracked blob entries (100644, 100755, 120000; skipping 160000 gitlinks) from a bare mirror
+// via `git --git-dir=<dir> ls-tree -r -z <rev> [-- <prefix>]` without touching any worktree.
+export async function listMirrorTree(dir: string, rev: string, prefix?: string): Promise<MirrorTreeEntry[]> {
+  if (!existsSync(`${dir}/objects`)) return [];
+  const args = [
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    `--git-dir=${dir}`,
+    "ls-tree",
+    "-r",
+    "-z",
+    rev,
+    ...(prefix ? ["--", prefix] : []),
+  ];
+  const raw = await new Promise<Buffer>((resolveBuf, reject) => {
+    const child = spawn("git", args, {
+      cwd: "/",
+      env: {
+        PATH: process.env.PATH,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (d: Buffer) => out.push(d));
+    child.stderr.on("data", (d: Buffer) => err.push(d));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolveBuf(Buffer.concat(out));
+      else reject(new Error(`git ls-tree: ${ sanitizeGitStderr(Buffer.concat(err).toString("utf8")) || `exit ${code}` }`));
+    });
+  });
+  const entries: MirrorTreeEntry[] = [];
+  let start = 0;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== 0) continue;
+    const rec = raw.subarray(start, i).toString("utf8");
+    start = i + 1;
+    const tab = rec.indexOf("\t");
+    if (tab === -1) continue;
+    const meta = rec.slice(0, tab).trim().split(/\s+/);
+    const filePath = rec.slice(tab + 1);
+    const mode = meta[0];
+    const sha = meta[2];
+    if (!sha || !filePath) continue;
+    if (mode === "160000") continue;
+    if (mode !== "100644" && mode !== "100755" && mode !== "120000") continue;
+    const segs = filePath.split("/");
+    if (segs.some((s: string) => !s || s === "." || s === ".." || s === ".git")) continue;
+    entries.push({ mode, sha, path: filePath });
+  }
+  return entries;
+}
+
+// Populates `destPath` from `git --git-dir=<dir> ls-tree -r -z <rev>` + `cat-file --batch` (Gate v1 C1):
+// - 100644 / 100755: regular files with raw blob bytes (no .gitattributes export-ignore/export-subst/eol).
+// - 120000: regular file whose content is the link target (preserving GS2 F1 symlink-flattening).
+// - 160000: skipped.
+// Zero `.git` metadata is ever written into `destPath`.
+async function extractMirrorTree(dir: string, rev: string, destPath: string): Promise<void> {
+  rmSync(destPath, { recursive: true, force: true });
+  mkdirSync(destPath, { recursive: true, mode: 0o755 });
+  const entries = await listMirrorTree(dir, rev);
+  if (entries.length === 0) return;
+
+  const raw = await new Promise<Buffer>((resolveBuf, reject) => {
+    const child = spawn(
+      "git",
+      [
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        `--git-dir=${dir}`,
+        "cat-file",
+        "--batch",
+      ],
+      {
+        cwd: "/",
+        env: {
+          PATH: process.env.PATH,
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (d: Buffer) => out.push(d));
+    child.stderr.on("data", (d: Buffer) => err.push(d));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolveBuf(Buffer.concat(out));
+      else reject(new Error(`git cat-file --batch: ${sanitizeGitStderr(Buffer.concat(err).toString("utf8")) || `exit ${code}`}`));
+    });
+    child.stdin.write(`${entries.map((e) => e.sha).join("\n")}\n`);
+    child.stdin.end();
+  });
+
+  let offset = 0;
+  for (const entry of entries) {
+    const nl = raw.indexOf(0x0a, offset);
+    if (nl === -1) throw new Error(`cat-file --batch: truncated header for ${entry.sha}`);
+    const header = raw.subarray(offset, nl).toString("utf8");
+    const parts = header.split(" ");
+    const size = Number.parseInt(parts[2] ?? "", 10);
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error(`cat-file --batch: bad header ${JSON.stringify(header)}`);
+    }
+    const start = nl + 1;
+    const end = start + size;
+    if (end > raw.length) throw new Error(`cat-file --batch: truncated body for ${entry.sha}`);
+    const content = raw.subarray(start, end);
+    offset = end + 1; // trailing LF after each object body
+
+    const target = `${destPath}/${entry.path}`;
+    mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
+    const fmode = entry.mode === "100755" ? 0o755 : 0o644;
+    writeFileSync(target, content, { mode: fmode });
+    chmodSync(target, fmode);
+  }
+}
+
+// Test-only mutant helper for C1 (extracting via `git archive | tar`, which applies .gitattributes and creates symlinks).
+async function extractMirrorArchiveMutant(dir: string, rev: string, destPath: string): Promise<void> {
+  rmSync(destPath, { recursive: true, force: true });
+  mkdirSync(destPath, { recursive: true, mode: 0o755 });
+  await new Promise<void>((resolveOk, reject) => {
+    const gitProc = spawn("git", [`--git-dir=${dir}`, "-c", "core.symlinks=false", "archive", "--format=tar", rev], {
+      cwd: "/",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const tarProc = spawn("tar", ["-x", "--no-same-owner", "--no-same-permissions", "-C", destPath], {
+      cwd: "/",
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    gitProc.stdout.pipe(tarProc.stdin);
+    gitProc.on("error", reject);
+    tarProc.on("error", reject);
+    tarProc.on("close", (code) => (code === 0 ? resolveOk() : reject(new Error(`tar exited ${code}`))));
+  });
+}
+
+export interface WorktreeMutants {
+  // M-worktree-git-checkout: restores `git worktree add` + `git -C path checkout` (creates .git in worktree).
+  worktreeGitCheckout?: boolean;
+  // C1 mutant: uses `git archive | tar` instead of `ls-tree -r -z` + `cat-file --batch`.
+  worktreeGitArchive?: boolean;
 }
 
 // The thread's worktree of url, at the mirror's default branch head after a fresh fetch.
@@ -393,6 +633,7 @@ export async function worktreeFor(
   url: string,
   thread: string,
   run: Runner = git,
+  mutants?: WorktreeMutants,
 ): Promise<{ path: string; rev: string }> {
   const u = checkUrl(url);
   if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
@@ -417,14 +658,261 @@ export async function worktreeFor(
     touch(dir, cfg.mirrorRoot);
     evict(cfg.mirrorRoot, key, cfg.quota ?? DEFAULT_QUOTA, url);
     const rev = (await run(["-C", dir, "rev-parse", "--verify", "HEAD^{commit}"])).trim();
-    if (existsSync(path)) {
-      await run(["-C", path, "-c", "core.symlinks=false", "checkout", "--force", "--detach", rev]);
+    mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
+    const m = mutants ?? (cfg as MirrorConfig & { mutants?: WorktreeMutants }).mutants;
+    if (m?.worktreeGitCheckout) {
+      if (existsSync(path)) {
+        await run(["-C", path, "-c", "core.symlinks=false", "checkout", "--force", "--detach", rev]);
+      } else {
+        await run(["-C", dir, "-c", "core.symlinks=false", "worktree", "add", "--force", "--detach", path, rev]);
+      }
+    } else if (m?.worktreeGitArchive) {
+      await extractMirrorArchiveMutant(dir, rev, path);
     } else {
-      mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
-      // --force: a removed worktree stays registered in the mirror and would refuse this path.
-      await run(["-C", dir, "-c", "core.symlinks=false", "worktree", "add", "--force", "--detach", path, rev]);
-      touch(dir, cfg.mirrorRoot);
+      await extractMirrorTree(dir, rev, path);
     }
+    mkdirSync(`${dir}/${PINS}`, { recursive: true, mode: 0o755 });
+    writeFileSync(`${dir}/${PINS}/${thread}`, `${rev}\n${path}\n`);
+    touch(dir, cfg.mirrorRoot);
     return { path, rev };
+  });
+}
+
+// Read-only `git` history tool over the thread-pinned bare mirror (GC1 §2.3, F3, P1, P7, Gate v1 C-N1).
+export const GIT_REV_RE =
+  /^[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\.[A-Za-z0-9_/~^-]+)*(?:\.\.\.?[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\.[A-Za-z0-9_/~^-]+)*)?$/;
+
+const MUTANT_ALLOW_LEADING_DASH_REV_RE = /^[A-Za-z0-9._/~^=-]+(?:\.\.?[A-Za-z0-9._/~^=-]+)?$/;
+
+export type GitOp = "log" | "show" | "diff" | "blame" | "grep";
+
+export interface GitReadRequest {
+  repo: string;
+  op: GitOp;
+  rev?: string;
+  path?: string;
+  query?: string;
+  maxCount?: number;
+}
+
+export interface GitReadResult {
+  output: string;
+  truncated: boolean;
+}
+
+export type GitRequest = GitReadRequest;
+
+export interface GitReadMutants {
+  allowLeadingDash?: boolean;
+}
+
+export interface GitReadOptions {
+  mirrorRoot: string;
+  worktreeRoot: string;
+  thread: string;
+  // Base URL prefix for mapping `owner/name` -> `<repoUrlBase>/owner/name` (default: "https://github.com").
+  repoUrlBase?: string;
+  git?: Runner;
+  timeoutMs?: number;
+  maxBytes?: number;
+  mutants?: GitReadMutants;
+}
+
+export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promise<GitReadResult> {
+  if (!req || typeof req !== "object") throw new Error("git: request must be an object");
+  if (!isValidRepoCoord(req.repo)) {
+    throw new Error(`git: invalid repo coordinate: ${String(req.repo)}`);
+  }
+  const op = req.op;
+  if (op !== "log" && op !== "show" && op !== "diff" && op !== "blame" && op !== "grep") {
+    throw new Error(`git: unsupported op: ${String(op)}`);
+  }
+
+  const rev = req.rev ?? "HEAD";
+  const revRe = opts.mutants?.allowLeadingDash ? MUTANT_ALLOW_LEADING_DASH_REV_RE : GIT_REV_RE;
+  if (typeof rev !== "string" || rev.length < 1 || rev.length > 256 || !revRe.test(rev)) {
+    throw new Error(`git: invalid rev: ${String(rev)}`);
+  }
+
+  const path = req.path;
+  if (op === "blame" && (typeof path !== "string" || path.length === 0)) {
+    throw new Error("git: path is required for blame");
+  }
+  if (path !== undefined) {
+    if (!isValidGitPath(path)) {
+      throw new Error(`git: invalid path: ${String(path)}`);
+    }
+  }
+
+  const query = req.query;
+  if (op === "grep" && (typeof query !== "string" || query.length === 0)) {
+    throw new Error("git: query is required for grep");
+  }
+  if (query !== undefined) {
+    if (op !== "grep" && op !== "log") {
+      throw new Error(`git: query is not permitted for op ${op}`);
+    }
+    if (
+      typeof query !== "string" ||
+      query.length < 1 ||
+      query.length > 256 ||
+      (!opts.mutants?.allowLeadingDash && query.startsWith("-")) ||
+      /[\x00-\x1f\x7f]/.test(query)
+    ) {
+      throw new Error(`git: invalid query: ${String(query)}`);
+    }
+  }
+
+  const rawMax = req.maxCount ?? 20;
+  if (typeof rawMax !== "number" || !Number.isInteger(rawMax) || rawMax < 1 || rawMax > 100) {
+    throw new Error(`git: invalid maxCount: ${String(rawMax)}`);
+  }
+  const maxCount = Math.min(100, Math.max(1, rawMax));
+
+  const baseHost = (opts.repoUrlBase ?? "https://github.com").replace(/\/+$/, "");
+  const url = `${baseHost}/${req.repo}`;
+  const key = mirrorKey(url);
+  const bareDir = `${opts.mirrorRoot}/${key}`;
+  const pinInfo = readMirrorPin(bareDir, opts.thread);
+  const threadCheckout = `${opts.worktreeRoot}/${opts.thread}/${key}`;
+  if (!pinInfo || !existsSync(threadCheckout) || !existsSync(bareDir)) {
+    throw new Error(`clone https://github.com/${req.repo} in this thread before calling git`);
+  }
+
+  const base = [
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.symlinks=false",
+    "--no-pager",
+    `--git-dir=${bareDir}`,
+  ];
+  const endOpts = opts.mutants?.allowLeadingDash ? [] : ["--end-of-options"];
+  // Gate v1 C-N1: `git --git-dir=<bare> diff <single-rev>` fails with rc 128 ("must be run in a work tree");
+  // rewrite a single rev (without `..` or `...`) to `${rev}~1..${rev}`.
+  const diffRev = rev.includes("..") ? rev : `${rev}~1..${rev}`;
+
+  let argv: string[];
+  switch (op) {
+    case "log":
+      argv = [
+        ...base,
+        "log",
+        "--no-ext-diff",
+        "--no-textconv",
+        `-n${maxCount}`,
+        "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n    %s%n",
+        ...(query ? [`-S${query}`] : []),
+        ...endOpts,
+        rev,
+        "--",
+        ...(path ? [path] : []),
+      ];
+      break;
+    case "show":
+      argv = [
+        ...base,
+        "show",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%B",
+        ...endOpts,
+        rev,
+        "--",
+        ...(path ? [path] : []),
+      ];
+      break;
+    case "diff":
+      argv = [...base, "diff", "--no-ext-diff", "--no-textconv", ...endOpts, diffRev, "--", ...(path ? [path] : [])];
+      break;
+    case "blame":
+      argv = [...base, "blame", "-L", "1,200", rev, "--", path!];
+      break;
+    case "grep":
+      argv = [
+        ...base,
+        "grep",
+        "-n",
+        "-I",
+        `--max-count=${maxCount}`,
+        "-e",
+        query!,
+        ...endOpts,
+        rev,
+        "--",
+        ...(path ? [path] : []),
+      ];
+      break;
+  }
+
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const maxBytes = opts.maxBytes ?? 16_384;
+  emptyHome ??= mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-mirror-home-`);
+
+  return new Promise<GitReadResult>((resolveRes, reject) => {
+    const child = spawn("git", argv, {
+      cwd: "/",
+      detached: true,
+      env: {
+        PATH: process.env.PATH,
+        HOME: emptyHome,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CEILING_DIRECTORIES: opts.worktreeRoot,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let truncated = false;
+    let stderr = "";
+    let timedOut = false;
+
+    const killGroup = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+    }, timeoutMs);
+
+    child.stdout.on("data", (d: Buffer) => {
+      if (totalBytes < maxBytes) {
+        const take = Math.min(d.length, maxBytes - totalBytes);
+        chunks.push(d.subarray(0, take));
+        totalBytes += take;
+        if (take < d.length) truncated = true;
+      } else {
+        truncated = true;
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (d: string) => {
+      if (stderr.length < 4096) stderr += d;
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`git ${op}: timed out after ${timeoutMs}ms`));
+        return;
+      }
+      // `git grep` exits 1 when 0 lines match; return empty output rather than throwing.
+      if (code === 0 || (op === "grep" && code === 1 && !stderr.trim())) {
+        resolveRes({ output: Buffer.concat(chunks).toString("utf8"), truncated });
+      } else {
+        reject(new Error(`git ${op}: ${sanitizeGitStderr(stderr) || `exit ${code ?? "killed"}`}`));
+      }
+    });
   });
 }

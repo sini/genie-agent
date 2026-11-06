@@ -4,14 +4,17 @@
 // for a worktree; the web tools reach only public addresses, and guard-in screens what they return
 // through the Host, so tier 1 holds no guard client.
 // Nothing else runs: every other tool call is blocked, and so is pi's RPC `bash` command.
-import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { checkUrl } from "../mirror/index.ts";
 import { DEFAULT_SCREEN_MAX_BYTES } from "../supervisor/guard-client.ts";
 import { errors, forModel, fromModel, load, type Schema } from "./schema.ts";
 import { fetchText, pin, refusedList, type Resolver, search, systemResolver } from "./web.ts";
 
 export { DEFAULT_SCREEN_MAX_BYTES };
+
+export const DEFAULT_MAX_SCRATCH_BYTES = 1024 ** 3; // 1 GiB (GC1 OQ-1, F9)
+export const DEFAULT_MAX_SCRATCH_FILES = 4096; // 4,096 files (GC1 OQ-1, F9)
 
 // Operating memory index at memoryPath, as tier 1's system prompt carries it.
 // Rewrites relative markdown links to `/memory/<slug>` so tier 1 can pass them directly to read/grep/find/ls.
@@ -28,7 +31,9 @@ export function memoryPrompt(memoryPath = "/memory/MEMORY.md"): string {
   }
 }
 
-export const BUILTINS = ["read", "grep", "find", "ls"] as const;
+export const READ_BUILTINS = ["read", "grep", "find", "ls"] as const;
+export const WRITE_BUILTINS = ["write", "edit"] as const;
+export const BUILTINS = [...READ_BUILTINS, ...WRITE_BUILTINS] as const;
 export const TOOLS = [
   "eval",
   "recall",
@@ -37,6 +42,8 @@ export const TOOLS = [
   "propose",
   ...BUILTINS,
   "clone",
+  "git",
+  "gh_read",
   "web_fetch",
   "web_search",
   "room_context",
@@ -52,6 +59,10 @@ export interface Host {
   // The thread's worktree of url from the mirror fetcher (P1's worktreeFor), which runs git
   // outside tier 1.
   clone(url: string): Promise<{ path: string; rev: string }>;
+  // Read-only git history queries over the thread's pinned bare mirror (GC1 §2.3, GAP-8).
+  git(request: unknown): Promise<unknown>;
+  // Read-only GitHub inspection tool over api.github.com (GC1 §2.4, GAP-10).
+  gh_read(request: unknown): Promise<unknown>;
   // A web result as the model may see it, screened by guard-in (C3.2's webScreen): the text, the
   // guard's rewrite of it, or a throw that withholds it.
   screen(text: string): Promise<string>;
@@ -81,8 +92,16 @@ export interface Config {
   // FIFO turn-slot semaphore cap (default: 2) and max queue wait in seconds before fast-escalation (default: 180) (GL1).
   maxConcurrentTurns?: number;
   maxQueueWaitSecs?: number;
+  // Optional per-thread scratch write-delta quota (GC1 OQ-1, F9, Q4; default 1 GiB and 4,096 files).
+  maxScratchBytes?: number;
+  maxScratchFiles?: number;
   // Addresses web_fetch may reach although refused. Tests only.
   exempt?: string[];
+  // Test-only source mutant hooks.
+  mutants?: {
+    // M-write-confine-allow-memory-and-dotdot: replaces confineWrite with read-mode confine.
+    writeConfineAllowMemoryAndDotdot?: boolean;
+  };
 }
 
 export interface Deps {
@@ -204,6 +223,80 @@ export function confine(root: string, raw: unknown, memoryRoot = "/memory"): str
   return real;
 }
 
+// Write-mode confinement for `write` and `edit` inside `<worktreeRoot>/<thread>` (GC1 §2.6, F5):
+// 1. Explicitly refuses `/memory` and `/memory/...` before any filesystem access.
+// 2. Resolves `top = realpathSync(root)` and `candidate = isAbsolute(p) ? resolve(p) : resolve(top, p)`,
+//    requiring `candidate !== top && candidate.startsWith(`${top}/`)`.
+// 3. Walks up `dirname(candidate)` to the nearest existing ancestor `anc`, computes `realAnc = realpathSync(anc)`,
+//    and requires `realAnc === top || realAnc.startsWith(`${top}/`)`.
+// 4. Reconstructs `realTarget = resolve(realAnc, relative(anc, candidate))`. If `lstatSync(realTarget)` exists,
+//    refuses symlinks (`isSymbolicLink()`) and requires `realpathSync(realTarget).startsWith(`${top}/`)`.
+//    For `edit` (`requireExisting: true`), requires `existsSync(realTarget)`.
+export function confineWrite(
+  root: string,
+  raw: unknown,
+  opts?: {
+    memoryRoot?: string;
+    requireExisting?: boolean;
+    mutants?: { writeConfineAllowMemoryAndDotdot?: boolean };
+  },
+): string {
+  if (opts?.mutants?.writeConfineAllowMemoryAndDotdot) {
+    return confine(root, raw, opts.memoryRoot ?? "/memory");
+  }
+  const p = raw;
+  if (typeof p !== "string" || p.length === 0) throw new Error("the path is not a string");
+  if (p === "/memory" || p.startsWith("/memory/")) {
+    throw new Error("/memory is read-only");
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:|^\/\//.test(p)) throw new Error(`${p} is a URL, not a path`);
+  if (/^[~@]/.test(p) || /[\x00-\x1f\x7f]/.test(p) || UNICODE_SPACES.test(p)) {
+    throw new Error(`${p} is not a plain path`);
+  }
+  if (!root) throw new Error("no worktree root configured");
+  let top: string;
+  try {
+    top = realpathSync(root);
+  } catch {
+    throw new Error("no worktree root exists yet");
+  }
+  const candidate = isAbsolute(p) ? resolve(p) : resolve(top, p);
+  if (candidate === top || !candidate.startsWith(`${top}/`)) {
+    throw new Error(`${p} is outside the thread's worktree`);
+  }
+  let anc = dirname(candidate);
+  while (!existsSync(anc)) {
+    const parent = dirname(anc);
+    if (parent === anc) throw new Error(`${p} has no existing ancestor`);
+    anc = parent;
+  }
+  let realAnc: string;
+  try {
+    realAnc = realpathSync(anc);
+  } catch {
+    throw new Error(`${p} ancestor does not resolve`);
+  }
+  if (realAnc !== top && !realAnc.startsWith(`${top}/`)) {
+    throw new Error(`${p} is outside the thread's worktree`);
+  }
+  const realTarget = resolve(realAnc, relative(anc, candidate));
+  if (realTarget === top || !realTarget.startsWith(`${top}/`)) {
+    throw new Error(`${p} is outside the thread's worktree`);
+  }
+  const st = lstatSync(realTarget, { throwIfNoEntry: false });
+  if (st) {
+    if (st.isSymbolicLink()) throw new Error(`${p} is a symlink`);
+    const realExisting = realpathSync(realTarget);
+    if (!realExisting.startsWith(`${top}/`)) {
+      throw new Error(`${p} is outside the thread's worktree`);
+    }
+  } else if (opts?.requireExisting) {
+    throw new Error(`${p} does not exist`);
+  }
+  if (UNICODE_SPACES.test(realTarget)) throw new Error(`${p} is not a plain path`);
+  return realTarget;
+}
+
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
 
@@ -307,6 +400,11 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     },
   };
 
+  // Per-process write-delta ledger for `write` and `edit` (GC1 OQ-1, F9, Q4: resets when pi restarts on park/resume by design).
+  const scratchLedger = new Map<string, number>();
+  const maxScratchFiles = cfg.maxScratchFiles ?? DEFAULT_MAX_SCRATCH_FILES;
+  const maxScratchBytes = cfg.maxScratchBytes ?? DEFAULT_MAX_SCRATCH_BYTES;
+
   // A C1 tool: the repo's schema validates the arguments, then the Host acts.
   const c1 = (name: keyof Omit<Host, "clone" | "screen" | "room_context">, description: string, schema: Schema, arg: (v: any) => unknown) => ({
     name,
@@ -323,7 +421,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
   const whole = (v: unknown) => v;
 
   const tools = [
-    c1("eval", "Evaluate one attribute of one repository at one rev (nix eval). Set secrets: \"stub\" when agenix/sops secrets block pure-eval; the result is stubbed with placeholder paths/values. Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
+    c1("eval", "Evaluate one attribute of one repository at one rev or a relative worktreeSubdir (nix eval). Set secrets: \"stub\" when agenix/sops secrets block pure-eval; pass apply for a pure Nix function. Returns {exit, stdout_tail, stderr_tail, limit_hit}.", load("eval-request"), whole),
     c1(
       "recall",
       'Search a memory bank: "support" (default) holds the support memory (curated answers); "memory" holds the operating memory (tool usage, debugging techniques, gen/den reference). A question about how to do something with a tool or the gen libraries should recall "memory".',
@@ -344,11 +442,13 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     ),
     c1("escalate", "Hand this thread to the expert tier.", load("escalation"), whole),
     c1("reply", "Post the final draft answer. Call exactly once, last.", load("draft"), whole),
-    c1("propose", "Propose a gist or a pull request to the broker. A pull request needs repo and branch.", load("proposal"), whole),
+    c1("propose", "Propose a gist or a pull request to the broker. A pull request needs repo and branch, plus inline files or worktreeSubdir.", load("proposal"), whole),
+    c1("git", "Run a read-only git query (log, show, diff, blame, grep) against a repository already cloned in this thread.", load("git-request"), whole),
+    c1("gh_read", "Read public GitHub issues, pull requests, diffs, check runs, gists, or workflow runs.", load("gh-read"), whole),
     {
       name: "clone",
       label: "clone",
-      description: "Check out a public git repository (https:// or git://) for this thread. Returns the worktree path for read, grep, find and ls.",
+      description: "Check out a public git repository (https://) for this thread. Returns the worktree path for read, grep, find, ls, write and edit.",
       parameters: object({ url: nonEmpty }),
       // A checkout moves files under the confinement root, so no read races it.
       executionMode: "sequential" as const,
@@ -432,7 +532,38 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     pi.on("session_start", async () => pi.setActiveTools([...TOOLS]));
     pi.on("tool_call", async (e) => {
       if (!(TOOLS as readonly string[]).includes(e.toolName)) return { block: true, reason: `${e.toolName} is not a tier-1 tool` };
-      if (!(BUILTINS as readonly string[]).includes(e.toolName)) return undefined;
+      if ((WRITE_BUILTINS as readonly string[]).includes(e.toolName)) {
+        try {
+          const realTarget = confineWrite(cfg.root, e.input.path, {
+            memoryRoot: cfg.memoryRoot,
+            requireExisting: e.toolName === "edit",
+            mutants: cfg.mutants,
+          });
+          let newBytes = 0;
+          if (e.toolName === "write") {
+            newBytes = utf8Encoder.encode(typeof e.input.content === "string" ? e.input.content : "").byteLength;
+          } else {
+            const existingSize = existsSync(realTarget) ? statSync(realTarget).size : 0;
+            const oldLen = utf8Encoder.encode(typeof e.input.oldText === "string" ? e.input.oldText : "").byteLength;
+            const newLen = utf8Encoder.encode(typeof e.input.newText === "string" ? e.input.newText : "").byteLength;
+            newBytes = Math.max(0, existingSize - oldLen + newLen);
+          }
+          if (!scratchLedger.has(realTarget) && scratchLedger.size + 1 > maxScratchFiles) {
+            return { block: true, reason: `refused: scratch file quota (${maxScratchFiles} files) exceeded` };
+          }
+          const currentTotal = Array.from(scratchLedger.values()).reduce((a, b) => a + b, 0);
+          const prevBytes = scratchLedger.get(realTarget) ?? 0;
+          if (currentTotal - prevBytes + newBytes > maxScratchBytes) {
+            return { block: true, reason: `refused: scratch byte quota (${maxScratchBytes} bytes) exceeded` };
+          }
+          scratchLedger.set(realTarget, newBytes);
+          e.input.path = realTarget;
+        } catch (err) {
+          return { block: true, reason: `refused: ${(err as Error).message}` };
+        }
+        return undefined;
+      }
+      if (!(READ_BUILTINS as readonly string[]).includes(e.toolName)) return undefined;
       try {
         // The built-in opens exactly the path checked.
         e.input.path = confine(cfg.root, e.input.path, cfg.memoryRoot);

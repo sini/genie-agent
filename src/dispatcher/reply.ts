@@ -9,6 +9,7 @@ export interface ExpertReply {
   gaps: string[];
   tier: "expert";
   escalate?: boolean;
+  silent?: boolean;
 }
 
 export type ExpertReplyValidation =
@@ -16,7 +17,7 @@ export type ExpertReplyValidation =
   | { ok: false; error: string; errors: string[] };
 
 const REQUIRED_FIELDS = ["answer", "confidence", "gaps", "tier"] as const;
-const ALLOWED_FIELDS = new Set<string>(["answer", "confidence", "gaps", "tier", "escalate"]);
+const ALLOWED_FIELDS = new Set<string>(["answer", "confidence", "gaps", "tier", "escalate", "silent"]);
 
 export function validateExpertReply(val: unknown): ExpertReplyValidation {
   if (typeof val !== "object" || val === null || Array.isArray(val)) {
@@ -38,9 +39,15 @@ export function validateExpertReply(val: unknown): ExpertReplyValidation {
     }
   }
 
+  const isSilent = obj.silent === true;
+
   if ("answer" in obj) {
     if (typeof obj.answer !== "string") {
       errs.push("$.answer: expected string");
+    } else if (isSilent) {
+      if (obj.answer !== "") {
+        errs.push('$.answer: expected const ""');
+      }
     } else if (obj.answer.length < 1) {
       errs.push("$.answer: length 0 < minLength 1");
     }
@@ -75,6 +82,10 @@ export function validateExpertReply(val: unknown): ExpertReplyValidation {
     errs.push("$.escalate: expected boolean");
   }
 
+  if ("silent" in obj && typeof obj.silent !== "boolean") {
+    errs.push("$.silent: expected boolean");
+  }
+
   if (errs.length > 0) {
     return { ok: false, error: errs.join("; "), errors: errs };
   }
@@ -85,6 +96,7 @@ export function validateExpertReply(val: unknown): ExpertReplyValidation {
     gaps: [...(obj.gaps as string[])],
     tier: "expert",
     ...(typeof obj.escalate === "boolean" ? { escalate: obj.escalate } : {}),
+    ...(typeof obj.silent === "boolean" ? { silent: obj.silent } : {}),
   };
   return { ok: true, value: reply };
 }

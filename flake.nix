@@ -432,8 +432,10 @@
                     ./src/state
                     ./src/supervisor
                     ./src/tier
+                    ./src/tier1/schema.ts
                     ./src/dispatcher/xmsg.ts
                     ./src/guard/verdict.ts
+                    ./schemas
                     ./prompts
                     ./tests/mirror.test.ts
                   ];
@@ -444,7 +446,17 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/show/diff/blame/grep on bare mirror (including C-N1 single-rev diff), refuses flag-injection at schema and sink (F3), cleans stale genie-pins (Q5), and mutant M-git-allow-leading-dash goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-git-dash
+                chmod -R u+w $TMPDIR/mut-git-dash
+                substituteInPlace $TMPDIR/mut-git-dash/src/mirror/index.ts \
+                  --replace-fail 'const revRe = opts.mutants?.allowLeadingDash ? MUTANT_ALLOW_LEADING_DASH_REV_RE : GIT_REV_RE;' 'const revRe = MUTANT_ALLOW_LEADING_DASH_REV_RE;' \
+                  --replace-fail '(!opts.mutants?.allowLeadingDash && query.startsWith("-")) ||' "" \
+                  --replace-fail 'const endOpts = opts.mutants?.allowLeadingDash ? [] : ["--end-of-options"];' 'const endOpts: string[] = [];'
+                if (cd $TMPDIR/mut-git-dash && node --test --test-force-exit --test-name-pattern='oracle O-GC1-git' tests/mirror.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-git-allow-leading-dash survived in mirror" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # Tier 1's tool surface: exactly twelve tools, the source tools confined to the thread's
@@ -495,12 +507,12 @@
                 node --test --test-reporter=tap tests/tier1.test.ts tests/tier1-draft.test.ts tests/tier1-eval.test.ts tests/tier1-questions.test.ts tests/memory-eval.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] \
-                  && grep -q '^ok [0-9]* - oracle: the tool list is exactly the thirteen$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle: the tool list is exactly the seventeen$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: the draft parser accepts every valid reply and rejects every invalid one$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: a degraded arm scores below real by more than paired bootstrap noise band$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: compareArms reports inside_noise_band when paired bootstrap CI crosses zero$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle: exploratory correctness predictors calculate AUROC and lift on distinct answered questions$' $TMPDIR/tap \
-                  && grep -q '^ok [0-9]* - oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle C2.2.2 (Item 1 & 3): runArm offers all 17 production TOOLS and executes built-in read/grep/find/ls with confinement$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 1): eval tool set and system prompt equal production tier1Launch byte-for-byte$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 2): checkpointed run with --resume skips finished questions without calling pi$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle C2.3 (Cell 3): unanswered question (pi settles without reply or times out) has draft undefined, score 0, and counts in n_missing$' $TMPDIR/tap \
@@ -516,9 +528,27 @@
                   && grep -q '^ok [0-9]* - oracle (G11): parameterized web_fetch (including G10 100 KiB paging) and web_search over webScreen enabled true and false: off mode makes 0 guard calls and matches on-mode allow$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (GI-8 e): tier1 prompts contain the verbatim room_context cue and room_context tool registration has no room parameter, boolean, or \$ref$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle (GI-11): all three tier1 prompt variants carry the verbatim self-description cue$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API, sends read token from host without mounting it in pi jail, refuses path-traversal id and 302 redirects (F8), and mutants M-gh-read-bypass-id-validation and M-gh-read-follow-redirect go RED$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - Hermetic Memory Eval: each memory arm beats no-memory across repeated runs$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - memory-eval questions: ids unique and every claim specific$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-gh-id
+                chmod -R u+w $TMPDIR/mut-gh-id
+                substituteInPlace $TMPDIR/mut-gh-id/src/tier1/github.ts \
+                  --replace-fail 'const bypassId = opts.mutants?.bypassIdValidation === true;' 'const bypassId = true;'
+                if (cd $TMPDIR/mut-gh-id && node --test --test-force-exit --test-name-pattern='oracle O-GC1-gh-read' tests/tier1.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-gh-read-bypass-id-validation survived in tier1" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-gh-redir
+                chmod -R u+w $TMPDIR/mut-gh-redir
+                substituteInPlace $TMPDIR/mut-gh-redir/src/tier1/github.ts \
+                  --replace-fail 'redirect: opts.mutants?.followRedirect ? "follow" : "manual",' 'redirect: "follow",' \
+                  --replace-fail 'if (!opts.mutants?.followRedirect && res.status >= 300 && res.status < 400)' 'if (false)'
+                if (cd $TMPDIR/mut-gh-redir && node --test --test-force-exit --test-name-pattern='oracle O-GC1-gh-read' tests/tier1.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-gh-read-follow-redirect survived in tier1" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The tier-1 supervisor: one pi process per thread, so a fact planted in one thread is
@@ -650,11 +680,16 @@
           eval-argv =
             pkgs.runCommand "genie-agent-eval-argv"
               {
-                nativeBuildInputs = [ pkgs.nodejs ];
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.bubblewrap
+                  pkgs.nix
+                ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/state
                     ./src/tier1/schema.ts
                     ./schemas/eval-request.json
                     ./tests/eval-argv.test.ts
@@ -666,13 +701,29 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/eval-argv.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (N1): runEval bwrapArgv includes --unshare-pid and --bind /proc /proc, and mutant without --unshare-pid goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (N1): runEval bwrapArgv includes --unshare-pid and --bind /proc /proc, and mutant without --unshare-pid goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-eval: worktreeSubdir and apply (standalone + secrets:stub), cross-thread confinement, discriminating pure-eval probes (F7b), and mutants M-eval-impure and M-worktree-subdir-no-prefix-check go RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 cp -r . $TMPDIR/mut-eval-argv
                 chmod -R u+w $TMPDIR/mut-eval-argv
                 substituteInPlace $TMPDIR/mut-eval-argv/src/eval/run.ts \
                   --replace-fail '"--unshare-pid",' ""
                 if (cd $TMPDIR/mut-eval-argv && node --test --test-force-exit tests/eval-argv.test.ts >/dev/null 2>&1); then
                   echo "mutant M-eval-no-unshare-pid survived in eval-argv" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-eval-impure
+                chmod -R u+w $TMPDIR/mut-eval-impure
+                substituteInPlace $TMPDIR/mut-eval-impure/src/eval/run.ts \
+                  --replace-fail '"pure-eval": mutants?.evalImpure ? "false" : "true",' '"pure-eval": "false",'
+                if (cd $TMPDIR/mut-eval-impure && node --test --test-force-exit --test-name-pattern='oracle O-GC1-eval' tests/eval-argv.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-eval-impure survived in eval-argv" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-eval-subdir
+                chmod -R u+w $TMPDIR/mut-eval-subdir
+                substituteInPlace $TMPDIR/mut-eval-subdir/src/eval/run.ts \
+                  --replace-fail 'if (!mutants?.worktreeSubdirNoPrefixCheck) {' 'if (false) {'
+                if (cd $TMPDIR/mut-eval-subdir && node --test --test-force-exit --test-name-pattern='oracle O-GC1-eval' tests/eval-argv.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-worktree-subdir-no-prefix-check survived in eval-argv" >&2
                   exit 1
                 fi
                 touch $out
@@ -923,16 +974,23 @@
           broker =
             pkgs.runCommand "genie-agent-broker"
               {
-                nativeBuildInputs = [ pkgs.nodejs ];
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.git
+                  pkgs.gnutar
+                ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
+                    ./src/eval
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
+                    ./src/mirror
                     ./src/redactor
-                    ./src/tier1/schema.ts
-                    ./schemas/proposal.json
+                    ./src/supervisor
+                    ./src/tier1
+                    ./schemas
                     ./tests/broker.test.ts
                   ];
                 };
@@ -942,7 +1000,41 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/broker.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F2): broker.allowedRepos defaults to empty (refusing all PR proposals before guard-out and act), admits exact and owner/\* matches, and mutant goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 / F2), subdirectory computeWorktreeDiff (C-N4), confineWrite + write-delta quota (F5 / F9), genie-bot identity & fork enforcement (F6 / Q1), and all four mutants go RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-wt-git
+                chmod -R u+w $TMPDIR/mut-wt-git
+                substituteInPlace $TMPDIR/mut-wt-git/src/mirror/index.ts \
+                  --replace-fail 'if (m?.worktreeGitCheckout) {' 'if (true) {'
+                if (cd $TMPDIR/mut-wt-git && node --test --test-force-exit --test-name-pattern='oracle O-GC1-propose' tests/broker.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-worktree-git-checkout survived in broker" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-write-confine
+                chmod -R u+w $TMPDIR/mut-write-confine
+                substituteInPlace $TMPDIR/mut-write-confine/src/tier1/index.ts \
+                  --replace-fail 'if (opts?.mutants?.writeConfineAllowMemoryAndDotdot) {' 'if (true) {'
+                if (cd $TMPDIR/mut-write-confine && node --test --test-force-exit --test-name-pattern='oracle O-GC1-propose' tests/broker.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-write-confine-allow-memory-and-dotdot survived in broker" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-bot-id
+                chmod -R u+w $TMPDIR/mut-bot-id
+                substituteInPlace $TMPDIR/mut-bot-id/src/broker/index.ts \
+                  --replace-fail 'if (c.botLogin && !c.mutants?.skipBotIdentity) {' 'if (false) {'
+                substituteInPlace $TMPDIR/mut-bot-id/src/broker/pr.ts \
+                  --replace-fail 'if (botLogin && !mutants?.skipBotIdentity) {' 'if (false) {'
+                if (cd $TMPDIR/mut-bot-id && node --test --test-force-exit --test-name-pattern='oracle O-GC1-propose' tests/broker.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-broker-skip-bot-identity survived in broker" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-guard-out
+                chmod -R u+w $TMPDIR/mut-guard-out
+                substituteInPlace $TMPDIR/mut-guard-out/src/broker/index.ts \
+                  --replace-fail 'if (guard.enable === false || mutants?.bypassGuardOut) {' 'if (true) {'
+                if (cd $TMPDIR/mut-guard-out && node --test --test-force-exit --test-name-pattern='oracle O-GC1-propose' tests/broker.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-propose-bypass-guard-out survived in broker" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The gist action through the broker against a stub GitHub: one POST /gists with the redacted
@@ -956,8 +1048,10 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
+                    ./src/eval
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
+                    ./src/mirror
                     ./src/redactor
                     ./src/tier1/schema.ts
                     ./schemas/proposal.json
@@ -990,8 +1084,10 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
+                    ./src/eval
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
+                    ./src/mirror
                     ./src/redactor
                     ./src/tier1/schema.ts
                     ./schemas/proposal.json
@@ -1118,10 +1214,18 @@
                 grep -q '^ok [0-9]* - oracle (GI-11): a guard-out that blocks the first draft and passes the second posts only the second with no WITHHELD; blocking every draft until the turn settles posts WITHHELD once$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GE1: root scrubs expert reply answer and gaps field-by-field while preserving tier and escalate, and rejects malformed expert replies without posting$' $TMPDIR/tap || exit 1
                 grep -q "^ok [0-9]* - oracle (GL1): main enforces tier1.maxConcurrentTurns FIFO slots, starts the 10m timer at slot acquisition, and fast-escalates queued turns past tier1.maxQueueWaitSecs with 'tier-1 busy'$" $TMPDIR/tap || exit 1
-                grep -q '^ok [0-9]* - oracle GX2 (F2): propose on a public thread creates a PendingAction requiring a trusted !approve, refuses disallowed repos before notice or act, and mutant goes RED$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GC1-silent: silent reply ack (GAP-1), redactLastPost & editLastPost (GAP-6), screened=true trust boundary & forgery resistance (GAP-7 / Q5), recall_transcript in escalation (GAP-5), gitScreen/ghScreen toggles, public propose without !approve, and M-ignore-silent-flag goes RED$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.json before any approval notice, screens the notice through redact() and outbound(), caps pending actions at 1 per thread, and mutant goes RED$' $TMPDIR/tap || exit 1
                 grep -q "^ok [0-9]* - oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED$" $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-silent
+                chmod -R u+w $TMPDIR/mut-silent
+                substituteInPlace $TMPDIR/mut-silent/src/root/index.ts \
+                  --replace-fail 'if (parsed.silent === true && !mutants?.ignoreSilentFlag) {' 'if (false) {'
+                if (cd $TMPDIR/mut-silent && node --test --test-force-exit --test-name-pattern='oracle O-GC1-silent' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-ignore-silent-flag survived in root" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover

@@ -23,12 +23,15 @@ let
     else
       null;
   brokerTokenRuntime = if cfg.broker.tokenFile != null then "${credDir}/broker-token" else null;
+  githubReadTokenRuntime =
+    if cfg.githubReadTokenFile != null then "${credDir}/github-read-token" else null;
   s3SecretKeyRuntime = if cfg.s3 != null then "${credDir}/s3-secret-key" else null;
 
   rootConfigJson = shared.mkRootConfigJson { inherit lib pkgs; } cfg {
     modelKeyFile = modelKeyRuntime;
     guardOutKeyFile = guardOutKeyRuntime;
     brokerTokenFile = brokerTokenRuntime;
+    githubReadTokenFile = githubReadTokenRuntime;
     s3SecretKeyFile = s3SecretKeyRuntime;
   };
 
@@ -715,6 +718,9 @@ in
               cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null
             ) "guard-out-key:${toString cfg.broker.guardOut.keyFile}"
             ++ lib.optional (cfg.broker.tokenFile != null) "broker-token:${toString cfg.broker.tokenFile}"
+            ++ lib.optional (
+              cfg.githubReadTokenFile != null
+            ) "github-read-token:${toString cfg.githubReadTokenFile}"
             ++ lib.optional (cfg.s3 != null) "s3-secret-key:${toString cfg.s3.secretKeyFile}";
 
             BindReadOnlyPaths = [ "${cfg.operatingMemoryPackage}:${cfg.tier1.memoryRoot}" ];

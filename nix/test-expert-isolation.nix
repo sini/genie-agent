@@ -546,13 +546,15 @@ let
     b4_ro = {
         "nix_store": check_ro_create("/nix/store/.gv2-probe-w"),
         "memory_dir": check_ro_create("/memory/.gv2-probe-w"),
-        "worktree_dir": check_ro_create(f"/var/lib/genie-agent/worktrees/{tid_a}/.gv2-probe-w"),
-        "worktree_file": check_ro_existing(f"{clone_path}/README.md"),
         "agent_dir": check_ro_create(f"{agent_dir}/.gv2-probe-w"),
         "agent_models": check_ro_existing(f"{agent_dir}/models.json"),
         "state_root": check_ro_create("/var/lib/genie-agent/state/.gv2-probe-w"),
         "worktrees_root": check_ro_create("/var/lib/genie-agent/worktrees/.gv2-probe-w"),
     }
+    b4_wt_rw = (
+        check_ro_create(f"/var/lib/genie-agent/worktrees/{tid_a}/.gv2-probe-w") == "WRITABLE"
+        and check_ro_existing(f"{clone_path}/README.md") == "WRITABLE"
+    )
     sess_probe = f"/var/lib/genie-agent/state/{tid_a}/session/.gv2-probe-ok"
     try:
         with open(sess_probe, "w", encoding="utf-8") as sf:
@@ -561,7 +563,7 @@ let
         b4_sess_rw = "OK"
     except OSError as ex:
         b4_sess_rw = errno.errorcode.get(ex.errno, str(ex.errno))
-    b4_ok = all(v == "EROFS" for v in b4_ro.values()) and b4_sess_rw == "OK"
+    b4_ok = all(v == "EROFS" for v in b4_ro.values()) and b4_wt_rw and b4_sess_rw == "OK"
 
     # B5 (C2): the jail's /proc lists no PID outside pi's own jail
     proc_pids = sorted(int(x) for x in os.listdir("/proc") if x.isdigit())

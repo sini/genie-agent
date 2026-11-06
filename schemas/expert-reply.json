@@ -12,8 +12,7 @@
   ],
   "properties": {
     "answer": {
-      "type": "string",
-      "minLength": 1
+      "type": "string"
     },
     "confidence": {
       "type": "number",
@@ -31,6 +30,26 @@
     },
     "escalate": {
       "type": "boolean"
+    },
+    "silent": {
+      "type": "boolean"
+    }
+  },
+  "if": {
+    "required": [
+      "silent"
+    ],
+    "properties": {
+      "silent": {
+        "const": true
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "answer": {
+        "minLength": 1
+      }
     }
   }
 }

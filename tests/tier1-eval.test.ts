@@ -519,7 +519,7 @@ test("oracle: exploratory correctness predictors calculate AUROC and lift on dis
   }
 });
 
-test("oracle C2.2.2 (Item 1 & 3): runArm offers all 12 production TOOLS and executes built-in read/grep/find/ls with confinement", async () => {
+test("oracle C2.2.2 (Item 1 & 3): runArm offers all 17 production TOOLS and executes built-in read/grep/find/ls with confinement", async () => {
   const tmp = realpathSync(mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-c21-builtin-`));
   mkdirSync(`${tmp}/sub`, { recursive: true });
   writeFileSync(`${tmp}/sub/mod.nix`, "{ services.foo.enable = true; }\n");
@@ -676,6 +676,8 @@ test("oracle C2.3 (Cell 1): eval tool set and system prompt equal production tie
         },
         propose: async () => ({}),
         clone: async () => ({ path: "", rev: "x" }),
+        git: async () => "",
+        gh_read: async () => ({}),
         screen: async (x) => x,
         room_context: async () => "",
       }),

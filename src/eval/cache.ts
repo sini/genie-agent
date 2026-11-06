@@ -17,10 +17,11 @@ export function cacheKeyFor(launch: Launch): CacheKey {
     [
       ...(effectiveTier(launch) === "trusted" ? ["trusted"] : []),
       ...(launch.request.secrets === "stub" ? ["secrets:stub"] : []),
+      ...(launch.request.apply !== undefined ? [`apply:${launch.request.apply}`] : []),
     ];
   return {
-    repo: launch.request.repo,
-    rev: launch.request.rev,
+    repo: launch.request.repo ?? `worktree:${launch.request.worktreeSubdir ?? ""}`,
+    rev: launch.request.rev ?? "worktree",
     attr: launch.request.attr,
     flags,
   };
@@ -35,11 +36,16 @@ export type Runner = (launch: Launch) => Promise<EvalResult>;
 export const isCacheable = (result: EvalResult): boolean => result.limit_hit === "none";
 
 // Wraps a thread-aware runner (such as perThread) with thread-state eval result caching.
+// Scratch `worktreeSubdir` evaluations are not cached across calls because files in the writable
+// worktree may be modified between evaluations by `write` or `edit`.
 export function withCache(
   store: EvalCacheStore,
   run: ThreadRunner,
 ): ThreadRunner {
   return async (thread: string, launch: Launch) => {
+    if (launch.request.worktreeSubdir !== undefined) {
+      return run(thread, launch.thread ? launch : { ...launch, thread });
+    }
     const key = cacheKeyFor(launch);
     const cached = store.cacheGet(thread, key) as EvalResult | undefined;
     if (cached !== undefined) {

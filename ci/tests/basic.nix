@@ -7,6 +7,8 @@ let
     "eval-request"
     "eval-result"
     "expert-reply"
+    "gh-read"
+    "git-request"
     "launch"
     "proposal"
     "thread-state"

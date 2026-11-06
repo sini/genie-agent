@@ -189,31 +189,34 @@ export function parseGuardVerdictReply(
 }
 
 import { threadName } from "../mirror/index.ts";
-import type { Tier } from "../state/index.ts";
+import type { ThreadStateStore, Tier } from "../state/index.ts";
 import { parseEnvelope } from "../tier/index.ts";
 
-const REQUEST_OPEN_RE = /^<request(?:\s+screened="false"(?:\s+note="[^"]*")?)?>$/;
+const REQUEST_OPEN_RE = /^<request(?:\s+(?:addressed="(?:true|false)"|screened="(?:true|false)"|note="[^"]*"))*>$/;
 
 // Parse a matrix-xmsg forward or control payload into a composition-root Inbound item, returning
 // also the thread id and header tier (when known) so XmsgIo can record the forward message id for replies.
 export function parseMatrixForward(
   text: string,
-): { item: Inbound; thread?: string; tier?: Tier; screened?: boolean } | null {
+): { item: Inbound; thread?: string; tier?: Tier; screened?: boolean; addressed?: boolean } | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
   // 1. Matrix envelope (matrix-xmsg src/context.rs:487, build_envelope_with_screening):
-  //    Header: `[matrix] room=<room> thread=<thread> user=<mapped> (<tier>)`
-  //    Blank line, `<request>` or `<request screened="false" note="…">` (context.rs:373),
+  //    Header: `[matrix] room=<room> thread=<thread> user=<mapped> (<tier>)` (optionally `addressed="true|false"`, GAP-1)
+  //    Blank line, `<request>`, `<request screened="true">`, or `<request screened="false" note="…">` (context.rs:373),
   //    JSON line, `</request>`, blank line, `<context ...>` blocks.
-  //    The sender tier is read strictly from the header's `(<tier>)`, never from the body.
+  //    The sender tier and addressed attribute are read strictly from the header, and `screened` strictly from the
+  //    single outer `<request ...>` tag that matrix-xmsg wrote (Q5), never from message body text.
   if (trimmed.startsWith("[matrix] ")) {
     const lines = trimmed.split("\n");
     const header = lines[0];
-    const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=.+\s+\((trusted|public)\)$/.exec(header);
+    const m = /^\[matrix\]\s+room=\S+\s+thread=(\S+)\s+user=.+\s+\((trusted|public)\)(?:\s+addressed="(true|false)")?$/.exec(header);
     if (!m) return null;
     const thread = m[1];
     if (!threadName.test(thread)) return null;
+    const hasAddressedAttr = m[3] !== undefined;
+    const addressed = m[3] ? m[3] === "true" : true;
     let tier: Tier;
     try {
       tier = parseEnvelope(trimmed).request.tier;
@@ -222,12 +225,25 @@ export function parseMatrixForward(
     }
     const reqOpenIdx = lines.findIndex((l, idx) => idx > 0 && REQUEST_OPEN_RE.test(l));
     const reqCloseIdx = lines.indexOf("</request>", reqOpenIdx + 1);
-    if (reqOpenIdx === -1 || reqCloseIdx === -1) return null;
+    if (reqOpenIdx === -1 || reqCloseIdx !== reqOpenIdx + 2) return null;
+    const reqAddrMatch = /\baddressed="(true|false)"/.exec(lines[reqOpenIdx]);
+    const hasAddressed = hasAddressedAttr || reqAddrMatch !== null;
+    const effectiveAddressed = m[3] ? m[3] === "true" : reqAddrMatch ? reqAddrMatch[1] === "true" : true;
     const unscreened = lines[reqOpenIdx].includes('screened="false"');
-    const item: Inbound = unscreened
-      ? { thread, envelope: trimmed, screened: false }
-      : { thread, envelope: trimmed };
-    return { item, thread, tier, screened: !unscreened };
+    const preScreened = lines[reqOpenIdx].includes('screened="true"');
+    const item: Inbound = {
+      thread,
+      envelope: trimmed,
+      ...(unscreened ? { screened: false as const } : preScreened ? { screened: true as const } : {}),
+      ...(hasAddressed ? { addressed: effectiveAddressed } : {}),
+    };
+    return {
+      item,
+      thread,
+      tier,
+      screened: !unscreened,
+      ...(hasAddressed ? { addressed: effectiveAddressed } : {}),
+    };
   }
 
   // 2. JSON control payloads forwarded by matrix-xmsg (`!trust`, `!deeper`, reactions ✅/🔍/🔓, `!approve`)
@@ -310,6 +326,7 @@ export interface XmsgIoOptions {
   requestTimeoutMs?: number;
   guard?: XmsgGuardClientOptions | null;
   guardEnable?: boolean;
+  store?: ThreadStateStore;
   wait?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
   reconnectStartMs?: number;
@@ -336,11 +353,13 @@ export class XmsgIo implements Io {
   private readonly service: string;
   private readonly pollWaitMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly store?: ThreadStateStore;
   private readonly wait?: (ms: number) => Promise<void>;
   private readonly log: (line: string) => void;
   private readonly reconnectStartMs: number;
   private readonly closeAbort = new AbortController();
   private readonly latestForwardByThread = new Map<string, string>();
+  private readonly lastReplyMessageIdByThread = new Map<string, string>();
   private readonly escalationThreadByMsgId = new Map<string, string>();
   private readonly solicitedThreadByRequestId = new Map<string, string>();
   private readonly pendingRequests = new Map<string, PendingRequest>();
@@ -364,6 +383,7 @@ export class XmsgIo implements Io {
     this.client = client ?? new SocketXmsg(dir, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+    this.store = opts.store;
     this.wait = opts.wait;
     this.log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
     this.reconnectStartMs = opts.reconnectStartMs ?? 1_000;
@@ -397,8 +417,13 @@ export class XmsgIo implements Io {
         if (!fwdId) {
           throw new Error(`xmsg post: no forward message id recorded for thread ${thread}`);
         }
-        await this.client.reply(fwdId, JSON.stringify(message));
-        return fwdId;
+        const replyMsgId = await this.client.reply(fwdId, JSON.stringify(message));
+        const corrId = typeof replyMsgId === "string" && replyMsgId ? replyMsgId : fwdId;
+        if ("text" in message && !("edit" in message)) {
+          this.lastReplyMessageIdByThread.set(thread, corrId);
+          this.store?.setLastReplyMessageId(thread, corrId);
+        }
+        return corrId;
       },
     };
 
@@ -450,6 +475,26 @@ export class XmsgIo implements Io {
 
   bindSolicitedRequest(requestMessageId: string, thread: string): void {
     this.solicitedThreadByRequestId.set(requestMessageId, thread);
+  }
+
+  lastReplyMessageId(thread: string): string | undefined {
+    return this.lastReplyMessageIdByThread.get(thread) ?? this.store?.lastReplyMessageId(thread);
+  }
+
+  async redactLastPost(thread: string, reason?: string): Promise<string | void> {
+    const targetId = this.lastReplyMessageId(thread);
+    if (!targetId) {
+      throw new Error(`xmsg redactLastPost: no reply message id recorded for thread ${thread}`);
+    }
+    return this.post.post(thread, reason !== undefined ? { redact: targetId, reason } : { redact: targetId });
+  }
+
+  async editLastPost(thread: string, text: string): Promise<string | void> {
+    const targetId = this.lastReplyMessageId(thread);
+    if (!targetId) {
+      throw new Error(`xmsg editLastPost: no reply message id recorded for thread ${thread}`);
+    }
+    return this.post.post(thread, { edit: targetId, text });
   }
 
   close(): void {

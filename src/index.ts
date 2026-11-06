@@ -5,6 +5,8 @@ export const schemaNames = [
   "draft",
   "eval-request",
   "eval-result",
+  "gh-read",
+  "git-request",
   "launch",
   "escalation",
   "expert-reply",

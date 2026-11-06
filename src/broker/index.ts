@@ -6,10 +6,22 @@
 // The redactor runs BEFORE guard-out, once, over every string that will leave. Guard-out is a
 // model, and a credential must never enter a model's context (§5.2 item 6), and the act then
 // publishes exactly the bytes guard-out passed. Guard-out still sees the `[redacted:<kind>]` mark.
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { resolveWorktreeSubdir, WORKTREE_SUBDIR_RE } from "../eval/run.ts";
 import { reviewOut, type NinferOut } from "../guard/service.ts";
+import { listMirrorTree, mirrorKey, readMirrorPin } from "../mirror/index.ts";
 import { redact } from "../redactor/index.ts";
 import { errors, load } from "../tier1/schema.ts";
+
+export interface PrTreeEntry {
+  path: string;
+  mode: "100644" | "100755" | "120000";
+  type: "blob";
+  content?: string;
+  sha?: null;
+}
 
 // One record of schemas/proposal.json.
 export interface Proposal {
@@ -17,10 +29,19 @@ export interface Proposal {
   repo?: string;
   branch?: string;
   commits?: string[];
-  files: Record<string, string>;
+  files?: Record<string, string>;
+  worktreeSubdir?: string;
+  // Populated by genie-root/broker when diffing `worktreeSubdir` against the pinned mirror base tree.
+  treeEntries?: PrTreeEntry[];
+  baseTreeSha?: string;
+  baseCommitSha?: string;
   title: string;
   body: string;
 }
+
+export const BOT_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+export const DEFAULT_BOT_LOGIN = "genie-bot";
+export const DEFAULT_FORBIDDEN_LOGINS: readonly string[] = [];
 
 export const REPO_COORD_RE =
   /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
@@ -81,12 +102,34 @@ export function isValidProposalFilePath(path: unknown, kind: "gist" | "pr"): pat
 }
 
 export function validateProposalFields(p: Proposal): string | null {
-  if (!p.files || typeof p.files !== "object" || Object.keys(p.files).length < 1) {
+  const hasFiles = p.files !== undefined;
+  const hasSubdir = p.worktreeSubdir !== undefined;
+  if (hasFiles && hasSubdir) {
+    return "$.files and $.worktreeSubdir are mutually exclusive";
+  }
+  if (!hasFiles && !hasSubdir) {
     return "$.files must have at least 1 file";
   }
-  for (const k of Object.keys(p.files)) {
-    if (!isValidProposalFilePath(k, p.kind)) {
-      return `$.files[${JSON.stringify(k)}] is not a valid file path`;
+  if (hasFiles) {
+    if (!p.files || typeof p.files !== "object" || Object.keys(p.files).length < 1) {
+      return "$.files must have at least 1 file";
+    }
+    for (const k of Object.keys(p.files)) {
+      if (!isValidProposalFilePath(k, p.kind)) {
+        return `$.files[${JSON.stringify(k)}] is not a valid file path`;
+      }
+    }
+  }
+  if (hasSubdir) {
+    if (p.kind !== "pr") {
+      return "$.worktreeSubdir is only valid for kind === 'pr'";
+    }
+    if (
+      typeof p.worktreeSubdir !== "string" ||
+      !WORKTREE_SUBDIR_RE.test(p.worktreeSubdir) ||
+      p.worktreeSubdir.split("/").some((s) => s === "." || s === "..")
+    ) {
+      return `$.worktreeSubdir is not a valid relative worktree path: ${JSON.stringify(p.worktreeSubdir)}`;
     }
   }
   if (p.repo !== undefined && !isValidRepoCoord(p.repo)) {
@@ -111,6 +154,189 @@ export function validateProposalFields(p: Proposal): string | null {
   return null;
 }
 
+export interface BrokerMutants {
+  // M-broker-skip-bot-identity: skips GET /user === botLogin and upstream.permissions checks.
+  skipBotIdentity?: boolean;
+  // M-propose-bypass-guard-out: skips reviewOut in outbound().
+  bypassGuardOut?: boolean;
+}
+
+export async function verifyBotIdentity(
+  githubApi: string,
+  token: string,
+  botLogin: string,
+  forbiddenLogins: readonly string[] = [],
+  timeoutMs = 15_000,
+): Promise<string> {
+  if (!BOT_LOGIN_RE.test(botLogin)) {
+    throw new Error(`invalid broker.botLogin: ${botLogin}`);
+  }
+  if (forbiddenLogins.some((f) => f.toLowerCase() === botLogin.toLowerCase())) {
+    throw new Error(`broker.botLogin ${botLogin} is in forbiddenLogins`);
+  }
+  const base = githubApi.replace(/\/+$/, "");
+  const res = await fetch(`${base}/user`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "genie-agent",
+    },
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error("broker identity check: HTTP redirect refused");
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`broker identity check GET /user failed: HTTP ${res.status}`);
+  }
+  const user = JSON.parse(text) as { login?: unknown };
+  const login = typeof user?.login === "string" ? user.login : "";
+  if (!login) {
+    throw new Error("broker identity check: /user response missing login");
+  }
+  if (forbiddenLogins.some((f) => f.toLowerCase() === login.toLowerCase())) {
+    throw new Error(`broker token identity forbidden: ${login}`);
+  }
+  if (login.toLowerCase() !== botLogin.toLowerCase()) {
+    throw new Error(`broker token identity mismatch: expected ${botLogin}, got ${login}`);
+  }
+  return login;
+}
+
+async function resolveCommitTreeSha(bareDir: string, commitRev: string): Promise<string> {
+  return new Promise<string>((resolveSha, reject) => {
+    const child = spawn(
+      "git",
+      [
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        `--git-dir=${bareDir}`,
+        "rev-parse",
+        "--verify",
+        `${commitRev}^{tree}`,
+      ],
+      {
+        cwd: "/",
+        env: {
+          PATH: process.env.PATH,
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let out = "";
+    let err = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolveSha(out.trim());
+      else reject(new Error(`git rev-parse tree: ${err.trim() || `exit ${code}`}`));
+    });
+  });
+}
+
+// Computes the Git tree delta of `<worktreeRoot>/<thread>/<worktreeSubdir>` against the thread's
+// pinned base commit in `<mirrorRoot>/<key>` purely in Node (GC1 §2.6.2, F2, F4, Gate v1 C1 & C-N4).
+// Never runs `git` inside the writable worktree, ignores `.git` entries, refuses symlinks, ignores
+// `160000` gitlinks, and scopes `ls-tree` to the walked prefix so files outside a subdirectory
+// worktreeSubdir are never marked deleted (Gate v1 C-N4).
+export async function computeWorktreeDiff(opts: {
+  mirrorRoot: string;
+  worktreeRoot: string;
+  thread: string;
+  repo: string;
+  worktreeSubdir: string;
+  repoUrlBase?: string;
+}): Promise<{
+  entries: PrTreeEntry[];
+  baseCommitSha: string;
+  baseTreeSha: string;
+}> {
+  if (!isValidRepoCoord(opts.repo)) {
+    throw new Error(`invalid repo coordinate: ${opts.repo}`);
+  }
+  const resolvedSubdir = resolveWorktreeSubdir(opts.worktreeRoot, opts.thread, opts.worktreeSubdir);
+  const segs = opts.worktreeSubdir.split("/");
+  const firstSeg = segs[0] ?? "";
+  const urlBase = (opts.repoUrlBase ?? "https://github.com").replace(/\/+$/, "");
+  const expectedKey = mirrorKey(`${urlBase}/${opts.repo}`);
+  // Gate v1 C-N4: require worktreeSubdir's first segment to equal mirrorKey("https://github.com/" + repo).
+  if (firstSeg !== expectedKey) {
+    throw new Error(
+      `worktreeSubdir first segment must match the cloned mirror key for ${opts.repo} (expected ${expectedKey}, got ${firstSeg})`,
+    );
+  }
+  const bareDir = `${opts.mirrorRoot}/${expectedKey}`;
+  const pin = readMirrorPin(bareDir, opts.thread);
+  if (!pin) {
+    throw new Error(`clone https://github.com/${opts.repo} in this thread before proposing from worktreeSubdir`);
+  }
+  const subPrefix = segs.slice(1).join("/");
+  const baseList = await listMirrorTree(bareDir, pin.rev, subPrefix || undefined);
+  const baseTreeSha = await resolveCommitTreeSha(bareDir, pin.rev);
+  const baseMap = new Map(baseList.map((e) => [e.path, e]));
+
+  const diskFiles = new Map<string, { mode: "100644" | "100755"; sha: string; content: string }>();
+  const walk = (dir: string, relPrefix: string) => {
+    for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+      if (dirent.name === ".git") continue;
+      const fullPath = `${dir}/${dirent.name}`;
+      const relToSub = relPrefix ? `${relPrefix}/${dirent.name}` : dirent.name;
+      const st = lstatSync(fullPath);
+      if (st.isSymbolicLink()) {
+        throw new Error(`worktreeSubdir contains a symlink at ${relToSub}`);
+      }
+      if (st.isDirectory()) {
+        walk(fullPath, relToSub);
+      } else if (st.isFile()) {
+        const repoRelPath = subPrefix ? `${subPrefix}/${relToSub}` : relToSub;
+        if (!isValidProposalFilePath(repoRelPath, "pr")) {
+          throw new Error(`worktreeSubdir contains invalid file path ${repoRelPath}`);
+        }
+        const buf = readFileSync(fullPath);
+        const sha = createHash("sha1").update(`blob ${buf.length}\0`).update(buf).digest("hex");
+        const mode: "100644" | "100755" = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+        diskFiles.set(repoRelPath, { mode, sha, content: buf.toString("utf8") });
+      } else {
+        throw new Error(`worktreeSubdir contains non-regular file at ${relToSub}`);
+      }
+    }
+  };
+  walk(resolvedSubdir, "");
+
+  const entries: PrTreeEntry[] = [];
+  for (const [repoRelPath, disk] of diskFiles) {
+    const base = baseMap.get(repoRelPath);
+    if (!base) {
+      entries.push({ path: repoRelPath, mode: disk.mode, type: "blob", content: disk.content });
+    } else if (disk.sha !== base.sha) {
+      const mode: "100644" | "100755" | "120000" = base.mode === "120000" ? "120000" : disk.mode;
+      entries.push({ path: repoRelPath, mode, type: "blob", content: disk.content });
+    } else if (base.mode !== "120000" && disk.mode !== base.mode) {
+      entries.push({ path: repoRelPath, mode: disk.mode, type: "blob", content: disk.content });
+    }
+  }
+  for (const [repoRelPath, base] of baseMap) {
+    if (!diskFiles.has(repoRelPath)) {
+      entries.push({ path: repoRelPath, mode: base.mode, type: "blob", sha: null });
+    }
+  }
+  return { entries, baseCommitSha: pin.rev, baseTreeSha };
+}
+
 // The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read and the
 // thread the proposal came from (A3's PR body links it). It is the only thing the token is handed to.
 export type Act = (p: Proposal, token: string, thread: string) => Promise<{ url: string }>;
@@ -132,10 +358,17 @@ export interface Config {
   tokenFile: string;
   guard: GuardOutConfig;
   act: Act;
-  // Explicit allowlist of "owner/repo" or "owner/*" coordinates for PR proposals; defaults to [] (refuse all).
-  allowedRepos?: string[];
+  // Required in production via validateRootConfig (GC1 OQ-3, F6): verified against GET /user before any act.
+  botLogin?: string;
+  // Disallowed token identities (e.g. owner logins, GC1 OQ-3, F6, Q3).
+  forbiddenLogins?: string[];
+  githubApi?: string;
+  mirrorRoot?: string;
+  worktreeRoot?: string;
+  repoUrlBase?: string;
   // As the redactor takes them, from secretLineHashes.
   secretFileHashes?: string[];
+  mutants?: BrokerMutants;
 }
 
 // What the broker records against the thread: never the token.
@@ -160,6 +393,7 @@ export async function outbound<T>(
   build: (scrub: (s: string) => string) => T,
   guard: GuardOutConfig,
   secretFileHashes?: string[],
+  mutants?: Pick<BrokerMutants, "bypassGuardOut">,
 ): Promise<{ redactions: string[] } & ({ value: T } | { reason: string })> {
   const redactions: string[] = [];
   const scrub = (s: string) => {
@@ -168,7 +402,7 @@ export async function outbound<T>(
     return r.text;
   };
   const value = build(scrub);
-  if (guard.enable === false) {
+  if (guard.enable === false || mutants?.bypassGuardOut) {
     return { redactions, value };
   }
   try {
@@ -196,11 +430,34 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
   const v = value as Proposal;
   const fieldErr = validateProposalFields(v);
   if (fieldErr !== null) return done(false, `not a proposal: ${fieldErr}`);
-  if (v.kind === "pr" || v.repo !== undefined) {
-    if (!isRepoAllowed(v.repo, c.allowedRepos ?? [])) {
-      return done(false, `repo not in broker.allowedRepos: ${v.repo}`);
+
+  let treeEntries: PrTreeEntry[] | undefined;
+  let baseCommitSha: string | undefined;
+  let baseTreeSha: string | undefined;
+  if (v.worktreeSubdir !== undefined) {
+    if (!c.mirrorRoot || !c.worktreeRoot) {
+      return done(false, "worktreeSubdir requires mirrorRoot and worktreeRoot");
+    }
+    try {
+      const diff = await computeWorktreeDiff({
+        mirrorRoot: c.mirrorRoot,
+        worktreeRoot: c.worktreeRoot,
+        thread,
+        repo: v.repo!,
+        worktreeSubdir: v.worktreeSubdir,
+        repoUrlBase: c.repoUrlBase,
+      });
+      if (diff.entries.length === 0) {
+        return done(false, "not a proposal: worktreeSubdir has no changes relative to base commit");
+      }
+      treeEntries = diff.entries;
+      baseCommitSha = diff.baseCommitSha;
+      baseTreeSha = diff.baseTreeSha;
+    } catch (e) {
+      return done(false, `not a proposal: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+
   const out = await outbound(
     `genie-bot is about to publish this ${v.kind} on GitHub.`,
     (scrub): Proposal => ({
@@ -208,23 +465,33 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
       ...(v.repo === undefined ? {} : { repo: scrub(v.repo) }),
       ...(v.branch === undefined ? {} : { branch: scrub(v.branch) }),
       ...(v.commits === undefined ? {} : { commits: v.commits.map(scrub) }),
-      files: Object.fromEntries(Object.entries(v.files).map(([k, f]) => [scrub(k), scrub(f)])),
+      ...(v.files === undefined
+        ? {}
+        : { files: Object.fromEntries(Object.entries(v.files).map(([k, f]) => [scrub(k), scrub(f)])) }),
+      ...(v.worktreeSubdir === undefined ? {} : { worktreeSubdir: scrub(v.worktreeSubdir) }),
+      ...(treeEntries === undefined
+        ? {}
+        : {
+            treeEntries: treeEntries.map((e) =>
+              e.sha === null
+                ? { path: scrub(e.path), mode: e.mode, type: "blob", sha: null }
+                : { path: scrub(e.path), mode: e.mode, type: "blob", content: scrub(e.content ?? "") },
+            ),
+            baseCommitSha,
+            baseTreeSha,
+          }),
       title: scrub(v.title),
       body: scrub(v.body),
     }),
     c.guard,
     c.secretFileHashes,
+    c.mutants,
   );
   redactions.push(...out.redactions);
   if (!("value" in out)) return done(false, out.reason);
   const p = out.value;
   const postScrubErr = validateProposalFields(p);
   if (postScrubErr !== null) return done(false, `not a proposal: ${postScrubErr}`);
-  if (p.kind === "pr" || p.repo !== undefined) {
-    if (!isRepoAllowed(p.repo, c.allowedRepos ?? [])) {
-      return done(false, `repo not in broker.allowedRepos: ${p.repo}`);
-    }
-  }
 
   let token: string;
   try {
@@ -233,6 +500,13 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     return done(false, `token unreadable: ${c.tokenFile}`);
   }
   if (!token) return done(false, `token empty: ${c.tokenFile}`);
+  if (c.botLogin && !c.mutants?.skipBotIdentity) {
+    try {
+      await verifyBotIdentity(c.githubApi ?? "https://api.github.com", token, c.botLogin, c.forbiddenLogins ?? []);
+    } catch (e) {
+      return done(false, String(e instanceof Error ? e.message : e).split(token).join("[token]"));
+    }
+  }
   try {
     const { url } = await c.act(p, token, thread);
     return done(true, "acted", url);

@@ -46,6 +46,12 @@
       "items": {
         "type": "string"
       }
+    },
+    "recall_transcript": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   }
 }

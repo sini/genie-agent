@@ -24,7 +24,13 @@ export interface XmsgSend {
 }
 
 // The package as tier 1's turn leaves it, before the guard and the stamp.
-export type Package = { cleaned_question: string; draft: Draft; eval_transcript: unknown[]; gaps: string[] };
+export type Package = {
+  cleaned_question: string;
+  draft: Draft;
+  eval_transcript: unknown[];
+  recall_transcript?: unknown[];
+  gaps: string[];
+};
 
 export interface EscalationOptions {
   store: ThreadStateStore;
@@ -33,8 +39,12 @@ export interface EscalationOptions {
   guard: (pkg: Package) => Promise<Package>;
   // C6: the expert instance's xmsg address for the thread.
   route: (state: ThreadState) => string;
-  // The supervisor's record of the thread: its cleaned question and its evals, in order.
-  context: (thread: string) => { cleaned_question: string; eval_transcript: unknown[] };
+  // The supervisor's record of the thread: its cleaned question, evals, and Hindsight recalls, in order.
+  context: (thread: string) => {
+    cleaned_question: string;
+    eval_transcript: unknown[];
+    recall_transcript?: unknown[];
+  };
   threshold?: number;
 }
 

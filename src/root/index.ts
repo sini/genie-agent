@@ -12,7 +12,17 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
 import { gist } from "../broker/gist.ts";
-import { broker, byKind, isRepoAllowed, outbound, type Proposal, validateProposalFields } from "../broker/index.ts";
+import {
+  BOT_LOGIN_RE,
+  broker,
+  type BrokerMutants,
+  byKind,
+  DEFAULT_BOT_LOGIN,
+  DEFAULT_FORBIDDEN_LOGINS,
+  outbound,
+  type Proposal,
+  validateProposalFields,
+} from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
 import { parseExpertReply, type ExpertReply } from "../dispatcher/reply.ts";
 import { escalationGuard } from "../escalation/guard.ts";
@@ -20,21 +30,30 @@ import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts"
 import { router } from "../escalation/route.ts";
 import { withCache } from "../eval/cache.ts";
 import { perThread, type Runner } from "../eval/lock.ts";
-import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
+import { type EvalMutants, type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
 import { type Clock, Lifecycle } from "../lifecycle/index.ts";
-import { type MirrorConfig, type Runner as GitRunner, worktreeFor } from "../mirror/index.ts";
+import {
+  type GitReadMutants,
+  gitRead,
+  type GitRequest,
+  type MirrorConfig,
+  type Runner as GitRunner,
+  worktreeFor,
+} from "../mirror/index.ts";
 import { redact } from "../redactor/index.ts";
 import { ThreadStateStore, type PendingAction, type Tier } from "../state/index.ts";
 import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
 import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
+import { type GhReadMutants, type GhReadRequest, ghRead } from "../tier1/github.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
 import { type PiSandbox, tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
 import { errors, load } from "../tier1/schema.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
+import { parseMatrixForward } from "./io.ts";
 
 export interface ApproveControl {
   control: "approve";
@@ -45,12 +64,13 @@ export interface ApproveControl {
 }
 
 // One inbound item from matrix-xmsg or xmsg, on the thread it belongs to: the raw envelope exactly as
-// matrix-xmsg sends it (carrying `screened: false` when matrix-xmsg forwarded under fail-open, M26),
+// matrix-xmsg sends it (carrying `screened: false` when matrix-xmsg forwarded under fail-open, M26, or
+// `screened: true` when pre-screened by matrix-xmsg, GAP-7, and optional `addressed` from the header, GAP-1),
 // `!trust` (C7's TrustControl), a ✅ accept / 🔍 deeper reaction, an approve control (C10),
 // or an expert reply.
 export type Inbound =
   | ({ thread: string } & (
-      | { envelope: string; screened?: false }
+      | { envelope: string; screened?: boolean; addressed?: boolean }
       | TrustControl
       | { control: "accept" | "deeper" }
       | { expert: string }
@@ -67,7 +87,11 @@ export interface PostEnvelope {
   approval?: true;
 }
 
-export type PostPayload = PostEnvelope;
+export type PostPayload =
+  | PostEnvelope
+  | { silent: true }
+  | { redact: string; reason?: string }
+  | { edit: string; text: string };
 
 export interface Post {
   // A message to the bot's thread: tier 1's draft, or a notice such as a refusal.
@@ -96,12 +120,21 @@ export interface Config {
   tier1: Omit<Tier1Config, "root"> & { sandbox?: Pick<PiSandbox, "bwrap"> };
   // Inbound guard-in screening switch (G11; default true).
   guard?: { enable?: boolean };
+  // Optional guard-in screening switch for `git` read outputs (GC1 OQ-2; default false).
+  gitScreen?: { enable?: boolean };
+  // Optional guard-in screening switch for `gh_read` outputs (GC1 OQ-2; default false).
+  ghScreen?: { enable?: boolean };
+  // Optional fine-grained zero-permission GitHub read token file for `gh_read` (GC1 OQ-4).
+  githubReadTokenFile?: string | null;
   // Hindsight dataplane endpoint for recall ("support" -> genie, "memory" -> genie-memory).
   hindsightUrl?: string;
   s3?: S3Config | null;
   // threadLink: the thread's public URL with `{thread}` where the thread id goes; a PR needs it.
   broker: {
     tokenFile?: string | null;
+    botLogin?: string;
+    forbiddenLogins?: string[];
+    maxProposalsPerThreadPerDay?: number;
     githubApi?: string;
     threadLink?: string;
     allowedRepos?: string[];
@@ -128,6 +161,8 @@ const secret = (file: string) => readFileSync(file, "utf8").trim();
 
 const evalRequestSchema = load("eval-request");
 const proposalSchema = load("proposal");
+const gitRequestSchema = load("git-request");
+const ghReadSchema = load("gh-read");
 
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
@@ -141,21 +176,31 @@ export const approvalRequest = approvalNotice;
 
 // guard-in on an inbound envelope (design §4 step 1): the trigger's line is the content and every
 // context line its history, in envelope order, each with its authenticated tier. Runs on every
-// inbound envelope, including fail-open forwards (`<request screened="false" note="…">`). The text
-// tier 1 may see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
+// inbound envelope, including fail-open forwards (`<request screened="false" note="…">`), except when
+// matrix-xmsg has already screened the request and marked the outer `<request screened="true">` tag (GAP-7, Q5).
+// The text tier 1 may see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
 // When `enabled` is false (G11), passes `content.text` through unscreened without calling the guard.
 export async function guardIn(
   guard: GuardClient | undefined,
   raw: string,
-  opts: { enabled?: boolean } = {},
+  opts: { enabled?: boolean; preScreened?: boolean } = {},
 ): Promise<string> {
   const enabled = opts.enabled ?? true;
   const history: Line[] = [];
   let content: Line | undefined;
   let inRequest = false;
+  let seenRequest = false;
+  let headerPreScreened = false;
   for (const l of raw.split("\n")) {
-    if (l === "<request>" || /^<request\s+screened="false"(?:\s+note="[^"]*")?>$/.test(l)) inRequest = true;
-    else if (l === "</request>") inRequest = false;
+    if (
+      l === "<request>" ||
+      /^<request(?:\s+(?:addressed="(?:true|false)"|screened="(?:true|false)"|note="[^"]*"))+>$/.test(l)
+    ) {
+      if (seenRequest) throw new Error("guard-in: multiple <request> blocks");
+      seenRequest = true;
+      inRequest = true;
+      headerPreScreened = /\bscreened="true"/.test(l) && !/\bscreened="false"/.test(l);
+    } else if (l === "</request>") inRequest = false;
     else if (l.startsWith("{")) {
       const { sender, tier, text } = JSON.parse(l);
       if (typeof text !== "string") throw new Error("guard-in: an envelope line without text");
@@ -164,6 +209,9 @@ export async function guardIn(
   }
   if (!content) throw new Error("guard-in: an envelope without request content");
   if (!enabled) return content.text;
+  if (opts.preScreened === true || (opts.preScreened !== false && headerPreScreened)) {
+    return content.text;
+  }
   if (!guard) throw new Error("guard-in: no verdict");
   const e: Envelope = { source: "message", history, content };
   const v = await guard.check(e).catch((err) => ({ unavailable: String(err) }));
@@ -179,6 +227,19 @@ export function validateRootConfig(c: Config): { guardEnable: boolean; guardOutE
   if (guardEnable && c.xmsg !== undefined && "guard" in c.xmsg) {
     if (c.xmsg.guard === null || (c.xmsg.guard !== undefined && "target" in c.xmsg.guard && !c.xmsg.guard.target)) {
       throw new Error("xmsg.guard.target is required when guard.enable is true");
+    }
+  }
+  if (c.broker?.tokenFile) {
+    if (!guardOutEnable && guardEnable) {
+      throw new Error("broker.guardOut.enable must be true when broker.tokenFile is configured");
+    }
+    const botLogin = c.broker.botLogin ?? DEFAULT_BOT_LOGIN;
+    if (!BOT_LOGIN_RE.test(botLogin)) {
+      throw new Error(`invalid broker.botLogin: ${botLogin}`);
+    }
+    const forbidden = (c.broker.forbiddenLogins ?? DEFAULT_FORBIDDEN_LOGINS).map((s) => s.toLowerCase());
+    if (forbidden.includes(botLogin.toLowerCase())) {
+      throw new Error(`broker.botLogin ${botLogin} is in broker.forbiddenLogins`);
     }
   }
   if (guardOutEnable) {
@@ -252,14 +313,34 @@ export function main(
   io: Io,
   run?: Runner,
   clock?: Clock,
-  mutants?: { piSandbox?: Omit<PiSandbox, "stateRoot" | "worktreeRoot" | "agentDir" | "memoryRoot"> | false },
+  mutants?: {
+    piSandbox?: Omit<PiSandbox, "stateRoot" | "worktreeRoot" | "agentDir" | "memoryRoot"> | false;
+    ignoreSilentFlag?: boolean;
+    evalMutants?: EvalMutants;
+    gitMutants?: GitReadMutants;
+    ghReadMutants?: GhReadMutants;
+    brokerMutants?: BrokerMutants;
+  },
 ) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
   const archive = c.s3 ? archiver(store, c.s3) : async () => {};
-  const evalIn = withCache(store, perThread(run ?? ((l) => runEval(l, c.eval))));
+  const evalIn = withCache(
+    store,
+    perThread(
+      run ??
+        ((l) =>
+          runEval(l, {
+            ...c.eval,
+            worktreeRoot: c.mirror.worktreeRoot,
+            mutants: mutants?.evalMutants,
+          })),
+    ),
+  );
   const screen = webScreen(io.guard, { enabled: guardEnable });
+  const gitScreen = webScreen(io.guard, { enabled: guardEnable && (c.gitScreen?.enable ?? false) });
+  const ghScreen = webScreen(io.guard, { enabled: guardEnable && (c.ghScreen?.enable ?? false) });
   const guard = seedGuard(io.guard, { enabled: guardEnable });
   const hindsightUrl = c.hindsightUrl ?? DEFAULT_HINDSIGHT_ENDPOINT;
   const guardOut: GuardOutConfig = guardOutEnable
@@ -272,18 +353,39 @@ export function main(
       }
     : { enable: false };
 
-  // C5's record of the thread: its latest cleaned question and its evals, beside P2's state.
-  type Context = { cleaned_question: string; eval_transcript: unknown[] };
+  // C5's record of the thread: its latest cleaned question, evals, and Hindsight recalls (GAP-5), beside P2's state.
+  type Context = {
+    cleaned_question: string;
+    eval_transcript: unknown[];
+    recall_transcript: unknown[];
+    addressed?: boolean;
+  };
   const file = (t: string) => `${store.dir(t)}/context.json`;
-  const context = (t: string): Context => (existsSync(file(t)) ? JSON.parse(readFileSync(file(t), "utf8")) : { cleaned_question: "", eval_transcript: [] });
+  const context = (t: string): Context => {
+    if (!existsSync(file(t))) {
+      return { cleaned_question: "", eval_transcript: [], recall_transcript: [] };
+    }
+    const raw = JSON.parse(readFileSync(file(t), "utf8")) as Partial<Context>;
+    return {
+      cleaned_question: raw.cleaned_question ?? "",
+      eval_transcript: raw.eval_transcript ?? [],
+      recall_transcript: raw.recall_transcript ?? [],
+      ...(raw.addressed !== undefined ? { addressed: raw.addressed } : {}),
+    };
+  };
   const setContext = (t: string, x: Partial<Context>) => writeFileSync(file(t), JSON.stringify({ ...context(t), ...x }));
 
   const { githubApi, threadLink } = c.broker ?? {};
+  const botLogin = c.broker?.botLogin ?? DEFAULT_BOT_LOGIN;
+  const forbiddenLogins = c.broker?.forbiddenLogins ?? [...DEFAULT_FORBIDDEN_LOGINS];
   const link = (t: string) => {
     if (!threadLink) throw new Error("broker.threadLink is not configured");
     return threadLink.replace("{thread}", encodeURIComponent(t));
   };
-  const act = byKind({ gist: gist(githubApi), pr: pr(link, githubApi) });
+  const act = byKind({
+    gist: gist(githubApi, 30_000, { botLogin, forbiddenLogins, mutants: mutants?.brokerMutants }),
+    pr: pr(link, githubApi, { botLogin, forbiddenLogins, mutants: mutants?.brokerMutants }),
+  });
 
   const escalation = new Escalation({
     store,
@@ -291,8 +393,12 @@ export function main(
     guard: escalationGuard(io.guard, { enabled: guardEnable }),
     route: router(c.experts),
     context: (t) => {
-      const { cleaned_question, eval_transcript } = context(t);
-      return { cleaned_question, eval_transcript };
+      const { cleaned_question, eval_transcript, recall_transcript } = context(t);
+      return {
+        cleaned_question,
+        eval_transcript,
+        ...(recall_transcript.length > 0 ? { recall_transcript } : {}),
+      };
     },
   });
 
@@ -324,17 +430,38 @@ export function main(
 
   // Wrap every outbound post in a structured envelope { text: <string> }, with approval: true
   // only on approval notices, so model output can never mint an approval request (Unit C10).
+  // Records `lastReplyMessageId` in ThreadStateStore for GAP-6 redact/edit support.
   const postEnvelope = async (
     thread: string,
     msg: string | Draft | ExpertReply | PostEnvelope,
     approval?: boolean,
   ): Promise<string | void> => {
+    let sentId: string | void;
     if (typeof msg === "object" && msg !== null && "text" in msg && (msg as PostEnvelope).approval === true) {
-      return io.post.post(thread, msg as PostEnvelope);
+      sentId = await io.post.post(thread, msg as PostEnvelope);
+    } else {
+      const text = typeof msg === "string" ? msg : JSON.stringify(msg);
+      const payload: PostEnvelope = approval ? { text, approval: true } : { text };
+      sentId = await io.post.post(thread, payload);
     }
-    const text = typeof msg === "string" ? msg : JSON.stringify(msg);
-    const payload: PostEnvelope = approval ? { text, approval: true } : { text };
-    return io.post.post(thread, payload);
+    if (typeof sentId === "string" && sentId) {
+      store.setLastReplyMessageId(thread, sentId);
+    }
+    return sentId;
+  };
+  const redactLastPost = async (thread: string, reason?: string): Promise<string | void> => {
+    const targetId = store.lastReplyMessageId(thread);
+    if (!targetId) {
+      throw new Error(`redactLastPost: no reply message id recorded for thread ${thread}`);
+    }
+    return io.post.post(thread, reason !== undefined ? { redact: targetId, reason } : { redact: targetId });
+  };
+  const editLastPost = async (thread: string, text: string): Promise<string | void> => {
+    const targetId = store.lastReplyMessageId(thread);
+    if (!targetId) {
+      throw new Error(`editLastPost: no reply message id recorded for thread ${thread}`);
+    }
+    return io.post.post(thread, { edit: targetId, text });
   };
   const withheldInTurn = new Set<string>();
 
@@ -399,7 +526,11 @@ export function main(
           setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
           return result;
         }
-        const result = await evalIn(t, { request: req, sender_tier: tier });
+        const result = await evalIn(t, {
+          request: req,
+          sender_tier: tier,
+          ...(req.worktreeSubdir !== undefined ? { thread: t } : {}),
+        });
         setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
         return result;
       },
@@ -419,19 +550,38 @@ export function main(
             console.error(`thread ${t}: recall entry ${item.id ?? ""} withheld: ${e}`);
           }
         }
+        setContext(t, {
+          recall_transcript: [
+            ...context(t).recall_transcript,
+            { query, ...(bank !== undefined ? { bank } : {}), results },
+          ],
+        });
         return { ...(res.entities !== undefined ? { entities: res.entities } : {}), results };
       },
       escalate: (pkg) => {
         withheldInTurn.delete(t);
         lifecycle.disarm(t);
-        return escalation.escalate(t, pkg as Package);
+        const p = pkg as Package;
+        const recalls = context(t).recall_transcript;
+        const merged: Package =
+          p.recall_transcript === undefined && recalls.length > 0
+            ? { ...p, recall_transcript: recalls }
+            : p;
+        return escalation.escalate(t, merged);
       },
       // The draft leaves only as redacted and passed by guard-out. A withheld draft is neither posted
       // nor escalated on the spot: tier 1 receives {posted: false, reason} so it can retry, and WITHHELD
       // is posted only if the turn settles without any posted reply (GI-11).
+      // When `silent === true` (GAP-1), emits `{"silent": true}` to matrix-xmsg without posting a
+      // visible Matrix message, running guardOut, or escalating.
       reply: async (raw) => {
         lifecycle.disarm(t);
         const d = raw as Draft;
+        if (d.silent === true && !mutants?.ignoreSilentFlag) {
+          withheldInTurn.delete(t);
+          await io.post.post(t, { silent: true });
+          return { posted: true, silent: true, escalated: null };
+        }
         const out = await outbound(context(t).cleaned_question, (scrub): Draft => ({ ...d, answer: scrub(d.answer), gaps: d.gaps.map(scrub) }), guardOut);
         if (!("value" in out)) {
           console.error(`thread ${t}: reply withheld: ${out.reason}`);
@@ -460,59 +610,70 @@ export function main(
         if (fieldErr !== null) {
           return { thread: t, acted: false, reason: `not a proposal: ${fieldErr}`, redactions: [] };
         }
-        if (prop.kind === "pr" || prop.repo !== undefined) {
-          if (!isRepoAllowed(prop.repo, c.broker.allowedRepos ?? [])) {
-            return { thread: t, acted: false, reason: `repo not in broker.allowedRepos: ${prop.repo}`, redactions: [] };
-          }
-        }
-        const tier = store.read(t)?.sender_tier ?? "public";
-        if (tier !== "trusted") {
-          if (store.pendingActions(t).length >= 1) {
-            return {
-              thread: t,
-              acted: false,
-              refused: "propose",
-              reason: "refused: a pending action is already awaiting approval on this thread",
-              redactions: [],
-            };
-          }
-          const action = "propose";
-          const rawNotice = approvalNotice(action, prop);
-          const out = await outbound(context(t).cleaned_question, (scrub) => scrub(rawNotice.text), guardOut);
-          if (!("value" in out)) {
-            return {
-              thread: t,
-              acted: false,
-              refused: "propose",
-              reason: out.reason,
-              redactions: out.redactions,
-            };
-          }
-          const sentEventId = (await postEnvelope(t, { approval: true, text: out.value })) ?? undefined;
-          const pendingAction: PendingAction = {
-            action,
-            params: JSON.parse(JSON.stringify(prop)),
-            thread: t,
-            requested_at: new Date().toISOString(),
-            posted_event_id: typeof sentEventId === "string" ? sentEventId : undefined,
-          };
-          store.addPendingAction(pendingAction);
+        if (
+          typeof c.broker.maxProposalsPerThreadPerDay === "number" &&
+          store.proposalCount(t) >= c.broker.maxProposalsPerThreadPerDay
+        ) {
           return {
             thread: t,
             acted: false,
-            refused: "propose",
-            reason: "refused: propose on a public thread",
-            redactions: out.redactions,
+            reason: `refused: thread exceeded maxProposalsPerThreadPerDay (${c.broker.maxProposalsPerThreadPerDay})`,
+            redactions: [],
           };
         }
-        return broker(t, JSON.stringify(p), {
+        const res = await broker(t, JSON.stringify(p), {
           tokenFile: c.broker.tokenFile,
-          allowedRepos: c.broker.allowedRepos,
+          botLogin,
+          forbiddenLogins,
+          githubApi,
+          mirrorRoot: c.mirror.mirrorRoot,
+          worktreeRoot: c.mirror.worktreeRoot,
+          repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
           guard: guardOut,
           act,
+          mutants: mutants?.brokerMutants,
         });
+        if (res.acted) {
+          store.recordProposal(t);
+        }
+        return res;
       },
       clone: (url) => worktreeFor({ ...c.mirror, cluster: c.mirror.cluster ?? c.tier1.cluster }, url, t, io.git),
+      git: async (request) => {
+        const bad = errors(gitRequestSchema, request);
+        if (bad.length) throw new Error(`invalid git arguments: ${bad.join("; ")}`);
+        const out = await gitRead(request as GitRequest, {
+          mirrorRoot: c.mirror.mirrorRoot,
+          worktreeRoot: c.mirror.worktreeRoot,
+          thread: t,
+          repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
+          git: io.git,
+          mutants: mutants?.gitMutants,
+        });
+        if ((c.gitScreen?.enable ?? false) && guardEnable) {
+          const screened = await gitScreen(out.output);
+          return { ...out, output: screened };
+        }
+        return out;
+      },
+      gh_read: async (request) => {
+        const bad = errors(ghReadSchema, request);
+        if (bad.length) throw new Error(`invalid gh_read arguments: ${bad.join("; ")}`);
+        const res = await ghRead(request as GhReadRequest, {
+          githubApi: c.broker?.githubApi,
+          tokenFile: c.githubReadTokenFile,
+          mutants: mutants?.ghReadMutants,
+        });
+        if ((c.ghScreen?.enable ?? false) && guardEnable) {
+          const screened = await ghScreen(JSON.stringify(res));
+          try {
+            return JSON.parse(screened);
+          } catch {
+            return screened;
+          }
+        }
+        return res;
+      },
       screen,
       room_context: async (request) => {
         if (!io.request) {
@@ -610,14 +771,35 @@ export function main(
       let text: string;
       try {
         observe(store, i.thread, parseEnvelope(i.envelope));
-        text = await guardIn(io.guard, i.envelope, { enabled: guardEnable });
+        text = await guardIn(io.guard, i.envelope, {
+          enabled: guardEnable,
+          ...(i.screened !== undefined ? { preScreened: i.screened } : {}),
+        });
       } catch (e) {
         console.error(`thread ${i.thread}: ${e}`);
         await postEnvelope(i.thread, REFUSAL);
         return;
       }
       withheldInTurn.delete(i.thread);
-      setContext(i.thread, { cleaned_question: text });
+      let envAddressed = true;
+      for (const l of i.envelope.split("\n")) {
+        if (l.startsWith("[matrix] ")) {
+          const m = /\baddressed="(true|false)"/.exec(l);
+          if (m) {
+            envAddressed = m[1] === "true";
+            break;
+          }
+        } else if (
+          l === "<request>" ||
+          /^<request(?:\s+(?:addressed="(?:true|false)"|screened="(?:true|false)"|note="[^"]*"))+>$/.test(l)
+        ) {
+          const m = /\baddressed="(true|false)"/.exec(l);
+          if (m) envAddressed = m[1] === "true";
+          break;
+        }
+      }
+      const addressed = i.addressed ?? envAddressed;
+      setContext(i.thread, { cleaned_question: text, addressed });
       await lifecycle.message(i.thread, text, { hadState, isDelta });
     } else if ("expert" in i) {
       const check = parseExpertReply(i.expert);
@@ -626,6 +808,10 @@ export function main(
         return;
       }
       const parsed = check.value;
+      if (parsed.silent === true && !mutants?.ignoreSilentFlag) {
+        await io.post.post(i.thread, { silent: true });
+        return;
+      }
       const q = context(i.thread).cleaned_question;
       const out = await outbound(
         q,
@@ -660,21 +846,16 @@ export function main(
 
       if (pending.action === "eval") {
         const evalReq = pending.params as EvalRequest;
-        const evalResult = await evalIn(pending.thread, { request: evalReq, sender_tier: "trusted" });
+        const evalResult = await evalIn(pending.thread, {
+          request: evalReq,
+          sender_tier: "trusted",
+          ...(evalReq.worktreeSubdir !== undefined ? { thread: pending.thread } : {}),
+        });
         const postContent = typeof evalResult.stdout_tail === "string" && evalResult.stdout_tail.length > 0
           ? evalResult.stdout_tail
           : JSON.stringify(evalResult);
         await postEnvelope(pending.thread, postContent);
         setContext(pending.thread, { eval_transcript: [...context(pending.thread).eval_transcript, { request: evalReq, result: evalResult }] });
-      } else if (pending.action === "propose") {
-        if (!c.broker.tokenFile) return;
-        const res = await broker(pending.thread, JSON.stringify(pending.params), {
-          tokenFile: c.broker.tokenFile,
-          allowedRepos: c.broker.allowedRepos,
-          guard: guardOut,
-          act,
-        });
-        await postEnvelope(pending.thread, JSON.stringify(res));
       }
     } else if (i.control === "accept" || i.control === "deeper") {
       await lifecycle.control(i.thread, i.control);
@@ -686,6 +867,9 @@ export function main(
     supervisor,
     lifecycle,
     gc,
+    context,
+    redactLastPost,
+    editLastPost,
     start() {
       lifecycle.start();
       gc.start();

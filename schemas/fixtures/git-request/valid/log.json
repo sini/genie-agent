@@ -1,0 +1,6 @@
+{
+  "repo": "sini/genie-agent",
+  "op": "log",
+  "rev": "main",
+  "maxCount": 10
+}

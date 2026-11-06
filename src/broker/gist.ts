@@ -12,15 +12,25 @@
 // error or a response without `html_url` throws, and the broker records it as not acted. The
 // token is only ever in the Authorization header; a message that echoes it is scrubbed by the
 // broker, which is the only thing the error reaches.
-import type { Act } from "./index.ts";
+import { verifyBotIdentity, type Act, type BrokerMutants } from "./index.ts";
 
 export const README = "README.md";
 
-export function gist(base = "https://api.github.com", timeoutMs = 30_000): Act {
+export interface GistOptions {
+  botLogin?: string;
+  forbiddenLogins?: string[];
+  mutants?: BrokerMutants;
+}
+
+export function gist(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
   return async (p, token) => {
     if (p.kind !== "gist") throw new Error(`gist: cannot act on a ${p.kind} proposal`);
-    if (p.body && README in p.files) throw new Error(`gist: the body and a file both claim ${README}`);
-    const files = Object.fromEntries(Object.entries(p.files).map(([name, content]) => [name, { content }]));
+    const pFiles = p.files ?? {};
+    if (p.body && README in pFiles) throw new Error(`gist: the body and a file both claim ${README}`);
+    if (opts.botLogin && !opts.mutants?.skipBotIdentity) {
+      await verifyBotIdentity(base, token, opts.botLogin, opts.forbiddenLogins ?? [], timeoutMs);
+    }
+    const files = Object.fromEntries(Object.entries(pFiles).map(([name, content]) => [name, { content }]));
     if (p.body) files[README] = { content: p.body };
     const res = await fetch(`${base}/gists`, {
       method: "POST",
@@ -31,8 +41,12 @@ export function gist(base = "https://api.github.com", timeoutMs = 30_000): Act {
         "content-type": "application/json",
       },
       body: JSON.stringify({ description: p.title, public: false, files }),
+      redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error("gist: HTTP redirect refused");
+    }
     const text = await res.text();
     if (!res.ok) {
       const limit = ["retry-after", "x-ratelimit-remaining", "x-ratelimit-reset"]

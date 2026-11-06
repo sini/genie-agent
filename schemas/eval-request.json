@@ -4,8 +4,6 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "repo",
-    "rev",
     "attr",
     "trusted"
   ],
@@ -19,6 +17,12 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "worktreeSubdir": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
     },
     "attr": {
       "type": "string",
@@ -37,6 +41,32 @@
         "stub",
         "none"
       ]
+    },
+    "apply": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000]+$"
     }
-  }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "repo",
+        "rev"
+      ],
+      "properties": {
+        "worktreeSubdir": false
+      }
+    },
+    {
+      "required": [
+        "worktreeSubdir"
+      ],
+      "properties": {
+        "repo": false,
+        "rev": false
+      }
+    }
+  ]
 }

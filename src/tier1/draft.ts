@@ -8,7 +8,13 @@ export interface Message {
   tool_calls?: { function: { name: string; arguments: string } }[];
 }
 
-export type Draft = { answer: string; confidence: number; gaps: string[]; escalate_forced: boolean };
+export type Draft = {
+  answer: string;
+  confidence: number;
+  gaps: string[];
+  escalate_forced: boolean;
+  silent?: boolean;
+};
 
 const schema = load("draft");
 
