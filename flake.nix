@@ -1398,6 +1398,8 @@
                 grep -q '^ok [0-9]* - oracle O-GE2-C6-recall-unscreened: Host.recall makes 0 guard calls when guard.enable is true and preserves directive-style recall items while replayResume still screens under source: recall$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GE2-FC-queue-timeout: XmsgGuardClient bounds total check(e) wall time across FIFO queue wait + sendAndAwait and wakes/times out idempotently (F-C, C-7)$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GE2-today (Arm a): !t79jR_rVSlmFceMqpE shape (2 recalls, 0 evals, imperative Nix prose in draft.answer, 3 gaps, confidence 0.75) posts once and escalates once with 0 escalationGuard calls$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GP7-escalate-after-refused-eval: refused trusted evals on a public thread (guard-out block, C9 pending action, and duplicate pending action) leave eval_transcript clean so subsequent reply, escalate, and deeper escalations validate against schemas/escalation.json and send to @public$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle O-GP7-repair-persisted-refused-eval: context(t) drops legacy persisted refused-eval entries lacking result.exit from context.json while preserving valid EvalResult entries so pre-GP7 threads escalate cleanly$' $TMPDIR/tap || exit 1
                 [ "$(grep -c 'escalation\.reply(' src/root/index.ts)" -eq 1 ] && awk '/const escalateAfterPost = async/,/^  };/' src/root/index.ts | grep -q 'escalation\.reply(' || {
                   echo "guard failed: every escalation.reply call in src/root/index.ts must sit inside escalateAfterPost" >&2
                   exit 1
@@ -1550,6 +1552,38 @@
                   --replace-fail '      "--unshare-pid",' ""
                 if (cd $TMPDIR/mut-root-no-unshare-pid && node --test --test-force-exit --test-name-pattern='oracle GS2 \(F1\)' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-no-unshare-pid survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-gp7-dup
+                chmod -R u+w $TMPDIR/mut-gp7-dup
+                substituteInPlace $TMPDIR/mut-gp7-dup/src/root/index.ts \
+                  --replace-fail 'error: "refused: a pending action is already awaiting approval on this thread",' 'error: (setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result: { refused: "trusted eval", error: "refused: a pending action is already awaiting approval on this thread" } }] }), "refused: a pending action is already awaiting approval on this thread"),'
+                if (cd $TMPDIR/mut-gp7-dup && node --test --test-force-exit --test-name-pattern='oracle O-GP7-escalate-after-refused-eval' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GP7-record-refused-dup survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-gp7-guardout
+                chmod -R u+w $TMPDIR/mut-gp7-guardout
+                substituteInPlace $TMPDIR/mut-gp7-guardout/src/root/index.ts \
+                  --replace-fail 'error: `refused: ''${out.reason}`,' 'error: (setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result: { refused: "trusted eval", error: `refused: ''${out.reason}` } }] }), `refused: ''${out.reason}`),'
+                if (cd $TMPDIR/mut-gp7-guardout && node --test --test-force-exit --test-name-pattern='oracle O-GP7-escalate-after-refused-eval' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GP7-record-refused-guardout survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-gp7-public
+                chmod -R u+w $TMPDIR/mut-gp7-public
+                substituteInPlace $TMPDIR/mut-gp7-public/src/root/index.ts \
+                  --replace-fail 'error: "refused: trusted eval on a public thread",' 'error: (setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result: { refused: "trusted eval", error: "refused: trusted eval on a public thread" } }] }), "refused: trusted eval on a public thread"),'
+                if (cd $TMPDIR/mut-gp7-public && node --test --test-force-exit --test-name-pattern='oracle O-GP7-escalate-after-refused-eval' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GP7-record-refused-eval-transcript survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-gp7-persisted
+                chmod -R u+w $TMPDIR/mut-gp7-persisted
+                substituteInPlace $TMPDIR/mut-gp7-persisted/src/root/index.ts \
+                  --replace-fail 'eval_transcript: (raw.eval_transcript ?? []).filter(hasEvalExit),' 'eval_transcript: raw.eval_transcript ?? [],'
+                if (cd $TMPDIR/mut-gp7-persisted && node --test --test-force-exit --test-name-pattern='oracle O-GP7-repair-persisted-refused-eval' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-GP7-keep-persisted-refused-eval survived in root" >&2
                   exit 1
                 fi
                 touch $out

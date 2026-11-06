@@ -4060,6 +4060,186 @@ test("oracle O-GE2-FA-lifecycle-safety-net: when postEnvelope throws inside onDe
   }
 });
 
+test("oracle O-GP7-escalate-after-refused-eval: refused trusted evals on a public thread (guard-out block, C9 pending action, and duplicate pending action) leave eval_transcript clean so subsequent reply, escalate, and deeper escalations validate against schemas/escalation.json and send to @public", async () => {
+  const th = "gp7_refused_escalate";
+  const thDirect = "gp7_direct_escalate";
+  const thDeeper = "gp7_deeper_escalate";
+  try {
+    await inbound({ thread: th, envelope: envelope(BOB, "can you eval this with trusted and escalate?") });
+    assert.equal(root.store.read(th)?.sender_tier, "public");
+    const ctxPath = `${root.store.dir(th)}/context.json`;
+
+    // Branch 2: approval notice blocked by guardOut (attr contains BLOCK)
+    const blockedRes = await host(th, "eval", { repo: "o/r", rev: "main", attr: "BLOCK_attr", trusted: "yes" });
+    assert.equal(blockedRes.ok.refused, "trusted eval");
+    assert.match(String(blockedRes.ok.error), /guard-out: leak/);
+    assert.equal(root.store.pendingActions(th).length, 0);
+    assert.deepEqual(JSON.parse(readFileSync(ctxPath, "utf8")).eval_transcript, []);
+    assert.deepEqual(root.context(th).eval_transcript, []);
+
+    // Branch 3: C9 public-thread refusal after recording pendingAction
+    const okRes = await host(th, "eval", { repo: "o/r", rev: "main", attr: "clean_attr", trusted: "yes" });
+    assert.equal(okRes.ok.refused, "trusted eval");
+    assert.equal(okRes.ok.error, "refused: trusted eval on a public thread");
+    assert.equal(root.store.pendingActions(th).length, 1);
+    assert.deepEqual(JSON.parse(readFileSync(ctxPath, "utf8")).eval_transcript, []);
+    assert.deepEqual(root.context(th).eval_transcript, []);
+
+    // Branch 1: duplicate pending action refusal on the same thread
+    const dupRes = await host(th, "eval", { repo: "o/r", rev: "main", attr: "dup_attr", trusted: "yes" });
+    assert.equal(dupRes.ok.refused, "trusted eval");
+    assert.match(String(dupRes.ok.error), /already awaiting approval/);
+    assert.equal(root.store.pendingActions(th).length, 1);
+    assert.deepEqual(JSON.parse(readFileSync(ctxPath, "utf8")).eval_transcript, []);
+    assert.deepEqual(root.context(th).eval_transcript, []);
+
+    // Positive control: an untrusted eval on the same thread still records its EvalResult in eval_transcript
+    const untrustedRes = await host(th, "eval", { repo: "o/r", rev: "main", attr: "untrusted_attr", trusted: "no" });
+    assert.equal(untrustedRes.ok.exit, 0);
+    assert.equal(root.context(th).eval_transcript.length, 1);
+
+    // 1. Escalate via Host.reply (low confidence + escalate_forced: true)
+    const sendsBeforeReply = sends.length;
+    const replyRes = await host(th, "reply", {
+      answer: "I requested approval for trusted eval and am escalating in the meantime.",
+      confidence: 0.2,
+      gaps: ["needs trusted eval"],
+      escalate_forced: true,
+    });
+    assert.equal(replyRes.ok.posted, true);
+    assert.equal(typeof replyRes.ok.escalated, "string", `expected escalation id, got ${JSON.stringify(replyRes)}`);
+    assert.equal(root.store.escalation(th)?.refused, undefined);
+    assert.equal(sends.length, sendsBeforeReply + 1);
+    assert.equal(sends.at(-1)?.to, EXPERTS.public);
+    const replyPkg = JSON.parse(sends.at(-1)!.text);
+    assert.equal(replyPkg.eval_transcript.length, 1);
+    assert.equal(replyPkg.eval_transcript[0].request.attr, "untrusted_attr");
+
+    // 2. Escalate via Host.escalate immediately after a refused trusted eval (0 untrusted evals)
+    await inbound({ thread: thDirect, envelope: envelope(BOB, "direct escalate after refused trusted eval") });
+    const directRefused = await host(thDirect, "eval", { repo: "o/r", rev: "main", attr: "clean_attr", trusted: "yes" });
+    assert.equal(directRefused.ok.refused, "trusted eval");
+    assert.deepEqual(JSON.parse(readFileSync(`${root.store.dir(thDirect)}/context.json`, "utf8")).eval_transcript, []);
+    const sendsBeforeDirect = sends.length;
+    const escRes = await host(thDirect, "escalate", {
+      cleaned_question: "direct escalate after refused trusted eval",
+      draft: {
+        answer: "Escalating directly after refused trusted eval.",
+        confidence: 0.2,
+        gaps: ["needs trusted eval"],
+        escalate_forced: true,
+      },
+      eval_transcript: [],
+      gaps: ["needs trusted eval"],
+    });
+    assert.equal(typeof escRes.ok, "string", `expected escalation id from Host.escalate, got ${JSON.stringify(escRes)}`);
+    assert.equal(sends.length, sendsBeforeDirect + 1);
+    assert.equal(sends.at(-1)?.to, EXPERTS.public);
+    assert.deepEqual(JSON.parse(sends.at(-1)!.text).eval_transcript, []);
+
+    // 3. Escalate via 🔍 deeper (control: "deeper", Gate C-2) after a refused trusted eval and a high-confidence reply
+    await inbound({ thread: thDeeper, envelope: envelope(BOB, "deeper escalate after refused trusted eval") });
+    const deeperRefused = await host(thDeeper, "eval", { repo: "o/r", rev: "main", attr: "clean_attr", trusted: "yes" });
+    assert.equal(deeperRefused.ok.refused, "trusted eval");
+    assert.deepEqual(JSON.parse(readFileSync(`${root.store.dir(thDeeper)}/context.json`, "utf8")).eval_transcript, []);
+    const sendsBeforeDeeper = sends.length;
+    const highConfReply = await host(thDeeper, "reply", {
+      answer: "High-confidence draft before deeper reaction.",
+      confidence: 0.95,
+      gaps: [],
+      escalate_forced: false,
+    });
+    assert.equal(highConfReply.ok.posted, true);
+    assert.equal(highConfReply.ok.escalated, null);
+    assert.equal(sends.length, sendsBeforeDeeper, "high-confidence reply must not send before deeper control");
+    await inbound({ thread: thDeeper, control: "deeper" });
+    assert.equal(sends.length, sendsBeforeDeeper + 1, "deeper control must send 1 escalation");
+    assert.equal(sends.at(-1)?.to, EXPERTS.public);
+    assert.deepEqual(JSON.parse(sends.at(-1)!.text).eval_transcript, []);
+    assert.equal(root.store.escalation(thDeeper)?.refused, undefined);
+    assert.equal(root.store.read(thDeeper)?.status, "escalated");
+  } finally {
+    await root.supervisor.teardown(th);
+    await root.supervisor.teardown(thDirect);
+    await root.supervisor.teardown(thDeeper);
+  }
+});
+
+test("oracle O-GP7-repair-persisted-refused-eval: context(t) drops legacy persisted refused-eval entries lacking result.exit from context.json while preserving valid EvalResult entries so pre-GP7 threads escalate cleanly", async () => {
+  const thRepair = "gp7_persisted_repair";
+  const thRepairDeeper = "gp7_persisted_deeper";
+  const legacyTranscript = [
+    {
+      request: { repo: "o/r", rev: "main", attr: "refused_attr", trusted: "yes" },
+      result: { refused: "trusted eval", error: "refused: trusted eval on a public thread" },
+    },
+    {
+      request: { repo: "o/r", rev: "main", attr: "valid_attr", trusted: "no" },
+      result: { exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" },
+    },
+  ];
+  try {
+    await inbound({ thread: thRepair, envelope: envelope(BOB, "thread with pre-GP7 persisted refused eval in context.json") });
+    writeFileSync(
+      `${root.store.dir(thRepair)}/context.json`,
+      JSON.stringify({
+        cleaned_question: "thread with pre-GP7 persisted refused eval in context.json",
+        eval_transcript: legacyTranscript,
+        recall_transcript: [],
+        git_transcript: [],
+        gh_transcript: [],
+      }),
+    );
+
+    const loaded = root.context(thRepair);
+    assert.equal(loaded.eval_transcript.length, 1, "context(t) must drop persisted refused-eval entry lacking result.exit");
+    assert.equal((loaded.eval_transcript[0] as any).request.attr, "valid_attr");
+
+    const sendsBefore = sends.length;
+    const replyRes = await host(thRepair, "reply", {
+      answer: "Escalating a thread that had a pre-GP7 refused eval in context.json.",
+      confidence: 0.2,
+      gaps: ["needs expert"],
+      escalate_forced: true,
+    });
+    assert.equal(replyRes.ok.posted, true);
+    assert.equal(typeof replyRes.ok.escalated, "string", `expected escalation id after repair, got ${JSON.stringify(replyRes)}`);
+    assert.equal(root.store.escalation(thRepair)?.refused, undefined);
+    assert.equal(sends.length, sendsBefore + 1);
+    const sentPkg = JSON.parse(sends.at(-1)!.text);
+    assert.equal(sentPkg.eval_transcript.length, 1);
+    assert.equal(sentPkg.eval_transcript[0].request.attr, "valid_attr");
+
+    // Also verify deeper on a thread whose draft is created after loading a legacy context.json
+    await inbound({ thread: thRepairDeeper, envelope: envelope(BOB, "deeper on repaired context.json") });
+    writeFileSync(
+      `${root.store.dir(thRepairDeeper)}/context.json`,
+      JSON.stringify({
+        cleaned_question: "deeper on repaired context.json",
+        eval_transcript: legacyTranscript,
+        recall_transcript: [],
+        git_transcript: [],
+        gh_transcript: [],
+      }),
+    );
+    const sendsBeforeDeeper = sends.length;
+    await host(thRepairDeeper, "reply", {
+      answer: "High-confidence draft on repaired thread.",
+      confidence: 0.95,
+      gaps: [],
+      escalate_forced: false,
+    });
+    await inbound({ thread: thRepairDeeper, control: "deeper" });
+    assert.equal(sends.length, sendsBeforeDeeper + 1);
+    const deeperPkg = JSON.parse(sends.at(-1)!.text);
+    assert.equal(deeperPkg.eval_transcript.length, 1);
+    assert.equal(deeperPkg.eval_transcript[0].request.attr, "valid_attr");
+  } finally {
+    await root.supervisor.teardown(thRepair);
+    await root.supervisor.teardown(thRepairDeeper);
+  }
+});
+
 
 
 

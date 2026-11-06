@@ -358,6 +358,8 @@ export function main(
     addressed?: boolean;
   };
   const file = (t: string) => `${store.dir(t)}/context.json`;
+  const hasEvalExit = (e: unknown): boolean =>
+    typeof (e as { result?: { exit?: unknown } } | null)?.result?.exit === "number";
   const context = (t: string): Context => {
     if (!existsSync(file(t))) {
       return {
@@ -371,7 +373,7 @@ export function main(
     const raw = JSON.parse(readFileSync(file(t), "utf8")) as Partial<Context>;
     return {
       cleaned_question: raw.cleaned_question ?? "",
-      eval_transcript: raw.eval_transcript ?? [],
+      eval_transcript: (raw.eval_transcript ?? []).filter(hasEvalExit),
       recall_transcript: raw.recall_transcript ?? [],
       git_transcript: raw.git_transcript ?? [],
       gh_transcript: raw.gh_transcript ?? [],
@@ -517,7 +519,6 @@ export function main(
               refused: "trusted eval",
               error: "refused: a pending action is already awaiting approval on this thread",
             };
-            setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
             return result;
           }
           const action = "eval";
@@ -528,7 +529,6 @@ export function main(
               refused: "trusted eval",
               error: `refused: ${out.reason}`,
             };
-            setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
             return result;
           }
           const sentEventId = (await postEnvelope(t, { approval: true, text: out.value })) ?? undefined;
@@ -544,7 +544,6 @@ export function main(
             refused: "trusted eval",
             error: "refused: trusted eval on a public thread",
           };
-          setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
           return result;
         }
         const result = await evalIn(t, {
