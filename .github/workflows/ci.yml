@@ -167,6 +167,10 @@ jobs:
           if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nix-daemon 2>/dev/null; then
             sudo systemctl restart nix-daemon
           fi
+      - name: Admit check userns binaries
+        run: |
+          read -r -a unit <<< "$UNIT_CHECKS"
+          .github/admit-userns.sh "${unit[@]}"
       - name: Unit checks
         run: |
           read -r -a unit <<< "$UNIT_CHECKS"
@@ -218,18 +222,11 @@ jobs:
           if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nix-daemon 2>/dev/null; then
             sudo systemctl restart nix-daemon
           fi
-      # GS2: root, tier1, tier1-bridge, and xmsg-integration launch pi inside bwrap (--unshare-user --unshare-pid --unshare-uts --unshare-cgroup-try).
-      - name: Admit bubblewrap to user namespaces
+      # GS2/GC1: root, tier1, tier1-bridge, and xmsg-integration execute bwrap and util-linux unshare.
+      - name: Admit check userns binaries
         run: |
-          bwrap="$(nix build --no-link --print-out-paths --inputs-from ./ci nixpkgs#bubblewrap)/bin/bwrap"
-          case "$bwrap" in
-            /nix/store/*/bin/bwrap) ;;
-            *) echo "::error::not a bwrap store path: '$bwrap'"; exit 1 ;;
-          esac
-          h=$(basename "$(dirname "$(dirname "$bwrap")")"); h=${h%%-*}
-          printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile integration-bwrap-userns-%s %s flags=(unconfined) {\n  userns,\n}\n' "$h" "$bwrap" > "$RUNNER_TEMP/userns-$h.profile"
-          sudo -n apparmor_parser -r "$RUNNER_TEMP/userns-$h.profile"
-          echo "admitted to user namespaces: $bwrap"
+          read -r -a integ <<< "$INTEGRATION_CHECKS"
+          .github/admit-userns.sh "${integ[@]}"
       - name: Integration, SEA, and tier-1 bridge checks
         run: |
           read -r -a integ <<< "$INTEGRATION_CHECKS"
@@ -285,17 +282,7 @@ jobs:
       - name: admit the process plane's own unshare to user namespaces
         run: |
           nix build -L --no-link --print-out-paths "./ci#devShells.x86_64-linux.default" | tee -a /tmp/attic-paths
-          nix develop ./ci --command ci --tests-process --userns-binaries > "$RUNNER_TEMP/userns-binaries"
-          while IFS= read -r b; do
-            case "$b" in
-              /nix/store/*/bin/unshare) ;;
-              *) echo "::error::not an unshare store path: '$b'"; exit 1 ;;
-            esac
-            h=$(basename "$(dirname "$(dirname "$b")")"); h=${h%%-*}
-            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile tests-process-userns-%s %s flags=(unconfined) {\n  userns,\n}\n' "$h" "$b" > "$RUNNER_TEMP/userns-$h.profile"
-            sudo -n apparmor_parser -r "$RUNNER_TEMP/userns-$h.profile"
-            echo "admitted to user namespaces: $b"
-          done < "$RUNNER_TEMP/userns-binaries"
+          .github/admit-userns.sh --process-plane
       - name: process plane
         run: nix develop ./ci --command ci --tests-process
       - name: Push to Attic cache
