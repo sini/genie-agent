@@ -12,14 +12,13 @@
 // error or a response without `html_url` throws, and the broker records it as not acted. The
 // token is only ever in the Authorization header; a message that echoes it is scrubbed by the
 // broker, which is the only thing the error reaches.
-import { verifyBotIdentity, type Act, type BrokerMutants } from "./index.ts";
+import { verifyBotIdentity, type Act } from "./index.ts";
 
 export const README = "README.md";
 
 export interface GistOptions {
   botLogin?: string;
   forbiddenLogins?: string[];
-  mutants?: BrokerMutants;
 }
 
 export function gist(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
@@ -27,7 +26,7 @@ export function gist(base = "https://api.github.com", timeoutMs = 30_000, opts: 
     if (p.kind !== "gist") throw new Error(`gist: cannot act on a ${p.kind} proposal`);
     const pFiles = p.files ?? {};
     if (p.body && README in pFiles) throw new Error(`gist: the body and a file both claim ${README}`);
-    if (opts.botLogin && !opts.mutants?.skipBotIdentity) {
+    if (opts.botLogin) {
       await verifyBotIdentity(base, token, opts.botLogin, opts.forbiddenLogins ?? [], timeoutMs);
     }
     const files = Object.fromEntries(Object.entries(pFiles).map(([name, content]) => [name, { content }]));

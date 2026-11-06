@@ -738,23 +738,23 @@ let
 
   gv2MutantSrcs = {
     m-no-pi-bwrap =
-      mutateRootSrc "m-no-pi-bwrap" "src/tier1/launch.ts" "if (o.sandbox === false) {"
-        "if (true) {";
+      mutateRootSrc "m-no-pi-bwrap" "src/tier1/launch.ts"
+        "      command: bwrapBin,\n      args: bwrapArgs,"
+        "      command: piBin,\n      args: [...fixed, ...extraArgs, ...apiKeyArgs],";
     m-rw-worktree-or-agentdir =
       mutateRootSrc "m-rw-worktree-or-agentdir" "src/tier1/launch.ts"
-        ''const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};''
-        ''const sb: PiSandbox = { ...(typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {}), rwWorktree: true, rwAgentDir: true };'';
+        ''["--ro-bind", agentDir, agentDir]''
+        ''["--bind", agentDir, agentDir]'';
     m-expose-state-root =
       mutateRootSrc "m-expose-state-root" "src/tier1/launch.ts"
-        ''const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};''
-        ''const sb: PiSandbox = { ...(typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {}), exposeStateRoot: true };'';
+        ''const stateMask = ["--tmpfs", stateRoot];''
+        ''const stateMask = ["--ro-bind", stateRoot, stateRoot];'';
     m-eval-proc-mount =
       mutateRootSrc "m-eval-proc-mount" "src/eval/run.ts" ''"--bind", "/proc", "/proc",''
         ''"--proc", "/proc",'';
     m-no-unshare-pid = mutateRootSrc "m-no-unshare-pid" "src/eval/run.ts" ''"--unshare-pid",'' "";
     m-pi-no-unshare-pid =
-      mutateRootSrc "m-pi-no-unshare-pid" "src/tier1/launch.ts"
-        ''...(!sb.omitUnsharePid ? ["--unshare-pid"] : []),''
+      mutateRootSrc "m-pi-no-unshare-pid" "src/tier1/launch.ts" ''"--unshare-pid",''
         "";
   };
 

@@ -353,28 +353,6 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
     await worktreeFor(mirrorCfg, repoUrl, "th-c1", runGit);
     assert.equal(existsSync(markerFile), false, "re-running worktreeFor must never trigger core.fsmonitor");
 
-    // Mutant M-worktree-git-checkout:
-    // (a) worktreeGitArchive materializes symlink + gitattributes phantom diffs, causing computeWorktreeDiff to fail RED!
-    await worktreeFor(mirrorCfg, repoUrl, "th-mut-archive", runGit, { worktreeGitArchive: true });
-    await assert.rejects(
-      computeWorktreeDiff({
-        mirrorRoot: mirrorCfg.mirrorRoot,
-        worktreeRoot: mirrorCfg.worktreeRoot,
-        thread: "th-mut-archive",
-        repo: "alice/c1repo",
-        worktreeSubdir: key,
-        repoUrlBase: gitBase,
-      }),
-      /worktreeSubdir contains a symlink at link/,
-      "archive mutant materializes S_IFLNK and turns untouched computeWorktreeDiff RED",
-    );
-    // (b) worktreeGitCheckout leaves .git in the writable worktree, turning the `.git` absence check RED!
-    const mutCheckoutWt = await worktreeFor(mirrorCfg, repoUrl, "th-mut-checkout", runGit, { worktreeGitCheckout: true });
-    assert.throws(
-      () => assert.equal(existsSync(`${mutCheckoutWt.path}/.git`), false, "mutant M-worktree-git-checkout leaves .git and turns RED"),
-      /mutant M-worktree-git-checkout leaves \.git and turns RED/,
-    );
-
     // =========================================================================
     // 2. Gate v1 C-N4: subdirectory worktreeSubdir & cross-repo mismatch refusal
     // =========================================================================
@@ -431,7 +409,7 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
       screen: async (x) => x,
       room_context: async () => "",
     };
-    const makeHook = (maxScratchFiles?: number, maxScratchBytes?: number, writeConfineUseReadMode?: boolean) => {
+    const makeHook = (maxScratchFiles?: number, maxScratchBytes?: number) => {
       let hook: ((e: ToolCall) => Promise<{ block: true; reason: string } | void>) | undefined;
       const pi: Pi = {
         registerTool: () => {},
@@ -448,7 +426,6 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
           cluster: [],
           maxScratchFiles,
           maxScratchBytes,
-          mutants: writeConfineUseReadMode ? { writeConfineAllowMemoryAndDotdot: true } : undefined,
         },
         { host: stubHost },
       )(pi);
@@ -458,7 +435,7 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
       };
     };
 
-    const callHook = makeHook(2, 64, false);
+    const callHook = makeHook(2, 64);
     // Writing a new file in a worktree that already has 4,100 cloned files succeeds (F9 write-delta accounting)!
     const w1 = await callHook("write", { path: "repro/flake.nix", content: "{ a = 1; }\n" });
     assert.equal(w1.res, undefined, `write to new file must succeed despite 4,100 pre-existing cloned files: ${JSON.stringify(w1.res)}`);
@@ -490,23 +467,8 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
       assert.equal(eBad.res?.block, true, `edit to ${badPath} must be blocked by confineWrite`);
     }
 
-    // Mutant M-write-confine-allow-memory-and-dotdot (writeConfineUseReadMode: true):
-    // 1) allows write to `${memRoot}/MEMORY.md` (because read-mode `confine` allows `memoryRoot`) -> turns RED!
-    // 2) blocks creating a brand-new file `repro/brand-new.nix` (because `realpathSync` throws ENOENT) -> turns RED!
-    const callMutHook = makeHook(10, 4096, true);
-    const mutMemWrite = await callMutHook("write", { path: `${memRoot}/MEMORY.md`, content: "pwn" });
-    assert.throws(
-      () => assert.equal(mutMemWrite.res?.block, true, "mutant M-write-confine-allow-memory-and-dotdot allows /memory write and turns RED"),
-      /mutant M-write-confine-allow-memory-and-dotdot allows \/memory write and turns RED/,
-    );
-    const mutNewFile = await callMutHook("write", { path: "repro/brand-new.nix", content: "{}" });
-    assert.throws(
-      () => assert.equal(mutNewFile.res, undefined, "mutant M-write-confine-allow-memory-and-dotdot refuses new file creation and turns RED"),
-      /mutant M-write-confine-allow-memory-and-dotdot refuses new file creation and turns RED/,
-    );
-
     // =========================================================================
-    // 4. F6 & Q1: genie-bot identity & fork enforcement + mutants
+    // 4. F6 & Q1: genie-bot identity & fork enforcement + guard-out enforcement
     // =========================================================================
     // In th-c1's worktree, modify root.nix, add added.nix, and delete ignored.txt
     writeFileSync(`${wt.path}/root.nix`, "{ root = false; }\n");
@@ -532,10 +494,7 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
       }),
     });
 
-    const runBroker = (
-      guardBase: string,
-      mutants?: { skipBotIdentity?: boolean; bypassGuardOut?: boolean },
-    ) =>
+    const runBroker = (guardBase: string) =>
       broker("th-c1", prRaw, {
         tokenFile: tokenFile("bot-secret-token"),
         botLogin: "genie-bot",
@@ -545,17 +504,7 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
         worktreeRoot: mirrorCfg.worktreeRoot,
         repoUrlBase: gitBase,
         guard: { base: guardBase, model: "m", system: "guard-out" },
-        act: byKind({
-          gist: gistAct(ghApi),
-          pr: prAct((th) => `https://chat.example.org/thread/${th}`, ghApi, {
-            botLogin: "genie-bot",
-            forbiddenLogins: ["sini"],
-            pollMs: 10,
-            forkWaitMs: 1000,
-            mutants,
-          }),
-        }),
-        mutants,
+        act: realAct,
       });
 
     // (a) Token whose GET /user returns owner identity "sini" is refused with 0 POST /pulls or POST /gists
@@ -607,27 +556,12 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
     assert.equal(treePaths.get("added.nix")?.content, "{ added = 1; }\n");
     assert.equal(treePaths.get("ignored.txt")?.sha, null, "deleted file must be committed with sha: null");
 
-    // (f) Mutant M-broker-skip-bot-identity: skipping identity/permission checks allows owner token + push:true to act, turning RED!
-    ghLogin = "sini";
-    ghRepoPermissions = { push: true };
-    const mutBotRes = await runBroker(nPass.base, { skipBotIdentity: true });
-    assert.throws(
-      () => assert.equal(mutBotRes.acted, false, "mutant M-broker-skip-bot-identity acts with owner token and turns RED"),
-      /mutant M-broker-skip-bot-identity acts with owner token and turns RED/,
-    );
-
-    // (g) Mutant M-propose-bypass-guard-out: skipping reviewOut in outbound() allows a guard-out blocked proposal to act, turning RED!
+    // (f) Guard-out blocked proposal is refused (`acted: false`)
     ghLogin = "genie-bot";
     ghRepoPermissions = { push: false, maintain: false, admin: false };
     const blockedControl = await runBroker(nBlock.base);
     assert.equal(blockedControl.acted, false);
     assert.match(blockedControl.reason, /^guard-out: leak/);
-    const mutGuardOutRes = await runBroker(nBlock.base, { bypassGuardOut: true });
-    assert.throws(
-      () => assert.equal(mutGuardOutRes.acted, false, "mutant M-propose-bypass-guard-out bypasses guard-out block and turns RED"),
-      /mutant M-propose-bypass-guard-out bypasses guard-out block and turns RED/,
-    );
-    void realAct;
   } finally {
     daemon.kill();
     nPass.close();

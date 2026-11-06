@@ -27,7 +27,6 @@ import {
   validateProposalFields,
   verifyBotIdentity,
   type Act,
-  type BrokerMutants,
 } from "./index.ts";
 
 export interface PrOptions {
@@ -36,13 +35,12 @@ export interface PrOptions {
   timeoutMs?: number;
   botLogin?: string;
   forbiddenLogins?: string[];
-  mutants?: BrokerMutants;
 }
 
 export function pr(
   link: (thread: string) => string,
   base = "https://api.github.com",
-  { forkWaitMs = 60_000, pollMs = 2_000, timeoutMs = 30_000, botLogin, forbiddenLogins = [], mutants }: PrOptions = {},
+  { forkWaitMs = 60_000, pollMs = 2_000, timeoutMs = 30_000, botLogin, forbiddenLogins = [] }: PrOptions = {},
 ): Act {
   return async (p, token, thread) => {
     if (p.kind !== "pr" || !p.repo || !p.branch) throw new Error(`pr: cannot act on a ${p.kind} proposal without a repo and branch`);
@@ -60,7 +58,7 @@ export function pr(
     }
     const fieldErr = validateProposalFields(p);
     if (fieldErr !== null) throw new Error(`pr: ${fieldErr}`);
-    if (botLogin && !mutants?.skipBotIdentity) {
+    if (botLogin) {
       await verifyBotIdentity(base, token, botLogin, forbiddenLogins, timeoutMs);
     }
     const body = `${p.body}\n\nThread: ${link(thread)}`;
@@ -93,7 +91,7 @@ export function pr(
 
     const upstream = await call("GET", `/repos/${p.repo}`);
     if (upstream.private !== false) throw new Error(`pr: ${p.repo} is not public`);
-    if (botLogin && !mutants?.skipBotIdentity) {
+    if (botLogin) {
       if (String(upstream.owner?.login ?? "").toLowerCase() === botLogin.toLowerCase()) {
         throw new Error(`pr: refused: upstream repo ${p.repo} is owned by ${botLogin}`);
       }
@@ -109,7 +107,7 @@ export function pr(
     if (!isValidBranchRef(into)) throw new Error(`pr: invalid upstream default_branch ${JSON.stringify(into)}`);
     const fork = await call("POST", `/repos/${p.repo}/forks`);
     if (!isValidRepoCoord(fork.full_name)) throw new Error(`pr: invalid fork full_name ${JSON.stringify(fork.full_name)}`);
-    if (botLogin && !mutants?.skipBotIdentity) {
+    if (botLogin) {
       if (String(fork.owner?.login ?? "").toLowerCase() !== botLogin.toLowerCase()) {
         throw new Error(`pr: refused: fork owner ${JSON.stringify(fork.owner?.login)} does not match ${botLogin}`);
       }

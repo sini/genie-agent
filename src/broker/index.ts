@@ -154,13 +154,6 @@ export function validateProposalFields(p: Proposal): string | null {
   return null;
 }
 
-export interface BrokerMutants {
-  // M-broker-skip-bot-identity: skips GET /user === botLogin and upstream.permissions checks.
-  skipBotIdentity?: boolean;
-  // M-propose-bypass-guard-out: skips reviewOut in outbound().
-  bypassGuardOut?: boolean;
-}
-
 export async function verifyBotIdentity(
   githubApi: string,
   token: string,
@@ -368,7 +361,6 @@ export interface Config {
   repoUrlBase?: string;
   // As the redactor takes them, from secretLineHashes.
   secretFileHashes?: string[];
-  mutants?: BrokerMutants;
 }
 
 // What the broker records against the thread: never the token.
@@ -393,7 +385,6 @@ export async function outbound<T>(
   build: (scrub: (s: string) => string) => T,
   guard: GuardOutConfig,
   secretFileHashes?: string[],
-  mutants?: Pick<BrokerMutants, "bypassGuardOut">,
 ): Promise<{ redactions: string[] } & ({ value: T } | { reason: string })> {
   const redactions: string[] = [];
   const scrub = (s: string) => {
@@ -402,7 +393,7 @@ export async function outbound<T>(
     return r.text;
   };
   const value = build(scrub);
-  if (guard.enable === false || mutants?.bypassGuardOut) {
+  if (guard.enable === false) {
     return { redactions, value };
   }
   try {
@@ -485,7 +476,6 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     }),
     c.guard,
     c.secretFileHashes,
-    c.mutants,
   );
   redactions.push(...out.redactions);
   if (!("value" in out)) return done(false, out.reason);
@@ -500,7 +490,7 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     return done(false, `token unreadable: ${c.tokenFile}`);
   }
   if (!token) return done(false, `token empty: ${c.tokenFile}`);
-  if (c.botLogin && !c.mutants?.skipBotIdentity) {
+  if (c.botLogin) {
     try {
       await verifyBotIdentity(c.githubApi ?? "https://api.github.com", token, c.botLogin, c.forbiddenLogins ?? []);
     } catch (e) {

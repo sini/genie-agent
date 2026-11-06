@@ -15,7 +15,6 @@ import { gist } from "../broker/gist.ts";
 import {
   BOT_LOGIN_RE,
   broker,
-  type BrokerMutants,
   byKind,
   DEFAULT_BOT_LOGIN,
   DEFAULT_FORBIDDEN_LOGINS,
@@ -30,12 +29,11 @@ import { Escalation, type Package, type XmsgSend } from "../escalation/index.ts"
 import { router } from "../escalation/route.ts";
 import { withCache } from "../eval/cache.ts";
 import { perThread, type Runner } from "../eval/lock.ts";
-import { type EvalMutants, type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
+import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
 import { type Clock, Lifecycle } from "../lifecycle/index.ts";
 import {
-  type GitReadMutants,
   gitRead,
   type GitRequest,
   type MirrorConfig,
@@ -48,9 +46,9 @@ import { type GuardClient, webScreen } from "../supervisor/guard-client.ts";
 import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
-import { type GhReadMutants, type GhReadRequest, ghRead } from "../tier1/github.ts";
+import { type GhReadRequest, ghRead } from "../tier1/github.ts";
 import type { Config as Tier1Config } from "../tier1/index.ts";
-import { type PiSandbox, tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
+import { tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
 import { errors, load } from "../tier1/schema.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 import { parseMatrixForward } from "./io.ts";
@@ -306,21 +304,11 @@ export async function resyncThread(
   return parts.join("");
 }
 
-// `mutants` is reachable only from code (tests), never from the config file: it exists so the GS2
-// oracle can show that each sandbox mutant turns it red.
 export function main(
   configFile: string,
   io: Io,
   run?: Runner,
   clock?: Clock,
-  mutants?: {
-    piSandbox?: Omit<PiSandbox, "stateRoot" | "worktreeRoot" | "agentDir" | "memoryRoot"> | false;
-    ignoreSilentFlag?: boolean;
-    evalMutants?: EvalMutants;
-    gitMutants?: GitReadMutants;
-    ghReadMutants?: GhReadMutants;
-    brokerMutants?: BrokerMutants;
-  },
 ) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
@@ -334,7 +322,6 @@ export function main(
           runEval(l, {
             ...c.eval,
             worktreeRoot: c.mirror.worktreeRoot,
-            mutants: mutants?.evalMutants,
           })),
     ),
   );
@@ -383,8 +370,8 @@ export function main(
     return threadLink.replace("{thread}", encodeURIComponent(t));
   };
   const act = byKind({
-    gist: gist(githubApi, 30_000, { botLogin, forbiddenLogins, mutants: mutants?.brokerMutants }),
-    pr: pr(link, githubApi, { botLogin, forbiddenLogins, mutants: mutants?.brokerMutants }),
+    gist: gist(githubApi, 30_000, { botLogin, forbiddenLogins }),
+    pr: pr(link, githubApi, { botLogin, forbiddenLogins }),
   });
 
   const escalation = new Escalation({
@@ -412,18 +399,14 @@ export function main(
     memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
     screened: guardEnable,
     // GS2 (P2): the jail is the Launch's construction. Config may only name the bwrap binary; there is
-    // no production path to an unjailed pi (tier1Launch's `sandbox: false` is a test-only mutant hook).
-    sandbox:
-      mutants?.piSandbox === false
-        ? false
-        : {
-            ...(c.tier1.sandbox?.bwrap ? { bwrap: c.tier1.sandbox.bwrap } : {}),
-            ...(mutants?.piSandbox ?? {}),
-            stateRoot: c.stateRoot,
-            worktreeRoot: c.mirror.worktreeRoot,
-            agentDir,
-            memoryRoot: c.tier1.memoryRoot,
-          },
+    // no production path to an unjailed pi.
+    sandbox: {
+      ...(c.tier1.sandbox?.bwrap ? { bwrap: c.tier1.sandbox.bwrap } : {}),
+      stateRoot: c.stateRoot,
+      worktreeRoot: c.mirror.worktreeRoot,
+      agentDir,
+      memoryRoot: c.tier1.memoryRoot,
+    },
     config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
@@ -577,7 +560,7 @@ export function main(
       reply: async (raw) => {
         lifecycle.disarm(t);
         const d = raw as Draft;
-        if (d.silent === true && !mutants?.ignoreSilentFlag) {
+        if (d.silent === true) {
           withheldInTurn.delete(t);
           await io.post.post(t, { silent: true });
           return { posted: true, silent: true, escalated: null };
@@ -631,7 +614,6 @@ export function main(
           repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
           guard: guardOut,
           act,
-          mutants: mutants?.brokerMutants,
         });
         if (res.acted) {
           store.recordProposal(t);
@@ -648,7 +630,6 @@ export function main(
           thread: t,
           repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
           git: io.git,
-          mutants: mutants?.gitMutants,
         });
         if ((c.gitScreen?.enable ?? false) && guardEnable) {
           const screened = await gitScreen(out.output);
@@ -662,7 +643,6 @@ export function main(
         const res = await ghRead(request as GhReadRequest, {
           githubApi: c.broker?.githubApi,
           tokenFile: c.githubReadTokenFile,
-          mutants: mutants?.ghReadMutants,
         });
         if ((c.ghScreen?.enable ?? false) && guardEnable) {
           const screened = await ghScreen(JSON.stringify(res));
@@ -808,7 +788,7 @@ export function main(
         return;
       }
       const parsed = check.value;
-      if (parsed.silent === true && !mutants?.ignoreSilentFlag) {
+      if (parsed.silent === true) {
         await io.post.post(i.thread, { silent: true });
         return;
       }

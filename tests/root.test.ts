@@ -2577,7 +2577,7 @@ test("oracle O-GC1-silent: silent reply ack (GAP-1), redactLastPost & editLastPo
   assert.equal(typeof ghDefaultOut.ok?.issue, "object", `expected object ok.issue, got ${JSON.stringify(ghDefaultOut)}`);
   assert.equal(checked.length, checkedBeforeGitDefault, "default gitScreen/ghScreen=false must make 0 guard.check calls");
 
-  // Now run a secondary root with gitScreen/ghScreen=true, maxProposalsPerThreadPerDay=1, and ignoreSilentFlag=true
+  // Now run a secondary root with gitScreen/ghScreen=true and maxProposalsPerThreadPerDay=1
   const mutPosts: [string, unknown][] = [];
   const mutBatches: Inbound[][] = [];
   const mutRoot = main(
@@ -2590,9 +2590,6 @@ test("oracle O-GC1-silent: silent reply ack (GAP-1), redactLastPost & editLastPo
       git: (args, signal) =>
         git(["-c", "protocol.git.allow=always", ...args.map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:"))], signal),
     },
-    undefined,
-    undefined,
-    { ignoreSilentFlag: true },
   );
   try {
     mutBatches.push([{ thread: "m_th", envelope: screenedFalseEnv }]);
@@ -2614,23 +2611,6 @@ test("oracle O-GC1-silent: silent reply ack (GAP-1), redactLastPost & editLastPo
     const p2 = await mutHost("propose", validPrProposal);
     assert.equal(p2.ok.acted, false);
     assert.match(p2.ok.reason, /exceeded maxProposalsPerThreadPerDay/);
-
-    // Mutant M-ignore-silent-flag (ignoreSilentFlag: true) runs guardOut and posts visible text instead of {"silent": true} -> turns RED!
-    const reviewsBeforeMut = reviews.length;
-    await mutHost("reply", {
-      silent: true,
-      answer: "visible leak on silent turn",
-      confidence: 1,
-      gaps: [],
-      escalate_forced: false,
-    });
-    assert.throws(
-      () => {
-        assert.equal(reviews.length, reviewsBeforeMut, "mutant M-ignore-silent-flag calls guardOut and turns RED");
-        assert.deepEqual(mutPosts.at(-1)?.[1], { silent: true }, "mutant M-ignore-silent-flag posts visible text and turns RED");
-      },
-      /mutant M-ignore-silent-flag/,
-    );
   } finally {
     await mutRoot.stop();
   }
@@ -2892,11 +2872,7 @@ process.stdin.on("data", async (chunk) => {
 process.stdin.on("end", () => process.exit(0));
 `;
 
-  const runProbe = async (
-    label: string,
-    sandboxCfg: Record<string, unknown> | false | undefined,
-    symlinksTrue = false,
-  ) => {
+  const runProbe = async (label: string) => {
     const runDir = `${gs2Tmp}/${label}`;
     mkdirSync(`${runDir}/state/other_thread`, { recursive: true });
     const otherStateFile = `${runDir}/state/other_thread/state.json`;
@@ -2920,7 +2896,6 @@ process.stdin.on("end", () => process.exit(0));
           mirrorRoot: `${runDir}/mirrors`,
           worktreeRoot: `${runDir}/worktrees`,
           exempt: ["127.0.0.1"],
-          ...(symlinksTrue ? { mutants: { worktreeGitCheckout: true } } : {}),
         },
         pi: piWrap,
         model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: `${gs2Tmp}/model-key` },
@@ -2946,15 +2921,10 @@ process.stdin.on("end", () => process.exit(0));
         xmsg,
         git: (args, signal) => {
           const rewritten = args.map((a) => a.replace(/^https:\/\/127\.0\.0\.1:/i, "git://127.0.0.1:"));
-          const filtered = symlinksTrue
-            ? rewritten.map((a) => (a === "core.symlinks=false" ? "core.symlinks=true" : a))
-            : rewritten;
-          return git(["-c", "protocol.git.allow=always", ...filtered], signal);
+          return git(["-c", "protocol.git.allow=always", ...rewritten], signal);
         },
       },
       async () => ({ exit: 0, stdout_tail: "42", stderr_tail: "", limit_hit: "none" }),
-      undefined,
-      sandboxCfg !== undefined ? { piSandbox: sandboxCfg as false | Record<string, boolean> } : undefined,
     );
     try {
       probeBatches.push([{ thread: "th_gs2", envelope: envelope(BOB, "probe isolation") }]);
@@ -3001,41 +2971,11 @@ process.stdin.on("end", () => process.exit(0));
   };
 
   try {
-    // 1. Default configuration passes all positive and negative isolation checks
-    const baseReport = await runProbe("default", undefined);
+    // Default configuration passes all positive and negative isolation checks;
+    // the six source mutants (M-no-pi-bwrap, M-rw-worktree-or-agentdir, M-expose-state-root,
+    // M-symlinks-true, M-no-pi-offline, M-no-unshare-pid) are driven RED via substituteInPlace in flake.nix.
+    const baseReport = await runProbe("default");
     assertIsolated(baseReport);
-
-    // 2. Mutant M-no-pi-bwrap (sandbox: false) turns RED
-    const noBwrapReport = await runProbe("m-no-bwrap", false);
-    assert.throws(() => assertIsolated(noBwrapReport), /AssertionError/, "M-no-pi-bwrap must turn oracle RED");
-    // ...for the right reason: unjailed pi sees /run/credentials and other threads' state.
-    assert.equal(noBwrapReport.runCredentials.ok || noBwrapReport.otherStateRead.ok, true, "M-no-pi-bwrap: hidden paths become visible");
-
-    // 3. Mutant M-rw-worktree-or-agentdir (rwWorktree: true, rwAgentDir: true) turns RED
-    const rwReport = await runProbe("m-rw-wt-agent", { rwWorktree: true, rwAgentDir: true });
-    assert.throws(() => assertIsolated(rwReport), /AssertionError/, "M-rw-worktree-or-agentdir must turn oracle RED");
-    assert.equal(rwReport.worktreeWrite, "WRITABLE", "M-rw-worktree-or-agentdir: worktree becomes writable");
-    assert.equal(rwReport.agentDirWrite, "WRITABLE", "M-rw-worktree-or-agentdir: real agentDir becomes writable");
-
-    // 4. Mutant M-expose-state-root (exposeStateRoot: true) turns RED
-    const exposeStateReport = await runProbe("m-expose-state", { exposeStateRoot: true });
-    assert.throws(() => assertIsolated(exposeStateReport), /AssertionError/, "M-expose-state-root must turn oracle RED");
-    assert.equal(exposeStateReport.otherStateRead.ok, true, "M-expose-state-root: another thread's state becomes readable");
-
-    // 5. Mutant M-symlinks-true (core.symlinks=true) turns RED
-    const symlinksReport = await runProbe("m-symlinks-true", undefined, true);
-    assert.throws(() => assertIsolated(symlinksReport), /AssertionError/, "M-symlinks-true must turn oracle RED");
-    assert.equal(symlinksReport.linkStat?.isSymbolicLink, true, "M-symlinks-true: tracked symlink materializes as S_IFLNK");
-
-    // 6. Mutant M-no-pi-offline (omitPiOffline: true) turns RED
-    const noOfflineReport = await runProbe("m-no-offline", { omitPiOffline: true });
-    assert.throws(() => assertIsolated(noOfflineReport), /AssertionError/, "M-no-pi-offline must turn oracle RED");
-    assert.equal(noOfflineReport.piOffline, false, "M-no-pi-offline: PI_OFFLINE=1 is absent");
-
-    // 7. Mutant M-no-unshare-pid (omitUnsharePid: true) turns RED
-    const noUnsharePidReport = await runProbe("m-no-unshare-pid", { omitUnsharePid: true });
-    assert.throws(() => assertIsolated(noUnsharePidReport), /AssertionError/, "M-no-unshare-pid must turn oracle RED");
-    assert.equal(noUnsharePidReport.killParentErr, "OK", "M-no-unshare-pid: parent PID becomes signalable (rc 0)");
   } finally {
     model.close();
     searx.closeAllConnections?.();

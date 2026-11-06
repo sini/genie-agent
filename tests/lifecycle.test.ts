@@ -629,7 +629,7 @@ test("oracle GS2 (C1): Lifecycle.message opens session/thread.jsonl with O_NOFOL
   const canaryPath = `${tmp}/gs2-lc-canary.jsonl`;
   writeFileSync(canaryPath, '{"role":"user","content":"canary"}\n');
 
-  const runCheck = async (label: string, kind: "symlink" | "fifo", sessionNoFollow: boolean) => {
+  const runCheck = async (label: string, kind: "symlink" | "fifo") => {
     const th = `t-c1-${label}`;
     c1Store.write({
       thread_id: th,
@@ -656,7 +656,6 @@ test("oracle GS2 (C1): Lifecycle.message opens session/thread.jsonl with O_NOFOL
         resyncCalls++;
         return "";
       },
-      sessionNoFollow,
     });
     try {
       await lc.message(th, "hello", { hadState: true });
@@ -668,16 +667,9 @@ test("oracle GS2 (C1): Lifecycle.message opens session/thread.jsonl with O_NOFOL
   };
 
   // 1. Symlink at session/thread.jsonl is refused (hasState = false -> triggers resync = 1)
-  assert.equal(await runCheck("sym-safe", "symlink", true), 1, "symlink session file must be refused and trigger resync");
+  assert.equal(await runCheck("sym-safe", "symlink"), 1, "symlink session file must be refused and trigger resync");
 
   // 2. FIFO at session/thread.jsonl returns immediately without blocking (hasState = false -> triggers resync = 1)
-  assert.equal(await runCheck("fifo-safe", "fifo", true), 1, "FIFO session file must be refused without blocking");
-
-  // 3. Mutant (sessionNoFollow = false): follows symlink to canary valid JSONL (hasState = true -> resync = 0) and turns RED
-  const mutantResyncCalls = await runCheck("sym-mutant", "symlink", false);
-  assert.throws(
-    () => assert.equal(mutantResyncCalls, 1, "mutant dropping O_NOFOLLOW follows symlink and turns RED"),
-    /mutant dropping O_NOFOLLOW follows symlink and turns RED/,
-  );
+  assert.equal(await runCheck("fifo-safe", "fifo"), 1, "FIFO session file must be refused without blocking");
 });
 

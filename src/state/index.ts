@@ -72,12 +72,8 @@ export function checkThread(thread: string): string {
 // Safely reads a session file from the thread's writable session directory (GS2 C1):
 // opens with O_RDONLY | O_NONBLOCK | O_NOFOLLOW and verifies fstat().isFile() so a symlink
 // or FIFO planted inside the writable session directory is refused without following or blocking.
-export function readSessionFile(path: string, opts?: { noFollow?: boolean }): string | null {
-  const noFollow = opts?.noFollow ?? true;
-  const flags =
-    constants.O_RDONLY |
-    constants.O_NONBLOCK |
-    (noFollow ? constants.O_NOFOLLOW : 0);
+export function readSessionFile(path: string): string | null {
+  const flags = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   let fd: number;
   try {
     fd = openSync(path, flags);

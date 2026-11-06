@@ -97,11 +97,6 @@ export interface Config {
   maxScratchFiles?: number;
   // Addresses web_fetch may reach although refused. Tests only.
   exempt?: string[];
-  // Test-only source mutant hooks.
-  mutants?: {
-    // M-write-confine-allow-memory-and-dotdot: replaces confineWrite with read-mode confine.
-    writeConfineAllowMemoryAndDotdot?: boolean;
-  };
 }
 
 export interface Deps {
@@ -238,12 +233,8 @@ export function confineWrite(
   opts?: {
     memoryRoot?: string;
     requireExisting?: boolean;
-    mutants?: { writeConfineAllowMemoryAndDotdot?: boolean };
   },
 ): string {
-  if (opts?.mutants?.writeConfineAllowMemoryAndDotdot) {
-    return confine(root, raw, opts.memoryRoot ?? "/memory");
-  }
   const p = raw;
   if (typeof p !== "string" || p.length === 0) throw new Error("the path is not a string");
   if (p === "/memory" || p.startsWith("/memory/")) {
@@ -537,7 +528,6 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
           const realTarget = confineWrite(cfg.root, e.input.path, {
             memoryRoot: cfg.memoryRoot,
             requireExisting: e.toolName === "edit",
-            mutants: cfg.mutants,
           });
           let newBytes = 0;
           if (e.toolName === "write") {

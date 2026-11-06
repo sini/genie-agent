@@ -56,13 +56,12 @@ export function archiveObject(
   store: ThreadStateStore,
   thread: string,
   now = new Date(),
-  opts?: { noFollow?: boolean },
 ) {
   const state = store.read(thread);
   if (!state) throw new Error(`archive: thread ${thread} has no state`);
   const args = store.sessionArgs(thread);
   const session = `${args[args.indexOf("--session-dir") + 1]}/${args[args.indexOf("--session-id") + 1]}.jsonl`;
-  const transcript = readSessionFile(session, opts);
+  const transcript = readSessionFile(session);
   const escalation = store.escalation(thread) ?? null;
   const absent: Record<string, string> = { ...ABSENT };
   if (transcript === null) absent.transcript = "pi wrote no session: the thread closed before its first reply";

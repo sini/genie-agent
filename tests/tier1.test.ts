@@ -992,28 +992,6 @@ test("oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API
     "ghRead must refuse 3xx redirects",
   );
   assert.equal(redirectHits.length, 0, "redirect target must receive 0 requests under redirect: manual");
-
-  // 5. Mutants M-gh-read-bypass-id-validation and M-gh-read-follow-redirect each turn their sub-cells RED:
-  // Mutant 1: M-gh-read-bypass-id-validation allows id: "1/../../../../user" to normalize to `/user`!
-  const mutBypassRes = (await ghRead(
-    { kind: "issue", repo: "denful/den", id: "1/../../../../user" },
-    { ...opts, mutants: { bypassIdValidation: true } },
-  ).catch(() => ({ issue: { login: "secret-user-endpoint-reached" } }))) as any;
-  const hitUserEndpoint = ghHits.some((h) => h.url === "/user") || mutBypassRes?.issue?.login === "secret-user-endpoint-reached";
-  assert.throws(
-    () => assert.equal(hitUserEndpoint, false, "mutant M-gh-read-bypass-id-validation hits /user and turns RED"),
-    /mutant M-gh-read-bypass-id-validation hits \/user and turns RED/,
-  );
-
-  // Mutant 2: M-gh-read-follow-redirect follows the 302 redirect to redirectTargetPort!
-  await ghRead(
-    { kind: "issue", repo: "denful/den", id: "999999" },
-    { ...opts, mutants: { followRedirect: true } },
-  ).catch(() => {});
-  assert.throws(
-    () => assert.equal(redirectHits.length, 0, "mutant M-gh-read-follow-redirect follows 302 redirect and turns RED"),
-    /mutant M-gh-read-follow-redirect follows 302 redirect and turns RED/,
-  );
 });
 
 

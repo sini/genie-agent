@@ -20,11 +20,6 @@ export interface PiSandbox {
   worktreeRoot?: string;
   agentDir?: string;
   memoryRoot?: string;
-  rwWorktree?: boolean;
-  rwAgentDir?: boolean;
-  exposeStateRoot?: boolean;
-  omitPiOffline?: boolean;
-  omitUnsharePid?: boolean;
 }
 
 const CA_CANDIDATES = [
@@ -122,8 +117,8 @@ export function tier1Launch(o: {
   agentDir?: string;
   // Extra environment variables to pass into the sandbox.
   env?: Record<string, string>;
-  // Per-thread bwrap sandbox configuration (GS2 / XA5-F1). Enabled by default; false only in mutant tests.
-  sandbox?: PiSandbox | false;
+  // Per-thread bwrap sandbox configuration (GS2 / XA5-F1).
+  sandbox?: PiSandbox;
 }): Launch {
   const appendPrompts = [skillsPrompt()];
   if (o.memory) {
@@ -146,14 +141,7 @@ export function tier1Launch(o: {
     const cfg = o.config(thread);
     const cfgJson = JSON.stringify(cfg);
     const extraArgs = o.args?.(thread) ?? [];
-    if (o.sandbox === false) {
-      return {
-        command: o.pi,
-        args: [...fixed, ...extraArgs],
-        env: { [CONFIG_ENV]: cfgJson, PI_OFFLINE: "1", ...(o.env ?? {}) },
-      };
-    }
-    const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};
+    const sb: PiSandbox = o.sandbox ?? {};
     const hasSessionDir = extraArgs.includes("--session-dir");
     if (sb.worktreeRoot || sb.stateRoot || hasSessionDir) {
       checkThread(thread);
@@ -219,7 +207,7 @@ export function tier1Launch(o: {
     // Mask parent-first: a tmpfs mounted later over an ancestor would hide an earlier one, and the
     // --remount-ro of the hidden path would then fail.
     const worktreeMaskFirst = separateWorktreeRoot && stateRoot.startsWith(`${worktreeRoot}/`);
-    const stateMask = sb.exposeStateRoot ? ["--ro-bind", stateRoot, stateRoot] : ["--tmpfs", stateRoot];
+    const stateMask = ["--tmpfs", stateRoot];
     const worktreeMask = separateWorktreeRoot ? ["--tmpfs", worktreeRoot] : [];
     const agentDirContainsRoots =
       stateRoot.startsWith(`${agentDir}/`) || worktreeRoot.startsWith(`${agentDir}/`);
@@ -228,7 +216,7 @@ export function tier1Launch(o: {
       "--die-with-parent",
       "--new-session",
       "--unshare-user",
-      ...(!sb.omitUnsharePid ? ["--unshare-pid"] : []),
+      "--unshare-pid",
       "--ro-bind", "/nix/store", "/nix/store",
       ...(resolvConf ? ["--ro-bind-try", resolvConf, "/etc/resolv.conf"] : []),
       ...(etcHosts ? ["--ro-bind-try", etcHosts, "/etc/hosts"] : []),
@@ -248,14 +236,14 @@ export function tier1Launch(o: {
       "--bind", "/proc", "/proc",
       "--tmpfs", "/tmp",
       ...(agentDirContainsRoots
-        ? [sb.rwAgentDir ? "--bind" : "--ro-bind", agentDir, agentDir]
+        ? ["--ro-bind", agentDir, agentDir]
         : []),
       ...(worktreeMaskFirst ? [...worktreeMask, ...stateMask] : [...stateMask, ...worktreeMask]),
       "--bind", sessionDir, sessionDir,
       ...(!agentDirContainsRoots
-        ? [sb.rwAgentDir ? "--bind" : "--ro-bind", agentDir, agentDir]
+        ? ["--ro-bind", agentDir, agentDir]
         : []),
-      (sb.rwWorktree ?? true) ? "--bind" : "--ro-bind", threadWorktree, threadWorktree,
+      "--bind", threadWorktree, threadWorktree,
       ...(memRoot && existsSync(memRoot) ? ["--ro-bind", memRoot, memRoot] : []),
       ...(repoDir && !repoDir.startsWith("/nix/store/") && existsSync(repoDir)
         ? ["--ro-bind", repoDir, repoDir]
@@ -271,12 +259,12 @@ export function tier1Launch(o: {
         ? ["--ro-bind", systemPromptPath, systemPromptPath]
         : []),
       ...(separateWorktreeRoot ? ["--remount-ro", worktreeRoot] : []),
-      ...(!sb.exposeStateRoot ? ["--remount-ro", stateRoot] : []),
+      "--remount-ro", stateRoot,
       "--clearenv",
       "--setenv", "PATH", process.env.PATH ?? "/bin:/usr/bin",
       "--setenv", "HOME", threadWorktree,
       "--setenv", "PI_CODING_AGENT_DIR", agentDir,
-      ...(!sb.omitPiOffline ? ["--setenv", "PI_OFFLINE", "1"] : []),
+      "--setenv", "PI_OFFLINE", "1",
       "--setenv", "PI_SKIP_VERSION_CHECK", "1",
       "--setenv", "PI_TELEMETRY", "0",
       "--setenv", CONFIG_ENV, cfgJson,
@@ -303,7 +291,7 @@ export function tier1Launch(o: {
       env: {
         [CONFIG_ENV]: cfgJson,
         PI_CODING_AGENT_DIR: agentDir,
-        ...(!sb.omitPiOffline ? { PI_OFFLINE: "1" } : {}),
+        PI_OFFLINE: "1",
         ...(o.env ?? {}),
       },
     };

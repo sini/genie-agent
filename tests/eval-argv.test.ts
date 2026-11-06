@@ -276,19 +276,6 @@ test("oracle O-GC1-eval: worktreeSubdir and apply (standalone + secrets:stub), c
       "runEval must refuse a worktreeSubdir that has no regular flake.nix",
     );
 
-    // Mutant M-worktree-subdir-no-prefix-check: skipping the realpath prefix check allows ../thread-b/repro and escape-link, turning RED
-    const mutResolved = resolveWorktreeSubdir(worktreeRoot, "thread-a", "../thread-b/repro", {
-      worktreeSubdirNoPrefixCheck: true,
-    });
-    assert.throws(
-      () =>
-        assert.ok(
-          mutResolved.startsWith(`${threadARoot}/`),
-          "mutant M-worktree-subdir-no-prefix-check escapes thread worktree and turns RED",
-        ),
-      /mutant M-worktree-subdir-no-prefix-check escapes thread worktree and turns RED/,
-    );
-
     // 3. Real end-to-end runEval on worktreeSubdir + apply + discriminating pure-eval probes (F7b)
     const evalApplyRes = await runEval(
       {
@@ -316,27 +303,6 @@ test("oracle O-GC1-eval: worktreeSubdir and apply (standalone + secrets:stub), c
     );
     assert.notEqual(pureResolv.exit, 0, "pure-eval must refuse builtins.readFile outside the flake tree");
     assert.match(pureResolv.stderr_tail, /forbidden in pure eval(uation)? mode|cannot read.*pure/i);
-
-    // Mutant M-eval-impure (mutants: { evalImpure: true }):
-    // builtins.getEnv "HOME" returns '"/work/home"' and builtins.readFile "/etc/resolv.conf" exits 0, turning both F7b probes RED!
-    const impureHome = await runEval(
-      { thread: "thread-a", request: { worktreeSubdir: "repro", attr: "home", trusted: "no" }, sender_tier: "public" },
-      { worktreeRoot, timeoutMs: 60_000, mutants: { evalImpure: true } },
-    );
-    assert.equal(impureHome.exit, 0, impureHome.stderr_tail);
-    assert.throws(
-      () => assert.equal(impureHome.stdout_tail.trim(), '""', "mutant M-eval-impure leaks HOME=/work/home and turns RED"),
-      /mutant M-eval-impure leaks HOME=\/work\/home and turns RED/,
-    );
-
-    const impureResolv = await runEval(
-      { thread: "thread-a", request: { worktreeSubdir: "repro", attr: "resolv", trusted: "no" }, sender_tier: "public" },
-      { worktreeRoot, timeoutMs: 60_000, mutants: { evalImpure: true } },
-    );
-    assert.throws(
-      () => assert.notEqual(impureResolv.exit, 0, "mutant M-eval-impure reads /etc/resolv.conf (exit 0) and turns RED"),
-      /mutant M-eval-impure reads \/etc\/resolv\.conf \(exit 0\) and turns RED/,
-    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

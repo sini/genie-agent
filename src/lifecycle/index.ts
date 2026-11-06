@@ -195,7 +195,6 @@ export interface LifecycleOptions {
   onQueueTimeout?: (thread: string) => Promise<unknown> | unknown;
   replayResume?: (thread: string) => Promise<unknown>;
   resync?: (thread: string) => Promise<string | void>;
-  sessionNoFollow?: boolean;
 }
 
 interface QueuedTurn {
@@ -309,7 +308,7 @@ export class Lifecycle {
     let hasState = false;
     if (existsSync(stateFile)) {
       try {
-        const rawSession = readSessionFile(sessionFile, { noFollow: this.o.sessionNoFollow ?? true })?.trim() ?? "";
+        const rawSession = readSessionFile(sessionFile)?.trim() ?? "";
         if (rawSession.length > 0) {
           for (const line of rawSession.split("\n")) {
             JSON.parse(line);

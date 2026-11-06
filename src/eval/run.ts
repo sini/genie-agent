@@ -37,13 +37,6 @@ export interface EvalResult {
   limit_hit: (typeof LIMITS)[number];
 }
 
-export interface EvalMutants {
-  // M-eval-impure: flips pure-eval to false in nixArgv.
-  evalImpure?: boolean;
-  // M-worktree-subdir-no-prefix-check: skips resolveWorktreeSubdir validation/prefix check.
-  worktreeSubdirNoPrefixCheck?: boolean;
-}
-
 export interface RunOptions {
   timeoutMs?: number;
   // A local flake directory evaluated in place of github:<repo>/<rev>. Tests only.
@@ -59,8 +52,6 @@ export interface RunOptions {
   memoryMax?: number;
   // Optional CA bundle file override. Tests only.
   caBundle?: string;
-  // Test-only source mutant hooks.
-  mutants?: EvalMutants;
 }
 
 export const TAIL_CHARS = 4096;
@@ -90,28 +81,21 @@ export function resolveWorktreeSubdir(
   worktreeRoot: string,
   thread: string,
   subdir: string,
-  mutants?: Pick<EvalMutants, "worktreeSubdirNoPrefixCheck">,
 ): string {
   if (!threadName.test(thread)) {
     throw new Error(`invalid thread for worktreeSubdir: ${thread}`);
   }
-  if (!mutants?.worktreeSubdirNoPrefixCheck) {
-    if (!WORKTREE_SUBDIR_RE.test(subdir) || subdir.split("/").some((s) => s === "." || s === "..")) {
-      throw new Error(`invalid worktreeSubdir: ${subdir}`);
-    }
+  if (!WORKTREE_SUBDIR_RE.test(subdir) || subdir.split("/").some((s) => s === "." || s === "..")) {
+    throw new Error(`invalid worktreeSubdir: ${subdir}`);
   }
   const threadRoot = realpathSync(`${worktreeRoot}/${thread}`);
   const candidate = resolve(threadRoot, subdir);
-  if (!mutants?.worktreeSubdirNoPrefixCheck) {
-    if (candidate !== threadRoot && !candidate.startsWith(`${threadRoot}/`)) {
-      throw new Error(`worktreeSubdir escapes thread worktree: ${subdir}`);
-    }
+  if (candidate !== threadRoot && !candidate.startsWith(`${threadRoot}/`)) {
+    throw new Error(`worktreeSubdir escapes thread worktree: ${subdir}`);
   }
   const real = realpathSync(candidate);
-  if (!mutants?.worktreeSubdirNoPrefixCheck) {
-    if (!real.startsWith(`${threadRoot}/`) && real !== threadRoot) {
-      throw new Error(`worktreeSubdir symlink escapes thread worktree: ${subdir}`);
-    }
+  if (!real.startsWith(`${threadRoot}/`) && real !== threadRoot) {
+    throw new Error(`worktreeSubdir symlink escapes thread worktree: ${subdir}`);
   }
   return real;
 }
@@ -216,7 +200,6 @@ export function nixArgv(
   launch: Launch,
   flakeRef: string,
   builders = "",
-  mutants?: Pick<EvalMutants, "evalImpure">,
 ): string[] {
   const { request } = launch;
   if (!ATTR_PATH_RE.test(request.attr)) {
@@ -237,7 +220,7 @@ export function nixArgv(
   }
   const trusted = effectiveTier(launch) === "trusted";
   const settings = {
-    "pure-eval": mutants?.evalImpure ? "false" : "true",
+    "pure-eval": "true",
     "allow-import-from-derivation": trusted ? "true" : "false",
     builders: trusted ? builders : "",
     substituters: "",
@@ -327,7 +310,6 @@ export interface BwrapArgvOptions {
   nsswitchConf?: string;
   localFlake?: string;
   builders?: string;
-  mutants?: Pick<EvalMutants, "evalImpure">;
 }
 
 // Builds the bubblewrap argv for runEval. Extracted so unit tests (tests/eval-argv.test.ts) and
@@ -361,7 +343,7 @@ export function bwrapArgv(launch: Launch, flakeRef: string, opts: BwrapArgvOptio
     "--bind", opts.tmp, "/work",
     ...(opts.localFlake ? ["--ro-bind", opts.localFlake, "/src"] : []),
     nix,
-    ...nixArgv(launch, flakeRef, opts.builders, opts.mutants),
+    ...nixArgv(launch, flakeRef, opts.builders),
   ];
 }
 
@@ -378,7 +360,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     if (!options.worktreeRoot || !launch.thread) {
       throw new Error("worktreeSubdir requires worktreeRoot and thread");
     }
-    const flakeDir = resolveWorktreeSubdir(options.worktreeRoot, launch.thread, request.worktreeSubdir, options.mutants);
+    const flakeDir = resolveWorktreeSubdir(options.worktreeRoot, launch.thread, request.worktreeSubdir);
     const flakeNix = `${flakeDir}/flake.nix`;
     const st = lstatSync(flakeNix, { throwIfNoEntry: false });
     if (!st || !st.isFile() || st.isSymbolicLink()) {
@@ -430,7 +412,6 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     nsswitchConf,
     localFlake: boundFlake,
     builders: options.builders,
-    mutants: options.mutants,
   });
   const cg = evalCgroup();
   // The whole cgroup's count: the only one without an eval cgroup, and the fallback when systemd takes

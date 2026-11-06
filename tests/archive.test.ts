@@ -554,13 +554,6 @@ test("oracle GS2 (C1): archiveObject opens session/thread.jsonl with O_NOFOLLOW 
   execFileSync("mkfifo", [fifoSession]);
   const fifoObj = archiveObject(c1Store, thFifo);
   assert.equal(fifoObj.body.transcript, null, "FIFO session/thread.jsonl must be refused without blocking");
-
-  // 3. Mutant (dropping O_NOFOLLOW): follows symlink to canary file and turns RED
-  const mutantObj = archiveObject(c1Store, thSym, new Date(), { noFollow: false });
-  assert.throws(
-    () => assert.equal(mutantObj.body.transcript, null, "mutant dropping O_NOFOLLOW reads canary and turns RED"),
-    /mutant dropping O_NOFOLLOW reads canary and turns RED/,
-  );
 });
 
 

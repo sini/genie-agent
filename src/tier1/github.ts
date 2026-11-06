@@ -26,19 +26,11 @@ export interface GhReadRequest {
   limit?: number;
 }
 
-export interface GhReadMutants {
-  // M-gh-read-bypass-id-validation: skips GH_NUMERIC_ID_RE / GH_GIST_ID_RE and encodeURIComponent.
-  bypassIdValidation?: boolean;
-  // M-gh-read-follow-redirect: changes redirect: "manual" to redirect: "follow" and skips 3xx refusal.
-  followRedirect?: boolean;
-}
-
 export interface GhReadOptions {
   githubApi?: string;
   tokenFile?: string | null;
   timeoutMs?: number;
   maxBytes?: number;
-  mutants?: GhReadMutants;
 }
 
 export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Promise<unknown> {
@@ -50,8 +42,6 @@ export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Prom
   if (!validKinds.includes(kind)) {
     throw new Error(`gh_read: unsupported kind: ${String(kind)}`);
   }
-
-  const bypassId = opts.mutants?.bypassIdValidation === true;
 
   // Validate repo
   if (kind === "gist") {
@@ -70,11 +60,11 @@ export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Prom
       throw new Error(`gh_read: id is not permitted for kind '${kind}'`);
     }
   } else if (kind === "gist") {
-    if (typeof req.id !== "string" || (!bypassId && !GH_GIST_ID_RE.test(req.id))) {
+    if (typeof req.id !== "string" || !GH_GIST_ID_RE.test(req.id)) {
       throw new Error(`gh_read: invalid gist id: ${String(req.id)}`);
     }
   } else {
-    if (typeof req.id !== "string" || (!bypassId && !GH_NUMERIC_ID_RE.test(req.id))) {
+    if (typeof req.id !== "string" || !GH_NUMERIC_ID_RE.test(req.id)) {
       throw new Error(`gh_read: invalid numeric id: ${String(req.id)}`);
     }
   }
@@ -106,11 +96,11 @@ export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Prom
   const maxBytes = opts.maxBytes ?? 16_384;
 
   const token = opts.tokenFile ? readFileSync(opts.tokenFile, "utf8").trim() : undefined;
-  const enc = (s: string) => (bypassId ? s : encodeURIComponent(s));
+  const enc = (s: string) => encodeURIComponent(s);
 
   const fetchEndpoint = async (pathAndQuery: string, accept = "application/vnd.github+json"): Promise<string> => {
     const targetUrl = new URL(`${baseRaw}${pathAndQuery}`);
-    if (!bypassId && targetUrl.origin !== baseUrl.origin) {
+    if (targetUrl.origin !== baseUrl.origin) {
       throw new Error(`gh_read: origin mismatch: ${targetUrl.origin}`);
     }
     const headers: Record<string, string> = {
@@ -124,10 +114,10 @@ export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Prom
     const res = await fetch(targetUrl.toString(), {
       method: "GET",
       headers,
-      redirect: opts.mutants?.followRedirect ? "follow" : "manual",
+      redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!opts.mutants?.followRedirect && res.status >= 300 && res.status < 400) {
+    if (res.status >= 300 && res.status < 400) {
       throw new Error("gh_read: HTTP redirect refused");
     }
     const text = await res.text();

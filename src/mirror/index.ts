@@ -600,40 +600,12 @@ async function extractMirrorTree(dir: string, rev: string, destPath: string): Pr
   }
 }
 
-// Test-only mutant helper for C1 (extracting via `git archive | tar`, which applies .gitattributes and creates symlinks).
-async function extractMirrorArchiveMutant(dir: string, rev: string, destPath: string): Promise<void> {
-  rmSync(destPath, { recursive: true, force: true });
-  mkdirSync(destPath, { recursive: true, mode: 0o755 });
-  await new Promise<void>((resolveOk, reject) => {
-    const gitProc = spawn("git", [`--git-dir=${dir}`, "-c", "core.symlinks=false", "archive", "--format=tar", rev], {
-      cwd: "/",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const tarProc = spawn("tar", ["-x", "--no-same-owner", "--no-same-permissions", "-C", destPath], {
-      cwd: "/",
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    gitProc.stdout.pipe(tarProc.stdin);
-    gitProc.on("error", reject);
-    tarProc.on("error", reject);
-    tarProc.on("close", (code) => (code === 0 ? resolveOk() : reject(new Error(`tar exited ${code}`))));
-  });
-}
-
-export interface WorktreeMutants {
-  // M-worktree-git-checkout: restores `git worktree add` + `git -C path checkout` (creates .git in worktree).
-  worktreeGitCheckout?: boolean;
-  // C1 mutant: uses `git archive | tar` instead of `ls-tree -r -z` + `cat-file --batch`.
-  worktreeGitArchive?: boolean;
-}
-
 // The thread's worktree of url, at the mirror's default branch head after a fresh fetch.
 export async function worktreeFor(
   cfg: MirrorConfig,
   url: string,
   thread: string,
   run: Runner = git,
-  mutants?: WorktreeMutants,
 ): Promise<{ path: string; rev: string }> {
   const u = checkUrl(url);
   if (!threadName.test(thread)) throw new MirrorRefused("not a thread name", thread);
@@ -659,18 +631,7 @@ export async function worktreeFor(
     evict(cfg.mirrorRoot, key, cfg.quota ?? DEFAULT_QUOTA, url);
     const rev = (await run(["-C", dir, "rev-parse", "--verify", "HEAD^{commit}"])).trim();
     mkdirSync(`${cfg.worktreeRoot}/${thread}`, { recursive: true, mode: 0o755 });
-    const m = mutants ?? (cfg as MirrorConfig & { mutants?: WorktreeMutants }).mutants;
-    if (m?.worktreeGitCheckout) {
-      if (existsSync(path)) {
-        await run(["-C", path, "-c", "core.symlinks=false", "checkout", "--force", "--detach", rev]);
-      } else {
-        await run(["-C", dir, "-c", "core.symlinks=false", "worktree", "add", "--force", "--detach", path, rev]);
-      }
-    } else if (m?.worktreeGitArchive) {
-      await extractMirrorArchiveMutant(dir, rev, path);
-    } else {
-      await extractMirrorTree(dir, rev, path);
-    }
+    await extractMirrorTree(dir, rev, path);
     mkdirSync(`${dir}/${PINS}`, { recursive: true, mode: 0o755 });
     writeFileSync(`${dir}/${PINS}/${thread}`, `${rev}\n${path}\n`);
     touch(dir, cfg.mirrorRoot);
@@ -681,8 +642,6 @@ export async function worktreeFor(
 // Read-only `git` history tool over the thread-pinned bare mirror (GC1 §2.3, F3, P1, P7, Gate v1 C-N1).
 export const GIT_REV_RE =
   /^[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\.[A-Za-z0-9_/~^-]+)*(?:\.\.\.?[A-Za-z0-9][A-Za-z0-9_/~^-]*(?:\.[A-Za-z0-9_/~^-]+)*)?$/;
-
-const MUTANT_ALLOW_LEADING_DASH_REV_RE = /^[A-Za-z0-9._/~^=-]+(?:\.\.?[A-Za-z0-9._/~^=-]+)?$/;
 
 export type GitOp = "log" | "show" | "diff" | "blame" | "grep";
 
@@ -702,10 +661,6 @@ export interface GitReadResult {
 
 export type GitRequest = GitReadRequest;
 
-export interface GitReadMutants {
-  allowLeadingDash?: boolean;
-}
-
 export interface GitReadOptions {
   mirrorRoot: string;
   worktreeRoot: string;
@@ -715,7 +670,6 @@ export interface GitReadOptions {
   git?: Runner;
   timeoutMs?: number;
   maxBytes?: number;
-  mutants?: GitReadMutants;
 }
 
 export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promise<GitReadResult> {
@@ -729,8 +683,7 @@ export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promis
   }
 
   const rev = req.rev ?? "HEAD";
-  const revRe = opts.mutants?.allowLeadingDash ? MUTANT_ALLOW_LEADING_DASH_REV_RE : GIT_REV_RE;
-  if (typeof rev !== "string" || rev.length < 1 || rev.length > 256 || !revRe.test(rev)) {
+  if (typeof rev !== "string" || rev.length < 1 || rev.length > 256 || !GIT_REV_RE.test(rev)) {
     throw new Error(`git: invalid rev: ${String(rev)}`);
   }
 
@@ -756,7 +709,7 @@ export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promis
       typeof query !== "string" ||
       query.length < 1 ||
       query.length > 256 ||
-      (!opts.mutants?.allowLeadingDash && query.startsWith("-")) ||
+      query.startsWith("-") ||
       /[\x00-\x1f\x7f]/.test(query)
     ) {
       throw new Error(`git: invalid query: ${String(query)}`);
@@ -791,7 +744,7 @@ export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promis
     "--no-pager",
     `--git-dir=${bareDir}`,
   ];
-  const endOpts = opts.mutants?.allowLeadingDash ? [] : ["--end-of-options"];
+  const endOpts = ["--end-of-options"];
   // Gate v1 C-N1: `git --git-dir=<bare> diff <single-rev>` fails with rc 128 ("must be run in a work tree");
   // rewrite a single rev (without `..` or `...`) to `${rev}~1..${rev}`.
   const diffRev = rev.includes("..") ? rev : `${rev}~1..${rev}`;
