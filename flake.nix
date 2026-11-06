@@ -666,7 +666,15 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/eval-argv.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - the untrusted argv is E1's, byte for byte, whatever builders are configured$" $TMPDIR/tap && grep -q "^ok [0-9]* - a public sender's trusted: yes opens neither IFD nor builders$" $TMPDIR/tap && grep -q '^ok [0-9]* - an effective trusted eval allows IFD and names the configured builders$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and at runEval, nixArgv, and wrapperForNixOS sinks$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (N1): runEval bwrapArgv includes --unshare-pid and --bind /proc /proc, and mutant without --unshare-pid goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-eval-argv
+                chmod -R u+w $TMPDIR/mut-eval-argv
+                substituteInPlace $TMPDIR/mut-eval-argv/src/eval/run.ts \
+                  --replace-fail '"--unshare-pid",' ""
+                if (cd $TMPDIR/mut-eval-argv && node --test --test-force-exit tests/eval-argv.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-eval-no-unshare-pid survived in eval-argv" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # limit_hit from typed observations (plan E2, E2.1): a deadline kill is timeout, an OOM kill oom,

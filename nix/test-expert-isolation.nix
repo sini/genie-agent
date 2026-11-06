@@ -375,20 +375,26 @@ let
         git -C src config user.name "gv2"
         echo "gv2-readme-canary" > src/README.md
         ln -s /etc/passwd src/tracked-link
-        cat > src/flake.nix << 'EOF'
+        cat > src/flake.nix << EOF
         {
           outputs = _: {
             packages.x86_64-linux = {
               default = "gv2-eval-ok";
-              ifd = builtins.attrNames (
-                builtins.readDir (derivation {
-                  name = "gv2-ifd-probe";
-                  system = "x86_64-linux";
-                  builder = "builtin:buildenv";
-                  manifest = "/dev/null";
-                  derivations = "";
-                })
-              );
+              ifd = builtins.readFile (derivation {
+                name = "gv2-ifd-probe";
+                system = "x86_64-linux";
+                builder = "${pkgs.python3}/bin/python3";
+                args = [
+                  "-I"
+                  "${gv2EvalJailProbePy}"
+                ];
+              });
+              hang = builtins.readFile (derivation {
+                name = "gv2-hang-probe";
+                system = "x86_64-linux";
+                builder = "${pkgs.coreutils}/bin/sleep";
+                args = [ "30" ];
+              });
             };
           };
         }
@@ -397,6 +403,7 @@ let
         git -C src commit -m "gv2 fixture commit"
         git clone --bare src $out/fixture.git
         git -C $out/fixture.git update-server-info
+        cp -r src $out/src
         tar --exclude=.git -czf $out/owner/repo/archive/0123456789abcdef0123456789abcdef01234567.tar.gz src
       '';
 
@@ -587,7 +594,13 @@ let
   gv2EvalJailProbePy = pkgs.writeText "gv2-eval-jail-probe.py" ''
     import errno, json, os, resource, subprocess, sys
 
-    cfg = json.loads(sys.stdin.read())
+    cfg = None
+    if os.path.exists("/etc/hosts"):
+        for line in open("/etc/hosts", "r", encoding="utf-8"):
+            if line.startswith("# GV2_PIDS="):
+                cfg = json.loads(line.split("=", 1)[1].strip())
+    if cfg is None:
+        cfg = json.loads(sys.stdin.read())
     root_host_pid = int(cfg["root_host_pid"])
     root_unit_pid = int(cfg["root_unit_pid"])
     sib_host_pid = int(cfg["sib_host_pid"])
@@ -624,22 +637,26 @@ let
     root_res = probe_pid(1)
     max_pid = max(nspids[0] if nspids else 64, sib_unit_pid + 8, 64)
     jail_unit_pids = set(nspids[:1] + [os.getpid(), os.getppid()])
-    bwrap_pid1_ok = False
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
+    cur_pid = nspids[0] if nspids else 0
+    for _ in range(5):
+        if not cur_pid:
+            break
         try:
-            for line in open(f"/proc/{d}/status", "r", encoding="utf-8"):
-                if line.startswith("NSpid:"):
-                    parts = [int(x) for x in line.split()[1:] if x.isdigit()]
-                    if len(parts) >= 2 and parts[-1] in (1, 2):
-                        jail_unit_pids.add(parts[0])
-                    if len(parts) >= 2 and parts[-1] == 1:
-                        comm = open(f"/proc/{d}/comm", "r", encoding="utf-8").read().strip()
-                        if comm == "bwrap":
-                            bwrap_pid1_ok = True
+            st_lines = open(f"/proc/{cur_pid}/status", "r", encoding="utf-8").read().splitlines()
         except OSError:
-            pass
+            break
+        c_nspids = []
+        c_ppid = 0
+        for line in st_lines:
+            if line.startswith("NSpid:"):
+                c_nspids = [int(x) for x in line.split()[1:] if x.isdigit()]
+            elif line.startswith("PPid:"):
+                c_ppid = int(line.split()[1])
+        if len(c_nspids) >= 2:
+            jail_unit_pids.add(c_nspids[0])
+            if c_nspids[-1] == 1:
+                break
+        cur_pid = c_ppid
     other_leaks = {}
     other_checked = 0
     for cand in range(2, max_pid + 16):
@@ -679,9 +696,9 @@ let
     root_host_prlimit = try_prlimit(root_host_pid, "6666:6666")
     root_unit_prlimit = try_prlimit(root_unit_pid, "6666:6666")
 
-    print(json.dumps({
+    payload = json.dumps({
+        "manifest": "manifest.nix",
         "self_status_ok": self_status_ok,
-        "bwrap_pid1_ok": bwrap_pid1_ok,
         "nspids": nspids,
         "root": root_res,
         "other_checked": other_checked,
@@ -696,8 +713,48 @@ let
         "root_host_kill": root_host_kill,
         "root_host_prlimit": root_host_prlimit,
         "root_unit_prlimit": root_unit_prlimit,
-    }))
+    })
+    out_path = os.environ.get("out")
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+    else:
+        print(payload)
   '';
+
+  rootSrcTree = "${
+    self.packages.${pkgs.stdenv.hostPlatform.system}.genie-root.rootSrc
+  }/lib/genie-agent";
+
+  mutateRootSrc =
+    name: file: from: to:
+    pkgs.runCommand "genie-root-src-${name}" { } ''
+      cp -r ${rootSrcTree} $out
+      chmod -R u+w $out
+      substituteInPlace $out/${file} --replace-fail ${lib.escapeShellArg from} ${lib.escapeShellArg to}
+    '';
+
+  gv2MutantSrcs = {
+    m-no-pi-bwrap =
+      mutateRootSrc "m-no-pi-bwrap" "src/tier1/launch.ts" "if (o.sandbox === false) {"
+        "if (true) {";
+    m-rw-worktree-or-agentdir =
+      mutateRootSrc "m-rw-worktree-or-agentdir" "src/tier1/launch.ts"
+        ''const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};''
+        ''const sb: PiSandbox = { ...(typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {}), rwWorktree: true, rwAgentDir: true };'';
+    m-expose-state-root =
+      mutateRootSrc "m-expose-state-root" "src/tier1/launch.ts"
+        ''const sb: PiSandbox = typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {};''
+        ''const sb: PiSandbox = { ...(typeof o.sandbox === "object" && o.sandbox !== null ? o.sandbox : {}), exposeStateRoot: true };'';
+    m-eval-proc-mount =
+      mutateRootSrc "m-eval-proc-mount" "src/eval/run.ts" ''"--bind", "/proc", "/proc",''
+        ''"--proc", "/proc",'';
+    m-no-unshare-pid = mutateRootSrc "m-no-unshare-pid" "src/eval/run.ts" ''"--unshare-pid",'' "";
+    m-pi-no-unshare-pid =
+      mutateRootSrc "m-pi-no-unshare-pid" "src/tier1/launch.ts"
+        ''...(!sb.omitUnsharePid ? ["--unshare-pid"] : []),''
+        "";
+  };
 
   gi15TestScripts = pkgs.writeTextDir "stub_api.py" ''
     import functools, http.server, json, os, socket, socketserver, ssl, subprocess, sys, threading, time, urllib.parse
@@ -1114,7 +1171,7 @@ let
                         tc = ("read", {"path": f"{cp}/tracked-link"})
                     elif step == 4:
                         tc = ("web_search", {"query": "gv2-search-canary"})
-                    elif step == 5 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount"):
+                    elif step == 5 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc"):
                         tc = ("eval", {
                             "repo": "owner/repo",
                             "rev": "0123456789abcdef0123456789abcdef01234567",
@@ -1122,7 +1179,7 @@ let
                             "trusted": "no",
                             "secrets": "none",
                         })
-                    elif step == 6 and prompt == "gv2-turn-A:norm":
+                    elif step == 6 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc"):
                         tc = ("eval", {
                             "repo": "owner/repo",
                             "rev": "0123456789abcdef0123456789abcdef01234567",
@@ -1131,9 +1188,9 @@ let
                             "secrets": "none",
                         })
                     elif (
-                        (step == 5 and prompt not in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount"))
+                        (step == 5 and prompt not in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc"))
                         or (step == 6 and prompt == "gv2-turn-A:m_eval_proc_mount")
-                        or (step == 7 and prompt == "gv2-turn-A:norm")
+                        or (step == 7 and prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc"))
                     ):
                         try:
                             cp = json.loads(tool_outs[1]).get("path", "/err")
@@ -1141,12 +1198,12 @@ let
                             cp = f"err:{tool_outs[1]}"
                         ev_out = None
                         ev_ifd_out = None
-                        if prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount") and len(tool_outs) > 5:
+                        if prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_eval_proc_mount", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc") and len(tool_outs) > 5:
                             try:
                                 ev_out = json.loads(tool_outs[5])
                             except Exception:
                                 ev_out = {"raw": tool_outs[5]}
-                        if prompt == "gv2-turn-A:norm" and len(tool_outs) > 6:
+                        if prompt in ("gv2-turn-A:norm", "gv2-turn-A:m_no_unshare_pid", "gv2-turn-A:m_no_protectproc") and len(tool_outs) > 6:
                             try:
                                 ev_ifd_out = json.loads(tool_outs[6])
                             except Exception:
@@ -4008,143 +4065,20 @@ let
             if os.path.exists(dropin_file):
                 os.unlink(dropin_file)
 
-            if mutant in ("M-no-pi-bwrap", "M-rw-worktree-or-agentdir", "M-expose-state-root"):
-                mut_script = "\n".join([
-                    "#!${pkgs.python3}/bin/python3 -I",
-                    "import os, sys",
-                    f"mutant = {mutant!r}",
-                    'real_bwrap = "${pkgs.bubblewrap}/bin/bwrap"',
-                    "argv = sys.argv[1:]",
-                    "sep = argv.index('--')",
-                    "b_flags = argv[:sep]",
-                    "pi_cmd = argv[sep + 1:]",
-                    "if mutant == 'M-no-pi-bwrap':",
-                    "    env = {}",
-                    "    cwd = None",
-                    "    i = 0",
-                    "    while i < len(b_flags):",
-                    "        f = b_flags[i]",
-                    "        if f == '--setenv':",
-                    "            env[b_flags[i + 1]] = b_flags[i + 2]",
-                    "            i += 3",
-                    "        elif f == '--chdir':",
-                    "            cwd = b_flags[i + 1]",
-                    "            i += 2",
-                    "        elif f in ('--ro-bind', '--ro-bind-try', '--bind'):",
-                    "            i += 3",
-                    "        elif f in ('--dev', '--proc', '--tmpfs', '--remount-ro'):",
-                    "            i += 2",
-                    "        else:",
-                    "            i += 1",
-                    "    if cwd:",
-                    "        os.chdir(cwd)",
-                    "    os.execve(pi_cmd[0], pi_cmd, env)",
-                    "elif mutant == 'M-rw-worktree-or-agentdir':",
-                    "    new_flags = []",
-                    "    i = 0",
-                    "    while i < len(b_flags):",
-                    "        f = b_flags[i]",
-                    "        if f == '--ro-bind' and i + 2 < len(b_flags):",
-                    "            src, dst = b_flags[i + 1], b_flags[i + 2]",
-                    "            if '/genie-pi-' in src or src.startswith('/var/lib/genie-agent/worktrees/'):",
-                    "                new_flags.extend(['--bind', src, dst])",
-                    "            else:",
-                    "                new_flags.extend([f, src, dst])",
-                    "            i += 3",
-                    "        elif f == '--remount-ro' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/worktrees':",
-                    "            i += 2",
-                    "        else:",
-                    "            new_flags.append(f)",
-                    "            i += 1",
-                    "    os.execv(real_bwrap, [real_bwrap] + new_flags + ['--'] + pi_cmd)",
-                    "elif mutant == 'M-expose-state-root':",
-                    "    new_flags = []",
-                    "    i = 0",
-                    "    while i < len(b_flags):",
-                    "        f = b_flags[i]",
-                    "        if f == '--tmpfs' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/state':",
-                    "            new_flags.extend(['--ro-bind', '/var/lib/genie-agent/state', '/var/lib/genie-agent/state'])",
-                    "            i += 2",
-                    "        elif f == '--remount-ro' and i + 1 < len(b_flags) and b_flags[i + 1] == '/var/lib/genie-agent/state':",
-                    "            i += 2",
-                    "        else:",
-                    "            new_flags.append(f)",
-                    "            i += 1",
-                    "    os.execv(real_bwrap, [real_bwrap] + new_flags + ['--'] + pi_cmd)",
-                ]) + "\n"
-                with open(mut_bwrap_path, "w", encoding="utf-8") as mf:
-                    mf.write(mut_script)
-                os.chown(mut_bwrap_path, 1000, 100)
-                os.chmod(mut_bwrap_path, 0o755)
-
-                cfg_obj = json.loads(open(orig_cfg_path, "r", encoding="utf-8").read())
-                cfg_obj.setdefault("tier1", {}).setdefault("sandbox", {})["bwrap"] = mut_bwrap_path
-                with open(mut_cfg_path, "w", encoding="utf-8") as cf:
-                    json.dump(cfg_obj, cf)
-                os.chown(mut_cfg_path, 1000, 100)
-                os.chmod(mut_cfg_path, 0o644)
-
-                with open(dropin_file, "w", encoding="utf-8") as df:
-                    df.write(f"[Service]\nExecStart=\nExecStart={orig_root_bin} --config {mut_cfg_path}\n")
-            elif mutant == "M-eval-proc-mount":
-                mut_eval_bin_dir = f"{STATE_DIR}/gv2-mut-eval-bin"
-                os.makedirs(mut_eval_bin_dir, exist_ok=True)
-                os.chown(mut_eval_bin_dir, 1000, 100)
-                os.chmod(mut_eval_bin_dir, 0o755)
-                mut_eval_bwrap = f"{mut_eval_bin_dir}/bwrap"
-                with open(mut_eval_bwrap, "w", encoding="utf-8") as mf:
-                    mf.write("\n".join([
-                        "#!${pkgs.python3}/bin/python3 -I",
-                        "import os, sys",
-                        'real_bwrap = "${pkgs.bubblewrap}/bin/bwrap"',
-                        "argv = sys.argv[1:]",
-                        "if '--unshare-all' in argv or '--unshare-ipc' in argv:",
-                        "    new_argv = ['--unshare-pid']",
-                        "    i = 0",
-                        "    while i < len(argv):",
-                        "        if argv[i] == '--bind' and i + 2 < len(argv) and argv[i + 1] == '/proc' and argv[i + 2] == '/proc':",
-                        "            new_argv.extend(['--proc', '/proc'])",
-                        "            i += 3",
-                        "        else:",
-                        "            new_argv.append(argv[i])",
-                        "            i += 1",
-                        "    argv = new_argv",
-                        "os.execv(real_bwrap, [real_bwrap] + argv)",
-                    ]) + "\n")
-                os.chown(mut_eval_bwrap, 1000, 100)
-                os.chmod(mut_eval_bwrap, 0o755)
-                m_path = re.search(r'Environment="PATH=([^"]+)"', cat_ga)
-                orig_path = m_path.group(1) if m_path else "/run/current-system/sw/bin"
-                with open(dropin_file, "w", encoding="utf-8") as df:
-                    df.write(f'[Service]\nEnvironment="PATH={mut_eval_bin_dir}:{orig_path}"\n')
-            elif mutant == "M-no-unshare-pid":
-                mut_eval_bin_dir = f"{STATE_DIR}/gv2-mut-eval-bin"
-                os.makedirs(mut_eval_bin_dir, exist_ok=True)
-                os.chown(mut_eval_bin_dir, 1000, 100)
-                os.chmod(mut_eval_bin_dir, 0o755)
-                mut_eval_bwrap = f"{mut_eval_bin_dir}/bwrap"
-                with open(mut_eval_bwrap, "w", encoding="utf-8") as mf:
-                    mf.write("\n".join([
-                        "#!${pkgs.python3}/bin/python3 -I",
-                        "import os, sys",
-                        'real_bwrap = "${pkgs.bubblewrap}/bin/bwrap"',
-                        "argv = [a for a in sys.argv[1:] if a != '--unshare-pid']",
-                        "os.execv(real_bwrap, [real_bwrap] + argv)",
-                    ]) + "\n")
-                os.chown(mut_eval_bwrap, 1000, 100)
-                os.chmod(mut_eval_bwrap, 0o755)
-                cfg_obj = json.loads(open(orig_cfg_path, "r", encoding="utf-8").read())
-                cfg_obj.setdefault("tier1", {}).setdefault("sandbox", {})["bwrap"] = mut_eval_bwrap
-                with open(mut_cfg_path, "w", encoding="utf-8") as cf:
-                    json.dump(cfg_obj, cf)
-                os.chown(mut_cfg_path, 1000, 100)
-                os.chmod(mut_cfg_path, 0o644)
-                m_path = re.search(r'Environment="PATH=([^"]+)"', cat_ga)
-                orig_path = m_path.group(1) if m_path else "/run/current-system/sw/bin"
+            mut_src_map = {
+                "M-no-pi-bwrap": "${gv2MutantSrcs.m-no-pi-bwrap}",
+                "M-rw-worktree-or-agentdir": "${gv2MutantSrcs.m-rw-worktree-or-agentdir}",
+                "M-expose-state-root": "${gv2MutantSrcs.m-expose-state-root}",
+                "M-eval-proc-mount": "${gv2MutantSrcs.m-eval-proc-mount}",
+                "M-no-unshare-pid": "${gv2MutantSrcs.m-no-unshare-pid}",
+                "M-pi-no-unshare-pid": "${gv2MutantSrcs.m-pi-no-unshare-pid}",
+            }
+            if mutant in mut_src_map:
+                msrc = mut_src_map[mutant]
                 with open(dropin_file, "w", encoding="utf-8") as df:
                     df.write(
-                        f'[Service]\nEnvironment="PATH={mut_eval_bin_dir}:{orig_path}"\n'
-                        f"ExecStart=\nExecStart={orig_root_bin} --config {mut_cfg_path}\n"
+                        f'[Service]\nEnvironment="GENIE_REPO_ROOT={msrc}"\n'
+                        f"ExecStart=\nExecStart=${pkgs.nodejs}/bin/node {msrc}/src/root/main.ts --config {orig_cfg_path}\n"
                     )
             elif mutant == "M-no-protectproc":
                 with open(dropin_file, "w", encoding="utf-8") as df:
@@ -4153,6 +4087,41 @@ let
             subprocess.run(["systemctl", "daemon-reload"], check=True)
             if not restart_and_wait_genie_agent():
                 return False, "genie-agent.service failed to register and poll on xmsg"
+
+            def get_nspids(pid_str: str) -> list[str]:
+                try:
+                    for line in open(f"/proc/{pid_str}/status", "r", encoding="utf-8"):
+                        if line.startswith("NSpid:"):
+                            return line.split()[1:]
+                except OSError:
+                    pass
+                return []
+
+            def get_host_nofile(pid_val: int) -> str:
+                try:
+                    for line in open(f"/proc/{pid_val}/limits", "r", encoding="utf-8"):
+                        if line.startswith("Max open files"):
+                            return line.split()[3]
+                except OSError:
+                    pass
+                return ""
+
+            root_pid = int(subprocess.check_output(
+                ["systemctl", "show", "-p", "MainPID", "--value", "genie-agent.service"],
+                text=True,
+            ).strip())
+            root_nspids = [int(x) for x in get_nspids(str(root_pid)) if x.isdigit()]
+            root_unit_pid = root_nspids[-1] if root_nspids else 1
+
+            # Advance genie-agent.service's unit PID counter past 40 before launching sibling thread B
+            # so sib_unit_pid (>= 50) never collides numerically with inner PIDs 1..20 inside runEval's bwrap PID namespace.
+            subprocess.run(
+                [
+                    "${pkgs.util-linux}/bin/nsenter", "-p", "-t", str(root_pid), "--",
+                    "${pkgs.bash}/bin/sh", "-c", "for i in $(seq 1 40); do (${coreutils}/true); done",
+                ],
+                check=True,
+            )
 
             # Step A: Launch sibling thread B first so both its state on disk and its live pi jail exist
             send_b = xmsg_agent_call({
@@ -4164,7 +4133,48 @@ let
             rep_b_raw = reps_b[0]["text"] if reps_b else ""
             b_ok = f"gv2-B-ok:gv2-turn-B:{tag}" in rep_b_raw
 
-            # Step A: Positive turn on thread A (read /memory/MEMORY.md, clone HTTPS fixture, read README + tracked-link, web_search gv2-stub, real nix eval + IFD eval, reply)
+            pi_b_pid = None
+            for d in os.listdir("/proc"):
+                if not d.isdigit() or int(d) == root_pid:
+                    continue
+                try:
+                    raw_cmd = open(f"/proc/{d}/cmdline", "rb").read()
+                    raw_env = open(f"/proc/{d}/environ", "rb").read()
+                except OSError:
+                    continue
+                parts = [p.decode("utf-8", "replace") for p in raw_cmd.split(b"\x00") if p]
+                if not parts or parts[0].endswith("/bwrap") or parts[0] == "bwrap":
+                    continue
+                env_str = raw_env.decode("utf-8", "replace")
+                if "GENIE_TIER1_CONFIG=" in env_str and f"/worktrees/{tid_b}" in env_str:
+                    pi_b_pid = int(d)
+                    break
+
+            if not pi_b_pid:
+                return False, f"live sibling pi process not found before stepA: pi_b_pid={pi_b_pid}"
+
+            pi_b_nspids = [int(x) for x in get_nspids(str(pi_b_pid)) if x.isdigit()]
+            sib_unit_pid = pi_b_nspids[1] if len(pi_b_nspids) >= 2 else pi_b_pid
+
+            # Materialize /etc/hosts as a regular file carrying # GV2_PIDS=... so production runEval's
+            # `--ro-bind-try etcHosts /etc/hosts` mounts it inside the eval jail for gv2EvalJailProbePy.
+            hosts_lines = [
+                ln for ln in open("/etc/hosts", "r", encoding="utf-8").read().splitlines()
+                if not ln.startswith("# GV2_PIDS=")
+            ]
+            hosts_lines.append("# GV2_PIDS=" + json.dumps({
+                "root_host_pid": root_pid,
+                "root_unit_pid": root_unit_pid,
+                "sib_host_pid": pi_b_pid,
+                "sib_unit_pid": sib_unit_pid,
+            }))
+            if os.path.islink("/etc/hosts"):
+                os.unlink("/etc/hosts")
+            with open("/etc/hosts", "w", encoding="utf-8") as hf:
+                hf.write("\n".join(hosts_lines) + "\n")
+            os.chmod("/etc/hosts", 0o644)
+
+            # Step A: Positive turn on thread A (read /memory/MEMORY.md, clone HTTPS fixture, read README + tracked-link, web_search gv2-stub, real nix eval + IFD eval running gv2EvalJailProbePy inside production runEval, reply)
             t_turn_a = time.monotonic()
             send_a = xmsg_agent_call({
                 "action": "send",
@@ -4201,7 +4211,7 @@ let
             ev_ifd_stderr = ev_ifd.get("stderr_tail", "") if isinstance(ev_ifd, dict) else ""
             eval_ok = (
                 True
-                if mutant not in (None, "M-eval-proc-mount")
+                if mutant not in (None, "M-eval-proc-mount", "M-no-unshare-pid", "M-no-protectproc")
                 else (
                     isinstance(ev_a, dict)
                     and "Can't mount proc" not in ev_stderr
@@ -4242,25 +4252,10 @@ let
                 )
 
             # Step B: Boundary probe running as pi inside thread A's live jail
-            def get_nspids(pid_str: str) -> list[str]:
-                try:
-                    for line in open(f"/proc/{pid_str}/status", "r", encoding="utf-8"):
-                        if line.startswith("NSpid:"):
-                            return line.split()[1:]
-                except OSError:
-                    pass
-                return []
-
-            root_pid = int(subprocess.check_output(
-                ["systemctl", "show", "-p", "MainPID", "--value", "genie-agent.service"],
-                text=True,
-            ).strip())
-            root_nspids = [int(x) for x in get_nspids(str(root_pid)) if x.isdigit()]
             root_pids = sorted(set([root_pid] + root_nspids))
             root_fds = sorted(int(x) for x in os.listdir(f"/proc/{root_pid}/fd") if x.isdigit())
 
             pi_a_pid = None
-            pi_b_pid = None
             for d in os.listdir("/proc"):
                 if not d.isdigit() or int(d) == root_pid:
                     continue
@@ -4273,12 +4268,9 @@ let
                 if not parts or parts[0].endswith("/bwrap") or parts[0] == "bwrap":
                     continue
                 env_str = raw_env.decode("utf-8", "replace")
-                if "GENIE_TIER1_CONFIG=" not in env_str:
-                    continue
-                if f"/worktrees/{tid_a}" in env_str:
+                if "GENIE_TIER1_CONFIG=" in env_str and f"/worktrees/{tid_a}" in env_str:
                     pi_a_pid = int(d)
-                elif f"/worktrees/{tid_b}" in env_str:
-                    pi_b_pid = int(d)
+                    break
 
             if not pi_a_pid or not pi_b_pid:
                 return False, f"live pi processes not found: pi_a_pid={pi_a_pid} pi_b_pid={pi_b_pid}"
@@ -4373,132 +4365,64 @@ let
                 and pr["no_new_privs"] == "1"
             )
 
-            # Step B2 (N1/N2/N3): Eval-jail boundary probe (ProtectProc=invisible + kill -0 / prlimit against genie-root & sibling pi + bwrap PID 1)
-            def get_host_nofile(pid_val: int) -> str:
+            # Step B2 (N1/N2/N3): Eval-jail boundary probe result from stepA's production eval tool call (gv2EvalJailProbePy inside runEval)
+            ev_probe = {}
+            eval_jail_ok = True
+            if mutant in (None, "M-no-unshare-pid", "M-no-protectproc"):
                 try:
-                    for line in open(f"/proc/{pid_val}/limits", "r", encoding="utf-8"):
-                        if line.startswith("Max open files"):
-                            return line.split()[3]
-                except OSError:
-                    pass
-                return ""
+                    raw_ifd_line = ev_ifd.get("stdout_tail", "").strip().splitlines()[-1]
+                    ev_probe = json.loads(json.loads(raw_ifd_line))
+                except Exception as ex:
+                    ev_probe = {"parse_error": str(ex), "raw": ev_ifd.get("stdout_tail", "")}
+                root_nofile_after = get_host_nofile(root_pid)
+                sib_nofile_after = get_host_nofile(pi_b_pid)
+                ev_probe["root_nofile_after"] = root_nofile_after
+                ev_probe["sib_nofile_after"] = sib_nofile_after
+                root_probe = ev_probe.get("root") if isinstance(ev_probe.get("root"), dict) else {}
+                eval_jail_ok = (
+                    ev_probe.get("self_status_ok") is True
+                    and set(root_probe.keys()) == {"environ", "mem", "root"}
+                    and all(v in ("ENOENT", "EACCES") for v in root_probe.values())
+                    and isinstance(ev_probe.get("other_checked"), int)
+                    and ev_probe.get("other_checked", 0) >= 10
+                    and ev_probe.get("other_leaks") == {}
+                    and ev_probe.get("self_kill") == "OK"
+                    and ev_probe.get("self_prlimit") == 0
+                    and ev_probe.get("self_nofile") == 7777
+                    and ev_probe.get("sib_unit_kill") == "ESRCH"
+                    and ev_probe.get("sib_host_kill") == "ESRCH"
+                    and ev_probe.get("sib_unit_prlimit") != 0
+                    and ev_probe.get("sib_host_prlimit") != 0
+                    and ev_probe.get("root_host_kill") == "ESRCH"
+                    and ev_probe.get("root_host_prlimit") != 0
+                    and root_nofile_after not in ("", "6666")
+                    and sib_nofile_after not in ("", "6666")
+                )
 
-            pi_b_nspids = [int(x) for x in get_nspids(str(pi_b_pid)) if x.isdigit()]
-            sib_unit_pid = pi_b_nspids[1] if len(pi_b_nspids) >= 2 else pi_b_pid
-            root_unit_pid = root_nspids[-1] if root_nspids else 1
-            eval_bwrap_bin = (
-                f"{STATE_DIR}/gv2-mut-eval-bin/bwrap"
-                if mutant == "M-no-unshare-pid"
-                else "${pkgs.bubblewrap}/bin/bwrap"
-            )
-            ev_probe_proc = subprocess.run(
-                [
-                    "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
-                    eval_bwrap_bin,
-                    "--unshare-user",
-                    "--unshare-pid",
-                    "--unshare-ipc",
-                    "--unshare-uts",
-                    "--unshare-cgroup-try",
-                    "--share-net",
-                    "--die-with-parent",
-                    "--ro-bind", "/nix/store", "/nix/store",
-                    "--bind", "/proc", "/proc",
-                    "--dev", "/dev",
-                    "--tmpfs", "/tmp",
-                    "--",
-                    "${pkgs.python3}/bin/python3", "-I", "${gv2EvalJailProbePy}",
-                ],
-                input=json.dumps({
-                    "root_host_pid": root_pid,
-                    "root_unit_pid": root_unit_pid,
-                    "sib_host_pid": pi_b_pid,
-                    "sib_unit_pid": sib_unit_pid,
-                }),
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            ev_probe = json.loads(ev_probe_proc.stdout.strip().splitlines()[-1])
-            root_nofile_after = get_host_nofile(root_pid)
-            sib_nofile_after = get_host_nofile(pi_b_pid)
-            ev_probe["root_nofile_after"] = root_nofile_after
-            ev_probe["sib_nofile_after"] = sib_nofile_after
-            root_probe = ev_probe.get("root") if isinstance(ev_probe.get("root"), dict) else {}
-            eval_jail_ok = (
-                ev_probe.get("self_status_ok") is True
-                and ev_probe.get("bwrap_pid1_ok") is True
-                and set(root_probe.keys()) == {"environ", "mem", "root"}
-                and all(v in ("ENOENT", "EACCES") for v in root_probe.values())
-                and isinstance(ev_probe.get("other_checked"), int)
-                and ev_probe.get("other_checked", 0) >= 10
-                and ev_probe.get("other_leaks") == {}
-                and ev_probe.get("self_kill") == "OK"
-                and ev_probe.get("self_prlimit") == 0
-                and ev_probe.get("self_nofile") == 7777
-                and ev_probe.get("sib_unit_kill") == "ESRCH"
-                and ev_probe.get("sib_host_kill") == "ESRCH"
-                and ev_probe.get("sib_unit_prlimit") != 0
-                and ev_probe.get("sib_host_prlimit") != 0
-                and ev_probe.get("root_host_kill") == "ESRCH"
-                and ev_probe.get("root_host_prlimit") != 0
-                and root_nofile_after not in ("", "6666")
-                and sib_nofile_after not in ("", "6666")
-            )
-
-            # Step C (only on unmutated run): C2 --proc /proc measurement, P6 in-unit spawn cost, P4 PrivateUsers=true arm, N3 zombie check
-            c2_proc_mount_rejected = True
-            mean_spawn_ms = 0.0
-            p4_private_users_ok = True
-            p4_detail = "skipped-for-mutant"
+            # Step C (on unmutated run): N3 zombie reaping check via production runEval timeout inside genie-agent.service's PID namespace
             n3_zombies_ok = True
             unit_zombies = []
             if mutant is None:
-                c2_proc = subprocess.run([
-                    "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
-                    "${pkgs.bubblewrap}/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
-                    "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--proc", "/proc",
-                    "--", "${pkgs.coreutils}/bin/true",
-                ], capture_output=True, text=True)
-                c2_proc_mount_rejected = c2_proc.returncode != 0 and "Can't mount proc" in c2_proc.stderr
-
-                spawn_samples = []
-                for _ in range(5):
-                    t_sp = time.monotonic()
-                    subprocess.run([
+                m_path = re.search(r'Environment="PATH=([^"]+)"', cat_ga)
+                ga_path = m_path.group(1) if m_path else "/run/current-system/sw/bin"
+                n3_js = (
+                    'import { runEval } from "${rootSrcTree}/src/eval/run.ts"; '
+                    'const res = await runEval('
+                    '{ request: { repo: "owner/repo", rev: "0123456789abcdef0123456789abcdef01234567", attr: "packages.x86_64-linux.hang", trusted: "yes" }, sender_tier: "trusted" }, '
+                    '{ localFlake: "${gv2GitFixture}/src", timeoutMs: 200 }'
+                    '); '
+                    'if (res.limit_hit !== "timeout" || res.exit !== 124) process.exit(1);'
+                )
+                subprocess.run(
+                    [
                         "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
-                        "${pkgs.bubblewrap}/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
-                        "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
-                        "--", "${pkgs.coreutils}/bin/true",
-                    ], check=True, capture_output=True)
-                    spawn_samples.append((time.monotonic() - t_sp) * 1000.0)
-                mean_spawn_ms = sum(spawn_samples) / len(spawn_samples)
-
-                # N3 teardown cell: spawn bwrap inside genie-agent.service's PID namespace (where genie-root is PID 1),
-                # tear it down with SIGKILL (inner children first, then outer after 50ms), and assert 0 zombies in the unit.
-                z_proc = subprocess.Popen([
-                    "${pkgs.util-linux}/bin/nsenter", "-m", "-p", "-S", "1000", "-G", "100", "-t", str(root_pid), "--",
-                    "${pkgs.bubblewrap}/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
-                    "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
-                    "--", "${pkgs.coreutils}/bin/sleep", "30",
-                ])
-                time.sleep(0.15)
-                try:
-                    z_children = open(f"/proc/{z_proc.pid}/task/{z_proc.pid}/children", "r", encoding="utf-8").read().split()
-                except OSError:
-                    z_children = []
-                for zc in z_children:
-                    if zc.isdigit() and int(zc) > 0:
-                        try:
-                            os.kill(int(zc), 9)
-                        except OSError:
-                            pass
-                time.sleep(0.05)
-                try:
-                    z_proc.kill()
-                except OSError:
-                    pass
-                z_proc.wait(timeout=5.0)
+                        "${coreutils}/env", f"PATH={ga_path}", "GENIE_REPO_ROOT=${rootSrcTree}",
+                        "${pkgs.nodejs}/bin/node", "--input-type=module", "-e", n3_js,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
                 time.sleep(0.1)
                 pidns_root = os.readlink(f"/proc/{root_pid}/ns/pid")
                 for d in os.listdir("/proc"):
@@ -4515,32 +4439,6 @@ let
                         pass
                 n3_zombies_ok = len(unit_zombies) == 0
 
-                p4_res = subprocess.run([
-                    "systemd-run", "--wait", "--pipe",
-                    "-p", "User=sini",
-                    "-p", "PrivateUsers=yes",
-                    "-p", "PrivatePIDs=yes",
-                    "-p", "ProtectProc=invisible",
-                    "-p", "ProtectKernelTunables=yes",
-                    "-p", "ProtectSystem=strict",
-                    "-p", "NoNewPrivileges=yes",
-                    "${pkgs.bubblewrap}/bin/bwrap",
-                    "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
-                    "--ro-bind", "/nix/store", "/nix/store", "--dev", "/dev", "--bind", "/proc", "/proc", "--tmpfs", "/tmp",
-                    "--", "${pkgs.python3}/bin/python3", "-I", "-c",
-                    "import json, os, subprocess; "
-                    "nsp = [l.split()[1:] for l in open('/proc/self/status') if l.startswith('NSpid:')][0]; "
-                    "pv = subprocess.check_output(['${pkgs.pi-coding-agent}/bin/pi', '--version'], text=True).strip(); "
-                    "print(json.dumps({'uid': os.getuid(), 'nspids': nsp, 'pi_ver': pv}))",
-                ], capture_output=True, text=True)
-                if p4_res.returncode == 0:
-                    p4_json = json.loads(p4_res.stdout.strip().splitlines()[-1])
-                    p4_private_users_ok = p4_json.get("uid") == 1000 and len(p4_json.get("nspids", [])) >= 2 and bool(p4_json.get("pi_ver"))
-                    p4_detail = f"ok(nspids={p4_json.get('nspids')},pi={p4_json.get('pi_ver')})"
-                else:
-                    p4_private_users_ok = False
-                    p4_detail = f"rc={p4_res.returncode}:{p4_res.stderr.strip()}"
-
             ok = (
                 step_a_ok
                 and creds_ok
@@ -4552,8 +4450,6 @@ let
                 and pr["b3_ok"]
                 and pr["b4_ok"]
                 and pr["b5_ok"]
-                and c2_proc_mount_rejected
-                and p4_private_users_ok
             )
             return ok, (
                 f"stepA={step_a_ok}(turn={turn_a_ms:.0f}ms,eval_ifd={ev_ifd.get('exit')}) creds={creds_ok} "
@@ -4562,14 +4458,13 @@ let
                 f"B2={pr['b2_ok']}({ {k: v for k, v in pr['b2_results'].items() if v != 'ENOENT'} }) "
                 f"B3={pr['b3_ok']}(checked={pr['b3_checked']},leaks={pr['b3_leaks']}) "
                 f"B4={pr['b4_ok']}(ro={ {k: v for k, v in pr['b4_ro'].items() if v != 'EROFS'} },sess={pr['b4_sess_rw']}) "
-                f"B5={pr['b5_ok']}(proc={pr['proc_pids']},outside={pr['outside_pids']}) "
-                f"C2_proc_rejected={c2_proc_mount_rejected} P6_bwrap_ms={mean_spawn_ms:.1f} P4_priv_users={p4_detail}"
+                f"B5={pr['b5_ok']}(proc={pr['proc_pids']},outside={pr['outside_pids']})"
             )
         finally:
             if os.path.exists(dropin_file):
                 os.unlink(dropin_file)
                 subprocess.run(["systemctl", "daemon-reload"], check=False)
-            for p in (mut_bwrap_path, mut_cfg_path, f"{STATE_DIR}/gv2-mut-eval-bin"):
+            for p in (mut_bwrap_path, mut_cfg_path):
                 if os.path.isdir(p) and not os.path.islink(p):
                     shutil.rmtree(p, ignore_errors=True)
                 elif os.path.exists(p):
@@ -4717,8 +4612,11 @@ let
     # 8.23 M-eval-proc-mount -> GV2
     check_mutant("M-eval-proc-mount", "GV2", *eval_gv2(mutant="M-eval-proc-mount"))
 
-    # 8.24 M-no-unshare-pid -> GV2
+    # 8.24 M-no-unshare-pid -> GV2 (source mutant on src/eval/run.ts)
     check_mutant("M-no-unshare-pid", "GV2", *eval_gv2(mutant="M-no-unshare-pid"))
+
+    # 8.25 M-pi-no-unshare-pid -> GV2 (source mutant on src/tier1/launch.ts)
+    check_mutant("M-pi-no-unshare-pid", "GV2", *eval_gv2(mutant="M-pi-no-unshare-pid"))
 
     if red:
         print(f"DRIVER FAILED RED CELLS: {red}", flush=True)

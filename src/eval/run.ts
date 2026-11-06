@@ -262,6 +262,52 @@ export const JAIL_ENV: Record<string, string> = {
   NIX_SSL_CERT_FILE: resolveCaBundle(),
 };
 
+export interface BwrapArgvOptions {
+  nix?: string;
+  tmp: string;
+  caBundle?: string;
+  resolvConf?: string;
+  etcHosts?: string;
+  nsswitchConf?: string;
+  localFlake?: string;
+  builders?: string;
+}
+
+// Builds the bubblewrap argv for runEval. Extracted so unit tests (tests/eval-argv.test.ts) and
+// production runEval share the single source of truth for namespace and mount flags (GS2 N1).
+export function bwrapArgv(launch: Launch, flakeRef: string, opts: BwrapArgvOptions): string[] {
+  const nix = opts.nix ?? "/nix/store/nix/bin/nix";
+  const caBundle = opts.caBundle ?? resolveCaBundle();
+  const resolvConf = opts.resolvConf ?? "/etc/resolv.conf";
+  const etcHosts = opts.etcHosts ?? "/etc/hosts";
+  const nsswitchConf = opts.nsswitchConf ?? "/etc/nsswitch.conf";
+  return [
+    "--unshare-user",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--share-net",
+    "--die-with-parent",
+    "--ro-bind", "/nix/store", "/nix/store",
+    "--ro-bind-try", resolvConf, "/etc/resolv.conf",
+    "--ro-bind-try", etcHosts, "/etc/hosts",
+    "--ro-bind-try", nsswitchConf, "/etc/nsswitch.conf",
+    // E1.1: bind the resolved CA bundle file, not the /etc/ssl/certs symlink into /etc/static.
+    "--ro-bind-try", caBundle, caBundle,
+    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
+    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
+    "--bind", "/proc", "/proc",
+    "--dev", "/dev",
+    "--tmpfs", "/tmp",
+    // The throwaway store sits at a fixed jail path, so it never nests inside a host build dir.
+    "--bind", opts.tmp, "/work",
+    ...(opts.localFlake ? ["--ro-bind", opts.localFlake, "/src"] : []),
+    nix,
+    ...nixArgv(launch, flakeRef, opts.builders),
+  ];
+}
+
 export async function runEval(launch: Launch, options: RunOptions = {}): Promise<EvalResult> {
   const { request } = launch;
   if (!ATTR_PATH_RE.test(request.attr)) {
@@ -297,31 +343,16 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   }
   // ponytail: the whole host store is bound read-only for the nix binary's closure; bind only that
   // closure if this runner leaves the gVisor Job.
-  const bwrap = [
-    "--unshare-user",
-    "--unshare-pid",
-    "--unshare-ipc",
-    "--unshare-uts",
-    "--unshare-cgroup-try",
-    "--share-net",
-    "--die-with-parent",
-    "--ro-bind", "/nix/store", "/nix/store",
-    "--ro-bind-try", resolvConf, "/etc/resolv.conf",
-    "--ro-bind-try", etcHosts, "/etc/hosts",
-    "--ro-bind-try", nsswitchConf, "/etc/nsswitch.conf",
-    // E1.1: bind the resolved CA bundle file, not the /etc/ssl/certs symlink into /etc/static.
-    "--ro-bind-try", caBundle, caBundle,
-    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
-    "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
-    "--bind", "/proc", "/proc",
-    "--dev", "/dev",
-    "--tmpfs", "/tmp",
-    // The throwaway store sits at a fixed jail path, so it never nests inside a host build dir.
-    "--bind", tmp, "/work",
-    ...(options.localFlake ? ["--ro-bind", options.localFlake, "/src"] : []),
+  const bwrap = bwrapArgv(launch, flakeRef, {
     nix,
-    ...nixArgv(launch, flakeRef, options.builders),
-  ];
+    tmp,
+    caBundle,
+    resolvConf,
+    etcHosts,
+    nsswitchConf,
+    localFlake: options.localFlake,
+    builders: options.builders,
+  });
   const cg = evalCgroup();
   // The whole cgroup's count: the only one without an eval cgroup, and the fallback when systemd takes
   // back the controllers of a cgroup it writes but never delegated, which removes the eval's memory.events.

@@ -3,7 +3,7 @@
 // Run with `node --test tests/eval-argv.test.ts`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ATTR_PATH_RE, nixArgv, runEval, wrapperForNixOS, type Tier } from "../src/eval/run.ts";
+import { ATTR_PATH_RE, bwrapArgv, nixArgv, runEval, wrapperForNixOS, type Tier } from "../src/eval/run.ts";
 import { errors, load } from "../src/tier1/schema.ts";
 
 // A remote builder in Nix's `builders` syntax, as the launcher's config names uplink (I8). No key.
@@ -114,5 +114,30 @@ test("oracle GX1 (F2): ATTR_PATH_RE validated in schemas/eval-request.json and a
     );
   }
 });
+
+test("oracle GS2 (N1): runEval bwrapArgv includes --unshare-pid and --bind /proc /proc, and mutant without --unshare-pid goes RED", () => {
+  const checkBwrap = (bw: string[]) => {
+    assert.ok(bw.includes("--unshare-user"), "runEval bwrap must include --unshare-user");
+    assert.ok(bw.includes("--unshare-pid"), "runEval bwrap must include --unshare-pid");
+    assert.ok(bw.includes("--unshare-ipc"), "runEval bwrap must include --unshare-ipc");
+    assert.ok(bw.includes("--unshare-uts"), "runEval bwrap must include --unshare-uts");
+    assert.ok(bw.includes("--unshare-cgroup-try"), "runEval bwrap must include --unshare-cgroup-try");
+    assert.ok(bw.includes("--die-with-parent"), "runEval bwrap must include --die-with-parent");
+    const procIdx = bw.findIndex((a, i) => a === "--bind" && bw[i + 1] === "/proc" && bw[i + 2] === "/proc");
+    assert.notEqual(procIdx, -1, "runEval bwrap must mount /proc via --bind /proc /proc");
+  };
+
+  const bw = bwrapArgv(
+    { request: { repo: "a/b", rev: "main", attr: "x", trusted: "no" }, sender_tier: "public" },
+    "github:a/b/main",
+    { tmp: "/tmp/genie-eval-test", nix: "/nix/store/nix/bin/nix" },
+  );
+  checkBwrap(bw);
+
+  // Mutant M-eval-no-unshare-pid: dropping --unshare-pid from runEval's bwrap argv must fail checkBwrap RED.
+  const mutatedBw = bw.filter((a) => a !== "--unshare-pid");
+  assert.throws(() => checkBwrap(mutatedBw), /runEval bwrap must include --unshare-pid/);
+});
+
 
 
