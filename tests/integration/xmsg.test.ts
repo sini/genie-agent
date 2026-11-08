@@ -8,7 +8,7 @@
 // Run with:
 //   XMSG_BIN=<path> GENIE_GUARD_BIN=<path> node --test tests/xmsg-integration.test.ts
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -1337,12 +1337,14 @@ test(
 // - Against real xmsg serve, spawning a thread creates <state-dir>/worktrees/<thread-id> and starts
 //   the pane with its cwd inside it (an independent git clone of the requested repo from source-repos,
 //   or an empty working dir when no repo is named)
-// - Making a commit and moving a branch inside the copy leaves the writable source repo's
-//   `git worktree list`, `git for-each-ref`, and `git count-objects` unchanged
+// - Making a commit and moving a branch inside the copy (and even forcing `git gc` in the source repo)
+//   leaves the writable source repo's `git worktree list`, `git for-each-ref --format=%(objectname) %(refname)`,
+//   and sorted `git cat-file --batch-all-objects --batch-check=%(objectname)` unchanged
 // - A fake-clock GC at 96h removes the directory
 // Mutants (verified by source edit & revert):
 //   1. Restore `git worktree add` in prepareWorkingCopy => RED
-//   2. Skip working copy removal at D3 GC => RED
+//   2. Clone path writes one object or one ref into resolved.sourcePath => RED
+//   3. Skip working copy removal at D3 GC => RED
 // -----------------------------------------------------------------------------
 test(
   "oracle 6 (GI-3.1): spawning a thread over real xmsg serve creates an isolated clone (source worktree list, refs, and objects unchanged after commit/branch move) and 96h fake-clock GC removes the dir",
@@ -1374,13 +1376,71 @@ test(
           encoding: "utf8",
         });
       git(["init", "-q", "-b", "main", sourceRepoDir]);
+      git(["-C", sourceRepoDir, "config", "gc.auto", "0"]);
+      git(["-C", sourceRepoDir, "config", "maintenance.auto", "false"]);
       writeFileSync(join(sourceRepoDir, "README.md"), "# demo-repo\n");
       git(["-C", sourceRepoDir, "add", "README.md"]);
       git(["-C", sourceRepoDir, "commit", "-q", "-m", "initial commit"]);
 
-      const wtListBaseline = git(["-C", sourceRepoDir, "worktree", "list"]);
-      const refsBaseline = git(["-C", sourceRepoDir, "for-each-ref"]);
-      const objectsBaseline = git(["-C", sourceRepoDir, "count-objects"]);
+      const snapshotSourceRepo = (repoDir: string) => {
+        const worktrees = git(["-C", repoDir, "worktree", "list"]);
+        const refs = git(["-C", repoDir, "for-each-ref", "--format=%(objectname) %(refname)"])
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .sort()
+          .join("\n");
+        const objects = git([
+          "-C",
+          repoDir,
+          "cat-file",
+          "--batch-all-objects",
+          "--batch-check=%(objectname)",
+        ])
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .sort()
+          .join("\n");
+        return { worktrees, refs, objects };
+      };
+      const formatSourceRepoDiagnostics = (repoDir: string): string => {
+        const countObjectsV = git(["-C", repoDir, "count-objects", "-v"]).trim();
+        const packDir = join(repoDir, ".git", "objects", "pack");
+        const packEntries = existsSync(packDir) ? readdirSync(packDir).sort() : [];
+        return `count-objects -v:\n${countObjectsV}\npack entries: ${JSON.stringify(packEntries)}`;
+      };
+      const assertSourceRepoUnchanged = (
+        repoDir: string,
+        baseline: ReturnType<typeof snapshotSourceRepo>,
+        phase: string,
+      ) => {
+        const actual = snapshotSourceRepo(repoDir);
+        const diag = () => formatSourceRepoDiagnostics(repoDir);
+        assert.equal(
+          actual.worktrees,
+          baseline.worktrees,
+          `source repo git worktree list must be unchanged (${phase})\n${diag()}`,
+        );
+        assert.equal(
+          actual.refs,
+          baseline.refs,
+          `source repo git for-each-ref must be unchanged (${phase})\n${diag()}`,
+        );
+        assert.equal(
+          actual.objects,
+          baseline.objects,
+          `source repo object IDs (git cat-file --batch-all-objects) must be unchanged (${phase})\n${diag()}`,
+        );
+      };
+
+      const looseBaseline = git(["-C", sourceRepoDir, "count-objects"]);
+      const sourceBaseline = snapshotSourceRepo(sourceRepoDir);
+      assert.equal(
+        sourceBaseline.objects.split("\n").filter(Boolean).length,
+        3,
+        "fixture source repo baseline must contain 3 objects (commit, tree, blob)",
+      );
 
       let nowMs = 1_000_000;
       let nextTimerId = 0;
@@ -1509,22 +1569,23 @@ test(
       git(["-C", repoWorktreePath, "commit", "-q", "-m", "thread-local commit"]);
       git(["-C", repoWorktreePath, "branch", "-f", "thread-branch", "HEAD"]);
 
-      // Assert the writable source repo's worktree list, refs, and object count are completely unchanged
-      assert.equal(
-        git(["-C", sourceRepoDir, "worktree", "list"]),
-        wtListBaseline,
-        "source repo git worktree list must be unchanged",
+      // Assert the writable source repo's worktree list, refs, and all object IDs are completely unchanged
+      assertSourceRepoUnchanged(
+        sourceRepoDir,
+        sourceBaseline,
+        "after isolated clone and destination commit/branch move",
       );
-      assert.equal(
-        git(["-C", sourceRepoDir, "for-each-ref"]),
-        refsBaseline,
-        "source repo git for-each-ref must be unchanged",
-      );
-      assert.equal(
+
+      // Forced-gc cell: packing all loose objects in the source repo (3 -> 0 loose objects)
+      // must still pass the content-identity check (all object IDs + all refs unchanged),
+      // even though `git count-objects` changed from `looseBaseline` to 0 loose objects.
+      git(["-C", sourceRepoDir, "gc", "--quiet"]);
+      assert.notEqual(
         git(["-C", sourceRepoDir, "count-objects"]),
-        objectsBaseline,
-        "source repo git count-objects must be unchanged",
+        looseBaseline,
+        "forced git gc must pack loose objects (changing git count-objects from baseline)",
       );
+      assertSourceRepoUnchanged(sourceRepoDir, sourceBaseline, "after forced git gc in source repo");
 
       // Verify $th-empty created an empty working dir at <state-dir>/worktrees/$th-empty and pane cwd is inside it
       assert.equal(existsSync(emptyThreadDir), true, "empty thread working dir must exist at spawn");

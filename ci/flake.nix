@@ -117,6 +117,30 @@
                         && grep -q '^ok [0-9]* - oracle 10 (GI-9): with svcExe.genie set to genie-root SEA binary, genie-root registers as genie and a plain node process is refused$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                      cp -r . $TMPDIR/mut-go6-source-obj
+                      chmod -R u+w $TMPDIR/mut-go6-source-obj
+                      substituteInPlace $TMPDIR/mut-go6-source-obj/src/dispatcher/index.ts \
+                        --replace-fail 'materialized.push(dest);' 'execFileSync("git", ["-C", resolved.sourcePath, "hash-object", "-w", "--stdin"], { input: "leaked-object\n" }); materialized.push(dest);'
+                      if (cd $TMPDIR/mut-go6-source-obj && node --test --test-force-exit --test-name-pattern='oracle 6 \(GI-3\.1\)' tests/integration/xmsg.test.ts >/dev/null 2>&1); then
+                        echo "mutant M-go6-source-object survived in xmsg-integration" >&2
+                        exit 1
+                      fi
+                      cp -r . $TMPDIR/mut-go6-source-ref
+                      chmod -R u+w $TMPDIR/mut-go6-source-ref
+                      substituteInPlace $TMPDIR/mut-go6-source-ref/src/dispatcher/index.ts \
+                        --replace-fail 'materialized.push(dest);' 'execFileSync("git", ["-C", resolved.sourcePath, "update-ref", "refs/heads/leaked-ref", "HEAD"]); materialized.push(dest);'
+                      if (cd $TMPDIR/mut-go6-source-ref && node --test --test-force-exit --test-name-pattern='oracle 6 \(GI-3\.1\)' tests/integration/xmsg.test.ts >/dev/null 2>&1); then
+                        echo "mutant M-go6-source-ref survived in xmsg-integration" >&2
+                        exit 1
+                      fi
+                      cp -r . $TMPDIR/mut-go6-old-loose-oracle
+                      chmod -R u+w $TMPDIR/mut-go6-old-loose-oracle
+                      substituteInPlace $TMPDIR/mut-go6-old-loose-oracle/tests/integration/xmsg.test.ts \
+                        --replace-fail 'assertSourceRepoUnchanged(sourceRepoDir, sourceBaseline, "after forced git gc in source repo");' 'assert.equal(git(["-C", sourceRepoDir, "count-objects"]), looseBaseline, "source repo git count-objects must be unchanged");'
+                      if (cd $TMPDIR/mut-go6-old-loose-oracle && node --test --test-force-exit --test-name-pattern='oracle 6 \(GI-3\.1\)' tests/integration/xmsg.test.ts >/dev/null 2>&1); then
+                        echo "positive control M-go6-old-loose-oracle survived forced git gc in xmsg-integration" >&2
+                        exit 1
+                      fi
                       touch $out
                     '';
               };
