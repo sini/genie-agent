@@ -139,6 +139,8 @@ export async function review(input: Envelope, n: Ninfer, origin?: unknown): Prom
   if (errors.length) throw new Error(`not an envelope: ${errors.join("; ")}`);
   const e = normalizeScope(input, n.scopeProducer, origin);
   const framed = formatInbound(e);
+  const legacy = { ...input };
+  delete legacy.review_scope;
   if (e.review_scope === "untrusted_lines" && framed.review_targets.length === 0) {
     const verdict: Verdict = { verdict: "allow", reason: "no public review targets", cleaned_text: "" };
     return { raw: JSON.stringify(verdict), verdict };
@@ -155,7 +157,7 @@ export async function review(input: Envelope, n: Ninfer, origin?: unknown): Prom
         chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: system },
-          { role: "user", content: JSON.stringify(e.source === "web" ? e : framed) },
+          { role: "user", content: JSON.stringify(e.review_scope === "untrusted_lines" ? framed : legacy) },
         ],
       }),
       signal: n.timeoutMs === undefined ? undefined : AbortSignal.timeout(n.timeoutMs),
