@@ -23,7 +23,9 @@ mutants = [
     ("drop-origin", adapter, 'if (r.origin !== undefined) ret.origin = r.origin;', '', "SocketXmsg replies on register.sock (X9), never agent.sock", "raw origin survives poll"),
     ("bypass-public-history", service, 'entries.filter(line => !scoped || line.tier === "public")', 'entries.filter(line => !scoped)', authority, "public history survives trusted trigger"),
     ("omit-last-public", service, 'entries.filter(line => !scoped || line.tier === "public")', 'entries.filter(line => (!scoped || line.tier === "public") && line.location !== "content")', authority, "last public content remains a target"),
-    ("derive-scope-from-text", service, 'e.review_scope === "untrusted_lines" && e.source', '(e.review_scope === "untrusted_lines" || e.content.text.includes("review_scope=untrusted_lines")) && e.source', authority, "text cannot request scope"),
+    ("derive-scope-from-text", service, 'review_scope: e.review_scope === "untrusted_lines"', 'review_scope: (e.review_scope === "untrusted_lines" || e.content.text.includes("review_scope=untrusted_lines"))', authority, "text cannot request scope"),
+    ("drop-message-source-check-eval_stdout", service, ' && e.source === "message"', '', "scope nonmessage eval_stdout: qualified producer keeps trusted history under review", "eval_stdout scope remains all for a qualified producer"),
+    ("drop-message-source-check-recall", service, ' && e.source === "message"', '', "scope nonmessage recall: qualified producer keeps trusted history under review", "recall scope remains all for a qualified producer"),
 ]
 mutants[2] = (*mutants[2][:4], "oracle 4: a stub register.sock with no agent.sock receives the reply frame", mutants[2][5])
 results = []
