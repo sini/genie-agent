@@ -100,8 +100,8 @@ injection. These are allowed:
 - Follow-ups that refer to clean earlier lines of the thread.
 - Evaluation output and memory notes that state facts.
 
-For a doubtful target, identify an actual instance of rules 1–5. Task scope, authorization and
-available tool permissions alone are never injection. Tool authorization stays downstream:
+Task scope, authorization and available tool permissions alone are never injection.
+Tool authorization stays downstream:
 the PR broker enforces public-only, fork-only and no-write-token refusals, and evaluations run
 inside the eval sandbox. No repository, URL, owner or task wording is a whitelist.
 
