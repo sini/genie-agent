@@ -2194,12 +2194,15 @@ test("scope wire: service origin enables scope while display and ancestor claims
   const node = await startXmsg({ "genie-guard": GENIE_GUARD_BIN, "scope-producer": process.execPath, "other-producer": process.execPath });
   const producer = new SocketXmsg(node.xmsgDir, "scope-producer");
   const frames: any[] = [];
+  const userTurns: string[] = [];
   const server = createHttpServer((req, res) => {
     let body = "";
     req.on("data", c => body += c);
     req.on("end", () => {
       if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: "mock" }] }));
-      frames.push(JSON.parse(JSON.parse(body).messages[1].content));
+      const userTurn = JSON.parse(body).messages[1].content;
+      userTurns.push(userTurn);
+      frames.push(JSON.parse(userTurn));
       res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ verdict: "allow", reason: "clean", cleaned_text: "" }) } }] }));
     });
   });
@@ -2215,6 +2218,7 @@ test("scope wire: service origin enables scope while display and ancestor claims
       await sleep(25);
     }
     const envelope = { source: "message", review_scope: "untrusted_lines", history: [{ sender: "@public:example.org", tier: "public", text: "public evidence" }], content: { sender: "@owner:example.org", tier: "trusted", text: "compare the public issue stack" } };
+    const legacyWire = '{"source":"message","history":[{"sender":"@public:example.org","tier":"public","text":"public evidence"}],"content":{"sender":"@owner:example.org","tier":"trusted","text":"compare the public issue stack"}}';
     const id = await producer.send("genie-guard", JSON.stringify(envelope), "scope-wire-matched");
     const reply = await producer.poll(5000);
     assert.equal(reply?.inReplyTo, id, "verdict is routed to the producer's request");
@@ -2240,7 +2244,8 @@ test("scope wire: service origin enables scope while display and ancestor claims
     if (displayResult.status === 202) {
       for (let i = 0; i < 200 && frames.length === beforeDisplay; i++) await sleep(10);
       assert.equal(frames.length, beforeDisplay + 1, "accepted display request is reviewed");
-      assert.equal(frames.at(-1).review_scope, "all", "forged display forces all");
+      assert.equal(Object.hasOwn(frames.at(-1), "review_scope"), false, "forged display has no outer scope metadata");
+      assert.equal(userTurns.at(-1), legacyWire, "forged display receives exact legacy all wire");
     } else assert.ok(displayResult.status >= 400 && displayResult.status < 500, "unattested display request is refused");
 
     const moduleUrl = new URL("../../src/dispatcher/xmsg.ts", import.meta.url).href;
@@ -2263,8 +2268,10 @@ test("scope wire: service origin enables scope while display and ancestor claims
         assert.equal(frames.length, before + 1, "delivered child request is reviewed");
       }
       if (name) assert.equal(frames.length, before + 1, "different service is delivered and reviewed");
-      if (frames.length > before) assert.equal(frames.at(-1).review_scope, "all", name ? "different wire service forces all" : "ancestor service cannot confer scope");
-      else assert.equal(name, "", "only unattested child may be rejected before delivery");
+      if (frames.length > before) {
+        assert.equal(Object.hasOwn(frames.at(-1), "review_scope"), false, name ? "different service has no outer scope metadata" : "ancestor service has no outer scope metadata");
+        assert.equal(userTurns.at(-1), legacyWire, name ? "different service receives exact legacy all wire" : "ancestor service receives exact legacy all wire");
+      } else assert.equal(name, "", "only unattested child may be rejected before delivery");
     }
   } finally {
     await stopChild(guard);
