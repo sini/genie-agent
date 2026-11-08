@@ -6,7 +6,7 @@
     # snapshot of the tree (den-hoag-lbtnv D1). So `outputs` below applies `../flake.nix`'s own
     # `outputs` to the `nixpkgs` declared here, line for line as `../flake.nix` declares it.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-    xmsg.url = "github:sini/xmsg/a6f7adf31516e4ebc56fb409cd302a54c18647b6";
+    xmsg.url = "github:sini/xmsg/3aa04570cf9768164bd7c82b8ffca8002591bf87";
     xmsg.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -116,6 +116,7 @@
                         && grep -q '^ok [0-9]* - oracle 9 (GI-8): room_context round-trip by scope as xmsg reply to thread forward, error/throttle handling, guard-in screening, and multi-page resync over real xmsg serve$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 10 (GI-9): with svcExe.genie set to genie-root SEA binary, genie-root registers as genie and a plain node process is refused$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - scope wire: service origin enables scope while display and ancestor claims do not$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       touch $out
                     '';

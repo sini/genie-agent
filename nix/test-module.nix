@@ -33,6 +33,7 @@ let
           guardRef = "genie-guard@sini.bitstream";
           guard = {
             enable = true;
+            scopeProducer = "matrix-xmsg@example.node";
             ninferUrl = "http://10.9.2.2:18020/v1";
             apiKeyFile = "/home/sini/.config/hyperqwen/api-key";
           };

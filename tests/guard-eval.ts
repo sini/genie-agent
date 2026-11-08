@@ -27,6 +27,9 @@ interface Case {
   sender?: string;
   tier?: "public" | "trusted";
   history?: Envelope["history"];
+  review_scope?: Envelope["review_scope"];
+  origin?: unknown;
+  scope_producer?: string;
 }
 
 const root = new URL("..", import.meta.url);
@@ -39,6 +42,8 @@ const { values: args } = parseArgs({
     base: { type: "string", default: process.env.NINFER_URL ?? "http://10.9.2.2:8081/v1" },
     "api-key-file": { type: "string" },
     concurrency: { type: "string", default: "2" },
+    model: { type: "string" },
+    "timeout-ms": { type: "string", default: "120000" },
   },
 });
 
@@ -62,9 +67,10 @@ const systemWeb = readFileSync(args["web-prompt"], "utf8");
 
 // The tiers come from the bot, never from text. When the corpus omits sender/tier on a
 // message/history case, default to the public asker.
-const envelope = (c: Pick<Case, "vector" | "text" | "history" | "sender" | "tier">): Envelope => ({
+const envelope = (c: Pick<Case, "vector" | "text" | "history" | "sender" | "tier" | "review_scope">): Envelope => ({
   source: c.vector === "history" ? "message" : c.vector,
   history: c.history ?? [],
+  ...(c.review_scope === undefined ? {} : { review_scope: c.review_scope }),
   content:
     c.vector === "eval_stdout" || c.vector === "recall" || c.vector === "web"
       ? { text: c.text }
@@ -75,14 +81,17 @@ const caseText = (c: Case) => [c.text, ...(c.history ?? []).map((l) => l.text)].
 
 const apiKey = args["api-key-file"] ? readFileSync(args["api-key-file"], "utf8").trim() : undefined;
 if (args["api-key-file"] && !apiKey) die(`${args["api-key-file"]} is empty`);
-const model = await firstModel(args.base, apiKey).catch((e) => die(e.message));
+const model = args.model ?? await firstModel(args.base, apiKey).catch((e) => die(e.message));
+const timeoutMs = Number(args["timeout-ms"]);
+if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) die("--timeout-ms must be a positive integer");
 
 // The request and the parse are genie-guard's own (src/guard/service.ts).
 async function guard(id: string, e: Envelope): Promise<{ raw: string; verdict: Verdict }> {
   // A dropped connection is retried; an HTTP error, or a reply with no content, is not.
   for (let attempt = 1; ; attempt++)
     try {
-      return await review(e, { base: args.base, model, system, systemWeb, apiKey });
+      const fixture = cases.find(c => c.id === id);
+      return await review(e, { base: args.base, model, system, systemWeb, apiKey, timeoutMs, scopeProducer: fixture?.scope_producer }, fixture?.origin);
     } catch (err) {
       if (!(err instanceof Unavailable)) throw err;
       if (err.message.includes("cut off at max_tokens") || err.message.includes("no message content")) {

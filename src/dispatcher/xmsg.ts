@@ -14,6 +14,8 @@ export interface Inbound {
   id: string;
   text: string;
   inReplyTo?: string;
+  // Raw transport metadata; callers must validate its shape before using it.
+  origin?: unknown;
 }
 
 // A refusal by xmsg, by its error code: `not_found` is a session that is not running.
@@ -121,6 +123,7 @@ export class SocketXmsg implements XmsgClient {
     if (r.action !== "deliver") throw new Error(`xmsg poll: unexpected ${JSON.stringify(r)}`);
     const ret: Inbound = { id: r.messageId, text: r.text };
     if (r.inReplyTo) ret.inReplyTo = r.inReplyTo;
+    if (r.origin !== undefined) ret.origin = r.origin;
     return ret;
   }
 

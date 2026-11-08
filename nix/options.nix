@@ -482,6 +482,12 @@ rec {
               description = "Optional model ID override for genie-guard.";
             };
 
+            scopeProducer = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Exact xmsg service@node allowed to request untrusted_lines review (requires an XS2-capable daemon). Unset disables scoped review.";
+            };
+
             timeoutMs = lib.mkOption {
               type = lib.types.ints.positive;
               default = 120000;

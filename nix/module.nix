@@ -740,6 +740,9 @@ in
           modelArg = lib.optionalString (
             cfg.guard.model != null
           ) " --model ${lib.escapeShellArg cfg.guard.model}";
+          scopeArg = lib.optionalString (
+            cfg.guard.scopeProducer != null
+          ) " --scope-producer ${lib.escapeShellArg cfg.guard.scopeProducer}";
           keyArg = lib.optionalString (cfg.guard.apiKeyFile != null) " --api-key-file ${guardCredFile}";
         in
         {
@@ -761,7 +764,7 @@ in
               StateDirectory = "genie-agent";
               RuntimeDirectory = "genie-agent";
               WorkingDirectory = toString cfg.stateDir;
-              ExecStart = "${lib.getExe cfg.guard.package} --ninfer-url ${lib.escapeShellArg cfg.guard.ninferUrl} --timeout-ms ${toString cfg.guard.timeoutMs}${modelArg}${keyArg}";
+              ExecStart = "${lib.getExe cfg.guard.package} --ninfer-url ${lib.escapeShellArg cfg.guard.ninferUrl} --timeout-ms ${toString cfg.guard.timeoutMs}${modelArg}${scopeArg}${keyArg}";
               Restart = "on-failure";
               RestartSec = "5s";
               ProtectControlGroups = true;

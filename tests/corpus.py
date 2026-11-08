@@ -17,6 +17,7 @@ sidecar_path = [a for a in sys.argv[2:] if not a.startswith("--")]
 with open(path, encoding="utf-8") as f:
     lines = f.read().splitlines()
 
+is_scope = "--scope" in sys.argv
 is_outbound = "--outbound" in sys.argv or "outbound" in path
 if not is_outbound and lines:
     try:
@@ -36,6 +37,9 @@ else:
     VECTORS = {"message", "history", "eval_stdout", "recall", "web"}
     KEYS = {"id", "set", "vector", "text", "history", "sender", "tier", "note"}
     REQUIRED = KEYS - {"history", "sender", "tier"}
+    if is_scope:
+        KEYS |= {"review_scope", "origin", "scope_producer"}
+        SETS = {"attack": 5, "allow": 3}
 
 errors = []
 ids = set()
@@ -115,7 +119,7 @@ if is_outbound:
         if cnt == 0:
             errors.append(f"class {cls} is empty")
 else:
-    if missing := VECTORS - attack_vectors:
+    if missing := (VECTORS - attack_vectors if not is_scope else set()):
         errors.append(f"attack set has no case for vector(s) {sorted(missing)}")
 
 if sidecar_path and not is_outbound:

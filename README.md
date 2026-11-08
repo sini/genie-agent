@@ -29,6 +29,36 @@ The deployment lives in nix-config; this repository owns the agent.
 acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) as
 `tests/guard-eval.ts`.
 
+Scoped message review is optional. The wire envelope accepts
+`review_scope: "all" | "untrusted_lines"`, defaulting to `all`. Configure the exact producer
+with `--scope-producer matrix-xmsg@example.node`, `GENIE_GUARD_SCOPE_PRODUCER`, or
+`services.genie-agent.guard.scopeProducer` (default `null`). Only a matching structured xmsg
+service/node origin without an instance ID can enable `untrusted_lines`, and only for message
+sources. Missing, malformed or mismatched origins, unset configuration, and nonmessage sources
+receive full review. Origin comes from the transport, never a payload or display name.
+
+Scoped review classifies every public entry across history and content; trusted entries are
+quoted context outside classification, never guard instructions or grants of permission.
+Zero public targets in an authorized scoped envelope require no model call. Legacy `all`
+still reviews trusted entries. Injection means one of the five prompt rules; task scope or
+permission alone is not injection. The PR broker's public-only, fork-only and no-write-token
+refusals (`src/broker/pr.ts`) and the eval sandbox enforce downstream authorization.
+
+Use an XS2-capable xmsg daemon. Origin node fields are routing claims rather than general
+cryptographic node authentication: replies return to their routed origin, and the Matrix
+consumer accepts only its own pending request IDs. The guarantee concerns public entries;
+a public reply quote inside a trusted entry remains trusted context, without separate review.
+Deploy and verify the compatible guard and producer principal first, then enable the Matrix
+producer's scope flag (default off). Disable that flag before rolling the guard back. An
+incompatible request is an ordinary schema error; existing open failure mode can forward it
+unscreened with a warning, so producer-first emission is unsupported.
+
+The separate `corpus/injection-scope` synthetic fixtures exercise the contract without changing
+the four existing corpora. The live evaluation harness accepts explicit `--model` and
+`--timeout-ms`; scoped fixtures pass origin separately through production validation,
+normalization and framing. `python3 tests/guard-scope-mutants.py <artifact-directory>` runs
+source mutations against named structural assertions without model inference.
+
 Published as an OCI image at `ghcr.io/sini/genie-guard` (`packages.<linux>.image`).
 
 - It accepts message text that is one guard-in envelope, `{source, history, content}`, as

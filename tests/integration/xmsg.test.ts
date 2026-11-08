@@ -470,8 +470,8 @@ process.stdin.on("data", (chunk) => {
       return { child, waitLine, sendCmd, stop };
     };
 
-    const inst1 = spawnInstanceFake("inst-1");
-    const inst2 = spawnInstanceFake("inst-2");
+    const inst1 = spawnInstanceFake("11111111-1111-4111-8111-111111111111");
+    const inst2 = spawnInstanceFake("22222222-2222-4222-8222-222222222222");
 
     const dispatcherXmsg = new SocketXmsg(node.xmsgDir, "genie-expert");
     let del: Delivery | null = null;
@@ -504,13 +504,13 @@ process.stdin.on("data", (chunk) => {
       });
 
       const t1 = d.thread("thread-1");
-      t1.session = "inst-1";
+      t1.session = "11111111-1111-4111-8111-111111111111";
       t1.state = "live";
       t1.pane = "p1";
       t1.launched = true;
 
       const t2 = d.thread("thread-2");
-      t2.session = "inst-2";
+      t2.session = "22222222-2222-4222-8222-222222222222";
       t2.state = "live";
       t2.pane = "p2";
       t2.launched = true;
@@ -2128,3 +2128,85 @@ test(
 
 
 
+
+test("scope wire: service origin enables scope while display and ancestor claims do not", { timeout: 30_000 }, async () => {
+  const node = await startXmsg({ "genie-guard": GENIE_GUARD_BIN, "scope-producer": process.execPath, "other-producer": process.execPath });
+  const producer = new SocketXmsg(node.xmsgDir, "scope-producer");
+  const frames: any[] = [];
+  const server = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: "mock" }] }));
+      frames.push(JSON.parse(JSON.parse(body).messages[1].content));
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ verdict: "allow", reason: "clean", cleaned_text: "" }) } }] }));
+    });
+  });
+  let guard: ChildProcess | undefined;
+  try {
+    const registration = await producer.register();
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    guard = spawn(GENIE_GUARD_BIN!, ["--ninfer-url", `http://127.0.0.1:${(server.address() as any).port}/v1`, "--scope-producer", `scope-producer@${registration.node}`], { env: { ...process.env, XDG_RUNTIME_DIR: node.runDir }, stdio: ["ignore", "pipe", "pipe"] });
+    for (let i = 0; i < 200; i++) {
+      const r = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+      if (r.json?.recipients?.some((entry: any) => entry.address.startsWith("genie-guard@"))) break;
+      assert.equal(guard.exitCode, null);
+      await sleep(25);
+    }
+    const envelope = { source: "message", review_scope: "untrusted_lines", history: [{ sender: "@public:example.org", tier: "public", text: "public evidence" }], content: { sender: "@owner:example.org", tier: "trusted", text: "compare the public issue stack" } };
+    const id = await producer.send("genie-guard", JSON.stringify(envelope), "scope-wire-matched");
+    const reply = await producer.poll(5000);
+    assert.equal(reply?.inReplyTo, id, "verdict is routed to the producer's request");
+    assert.equal(JSON.parse(reply!.text).verdict, "allow");
+    await producer.ack(reply!.id);
+    assert.equal(frames.at(-1).review_scope, "untrusted_lines", "matched wire origin enables scope");
+    assert.deepEqual(frames.at(-1).review_targets.map((e: any) => e.location), ["history[0]"]);
+    assert.deepEqual(frames.at(-1).context_not_under_review.map((e: any) => e.location), ["content"]);
+
+    // A separate, unregistered process cannot turn a display claim into service attestation.
+    const beforeDisplay = frames.length;
+    const displayScript = `import { request } from "node:http";
+      const req = request({ socketPath: ${JSON.stringify(node.httpSock)}, path: "/v1/messages", method: "POST", headers: { "content-type": "application/json" } }, res => {
+        let body = ""; res.on("data", c => body += c); res.on("end", () => console.log(JSON.stringify({ status: res.statusCode, body })));
+      }); req.on("error", e => { console.error(e); process.exitCode = 1; });
+      req.end(${JSON.stringify(JSON.stringify({ to: "genie-guard", from: `scope-producer@${registration.node}`, text: JSON.stringify(envelope) }))});`;
+    const displayChild = spawn(process.execPath, ["--input-type=module", "-e", displayScript], { stdio: ["ignore", "pipe", "pipe"] });
+    let displayOutput = ""; let displayError = "";
+    displayChild.stdout!.on("data", c => displayOutput += c);
+    displayChild.stderr!.on("data", c => displayError += c);
+    assert.equal(await new Promise<number | null>(resolve => displayChild.once("exit", resolve)), 0, displayError);
+    const displayResult = JSON.parse(displayOutput);
+    if (displayResult.status === 202) {
+      for (let i = 0; i < 200 && frames.length === beforeDisplay; i++) await sleep(10);
+      assert.equal(frames.length, beforeDisplay + 1, "accepted display request is reviewed");
+      assert.equal(frames.at(-1).review_scope, "all", "forged display forces all");
+    } else assert.ok(displayResult.status >= 400 && displayResult.status < 500, "unattested display request is refused");
+
+    const moduleUrl = new URL("../../src/dispatcher/xmsg.ts", import.meta.url).href;
+    for (const name of ["other-producer", ""]) {
+      const before = frames.length;
+      const script = `import { SocketXmsg, XmsgError } from ${JSON.stringify(moduleUrl)};
+        const x = new SocketXmsg(${JSON.stringify(node.xmsgDir)}, ${JSON.stringify(name)});
+        try { ${name ? 'await x.register();' : ''}
+          await x.send("genie-guard", ${JSON.stringify(JSON.stringify(envelope))}, ${JSON.stringify('scope-child-' + name)});
+          console.log("CHILD_DELIVERED=1");
+          ${name ? 'const r = await x.poll(5000); if (!r) throw new Error("missing routed reply");' : ''}
+        } catch (e) { ${name ? 'throw e;' : 'if (!(e instanceof XmsgError) || !["unattested", "denied"].includes(e.code)) throw e;'} } finally { x.close(); }`;
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = ""; child.stderr!.on("data", c => stderr += c);
+      let stdout = ""; child.stdout!.on("data", c => stdout += c);
+      const code = await new Promise<number | null>(resolve => child.once("exit", resolve));
+      assert.equal(code, 0, stderr);
+      if (stdout.includes("CHILD_DELIVERED=1")) {
+        for (let i = 0; i < 200 && frames.length === before; i++) await sleep(10);
+        assert.equal(frames.length, before + 1, "delivered child request is reviewed");
+      }
+      if (name) assert.equal(frames.length, before + 1, "different service is delivered and reviewed");
+      if (frames.length > before) assert.equal(frames.at(-1).review_scope, "all", name ? "different wire service forces all" : "ancestor service cannot confer scope");
+      else assert.equal(name, "", "only unattested child may be rejected before delivery");
+    }
+  } finally {
+    await stopChild(guard);
+    producer.close(); server.close(); server.closeAllConnections(); await node.stop();
+  }
+});
