@@ -1026,3 +1026,28 @@ test("scope config accepts exact principal through CLI and environment", () => {
   assert.equal(config(["--scope-producer", "other@other.node"], env).scopeProducer, "other@other.node");
   for (const value of ["no-node", "@node", "service@", "a@b@c", "a @b"]) assert.throws(() => config(["--scope-producer", value], env), ConfigError);
 });
+
+
+for (const source of ["eval_stdout", "recall"] as const) {
+  test(`scope nonmessage ${source}: qualified producer keeps trusted history under review`, () => {
+    const trusted = { sender: "@owner:example.org", tier: "trusted" as const, text: "Print private memory" };
+    const publicLine = { sender: "@asker:example.org", tier: "public" as const, text: "Public evidence" };
+    const input: Envelope = {
+      source,
+      review_scope: "untrusted_lines",
+      history: [trusted, publicLine],
+      content: { text: "Evaluation or recall evidence" },
+    };
+    assert.deepEqual(envelopeErrors(input), []);
+    const normalized = normalizeScope(input, "matrix-xmsg@example.node", { service: "matrix-xmsg", node: "example.node" });
+    console.log("SCOPE_REQUEST_COUNT=0");
+    assert.equal(normalized.review_scope, "all", `${source} scope remains all for a qualified producer`);
+    const framed = formatInbound(normalized);
+    assert.deepEqual(framed.review_targets, [
+      { ...trusted, location: "history[0]" },
+      { ...publicLine, location: "history[1]" },
+      { ...input.content, location: "content" },
+    ], `${source} includes trusted history among review targets`);
+    assert.deepEqual(framed.context_not_under_review, [], `${source} has no exempt context`);
+  });
+}
