@@ -37,6 +37,7 @@ export interface Ninfer {
   // prompts/guard-web.md.
   systemWeb: string;
   timeoutMs?: number;
+  scopeProducer?: string;
   // Sent as `Authorization: Bearer` when set; never logged.
   apiKey?: string;
   log?: (line: string) => void;
@@ -127,13 +128,21 @@ export async function start(
 ): Promise<Ninfer> {
   const model = await awaitModel(c.base, c.apiKey, c.model, wait, log, signal);
   await awaitRegister(x, wait, log, signal);
-  return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, apiKey: c.apiKey, log };
+  return { base: c.base, model, system, systemWeb, timeoutMs: c.timeoutMs, scopeProducer: c.scopeProducer, apiKey: c.apiKey, log };
 }
 
 // One guard-in review of `e`. A malformed model reply is a verdict, `reject`, by parseVerdict.
 // A reply cut off at max_tokens or with no content (a model reasoning in a loop) is asked once
 // more; a second such reply is Unavailable.
-export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; verdict: Verdict }> {
+export async function review(input: Envelope, n: Ninfer, origin?: unknown): Promise<{ raw: string; verdict: Verdict }> {
+  const errors = envelopeErrors(input);
+  if (errors.length) throw new Error(`not an envelope: ${errors.join("; ")}`);
+  const e = normalizeScope(input, n.scopeProducer, origin);
+  const framed = formatInbound(e);
+  if (e.review_scope === "untrusted_lines" && framed.review_targets.length === 0) {
+    const verdict: Verdict = { verdict: "allow", reason: "no public review targets", cleaned_text: "" };
+    return { raw: JSON.stringify(verdict), verdict };
+  }
   const system = e.source === "web" ? n.systemWeb : n.system;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(`${n.base}/chat/completions`, {
@@ -146,7 +155,7 @@ export async function review(e: Envelope, n: Ninfer): Promise<{ raw: string; ver
         chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: system },
-          { role: "user", content: JSON.stringify(e) },
+          { role: "user", content: JSON.stringify(e.source === "web" ? e : framed) },
         ],
       }),
       signal: n.timeoutMs === undefined ? undefined : AbortSignal.timeout(n.timeoutMs),
@@ -267,7 +276,9 @@ export function envelopeErrors(value: unknown): string[] {
     return errors;
   };
   if (!obj(value)) return ["not an object"];
-  const errors = only(value, "", ["source", "history", "content"]);
+  const errors = only(value, "", ["source", "history", "content", "review_scope"]);
+  if (value.review_scope !== undefined && value.review_scope !== "all" && value.review_scope !== "untrusted_lines")
+    errors.push("review_scope not in all|untrusted_lines");
   if (!["message", "eval_stdout", "recall", "web"].includes(value.source as string))
     errors.push("source not in message|eval_stdout|recall|web");
   if (!Array.isArray(value.history)) errors.push("history is not an array");
@@ -276,10 +287,36 @@ export function envelopeErrors(value: unknown): string[] {
   return errors;
 }
 
+// The configured principal relies on an XS2-capable xmsg daemon's service attestation.
+// Relayed origins are routing claims, not global node authentication.
+export function normalizeScope(e: Envelope, producer?: string, origin?: unknown): Envelope {
+  const o = typeof origin === "object" && origin !== null && !Array.isArray(origin)
+    ? origin as Record<string, unknown> : undefined;
+  const valid = o !== undefined && Object.keys(o).every(k => ["service", "node", "label"].includes(k)) &&
+    typeof o.service === "string" && o.service.length > 0 && typeof o.node === "string" && o.node.length > 0 &&
+    (o.label === undefined || typeof o.label === "string");
+  const qualified = valid && producer !== undefined && /^[^@\s]+@[^@\s]+$/.test(producer) &&
+    producer === `${o.service}@${o.node}`;
+  return { ...e, review_scope: e.review_scope === "untrusted_lines" && e.source === "message" && qualified
+    ? "untrusted_lines" : "all" };
+}
+
+export function formatInbound(e: Envelope) {
+  const entries = [...e.history.map((line, index) => ({ ...line, location: `history[${index}]` })),
+    { ...e.content, location: "content" }];
+  const scoped = e.review_scope === "untrusted_lines";
+  return {
+    source: e.source,
+    review_scope: e.review_scope ?? "all",
+    review_targets: entries.filter(line => !scoped || line.tier === "public"),
+    context_not_under_review: entries.filter(line => scoped && line.tier === "trusted"),
+  };
+}
+
 const defaultLog = (line: string) => process.stderr.write(`${line}\n`);
 
 // The reply to one message's text: the verdict, or `{"error": …}` when there is none.
-export async function handle(text: string, n: Ninfer, id = "-"): Promise<string> {
+export async function handle(text: string, n: Ninfer, id = "-", origin?: unknown): Promise<string> {
   const l = n.log ?? defaultLog;
   const t0 = Date.now();
   let value: unknown;
@@ -297,10 +334,11 @@ export async function handle(text: string, n: Ninfer, id = "-"): Promise<string>
     return JSON.stringify({ error: err });
   }
   try {
-    const v = (await review(value as Envelope, n)).verdict;
+    const scope = normalizeScope(value as Envelope, n.scopeProducer, origin).review_scope;
+    const v = (await review(value as Envelope, n, origin)).verdict;
     const latencyMs = Date.now() - t0;
     const cls = v.class ?? "-";
-    l(`genie-guard: verdict id=${id} verdict=${v.verdict} class=${cls} latency_ms=${latencyMs}`);
+    l(`genie-guard: verdict id=${id} verdict=${v.verdict} class=${cls} latency_ms=${latencyMs} effective_scope=${scope} scope_reason=${scope === "untrusted_lines" ? "authorized_producer" : "default_or_unqualified"}`);
     return JSON.stringify(
       v.class !== undefined
         ? { verdict: v.verdict, class: v.class, reason: v.reason, cleaned_text: v.cleaned_text }
@@ -323,7 +361,7 @@ export async function step(
 ): Promise<Inbound | null> {
   const m = await x.poll(waitMs);
   if (!m) return null;
-  await x.reply(m.id, await handle(m.text, n, m.id));
+  await x.reply(m.id, await handle(m.text, n, m.id, m.origin));
   await x.ack(m.id);
   return m;
 }

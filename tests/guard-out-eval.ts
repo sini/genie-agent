@@ -40,6 +40,8 @@ const { values: args } = parseArgs({
     base: { type: "string", default: process.env.NINFER_URL ?? "http://10.9.2.2:18020/v1" },
     "api-key-file": { type: "string", default: process.env.GENIE_GUARD_API_KEY_FILE ?? defaultKey },
     concurrency: { type: "string", default: "3" },
+    model: { type: "string" },
+    "timeout-ms": { type: "string", default: "60000" },
   },
 });
 
@@ -60,7 +62,9 @@ const system = readFileSync(args.prompt, "utf8");
 
 const apiKey = args["api-key-file"] ? readFileSync(args["api-key-file"], "utf8").trim() : undefined;
 if (args["api-key-file"] && !apiKey) die(`${args["api-key-file"]} is empty`);
-const model = await firstModel(args.base, apiKey).catch((e) => die(e.message));
+const model = args.model ?? await firstModel(args.base, apiKey).catch((e) => die(e.message));
+const timeoutMs = Number(args["timeout-ms"]);
+if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) die("--timeout-ms must be a positive integer");
 
 // The request, retry on length/empty, and parsing go through reviewOut() in src/guard/service.ts.
 async function guard(id: string, c: Case): Promise<{ raw: string; verdict: VerdictOut }> {
@@ -68,7 +72,7 @@ async function guard(id: string, c: Case): Promise<{ raw: string; verdict: Verdi
     try {
       return await reviewOut(
         { question: c.question, answer: c.answer },
-        { base: args.base, model, system, apiKey, timeoutMs: 60_000 },
+        { base: args.base, model, system, apiKey, timeoutMs },
       );
     } catch (err: any) {
       if (!(err instanceof Unavailable)) throw err;

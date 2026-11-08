@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const settings = {
   base: ["--ninfer-url", "GENIE_GUARD_NINFER_URL"],
   model: ["--model", "GENIE_GUARD_MODEL"],
+  scopeProducer: ["--scope-producer", "GENIE_GUARD_SCOPE_PRODUCER"],
   timeoutMs: ["--timeout-ms", "GENIE_GUARD_TIMEOUT_MS"],
   apiKeyFile: ["--api-key-file", "GENIE_GUARD_API_KEY_FILE"],
 } as const;
@@ -13,6 +14,7 @@ export interface Config {
   base: string;
   // Absent: ninfer's first model, read once at start.
   model?: string;
+  scopeProducer?: string;
   timeoutMs: number;
   // The bearer key read from --api-key-file; absent: no Authorization header.
   apiKey?: string;
@@ -40,6 +42,9 @@ export function config(argv: string[], env: Record<string, string | undefined>):
     throw new ConfigError(`${settings.base[0]}: not a URL: ${base}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new ConfigError(`${settings.base[0]}: not http(s): ${base}`);
+  const scopeProducer = get(settings.scopeProducer);
+  if (scopeProducer !== undefined && !/^[^@\s]+@[^@\s]+$/.test(scopeProducer))
+    throw new ConfigError("--scope-producer: expected service@node");
   const timeout = get(settings.timeoutMs) ?? "120000";
   if (!/^[1-9][0-9]*$/.test(timeout)) throw new ConfigError(`${settings.timeoutMs[0]}: not a positive integer: ${timeout}`);
   if (!env.XDG_RUNTIME_DIR) throw new ConfigError("XDG_RUNTIME_DIR is required: the owner's xmsg lives under it");
@@ -56,6 +61,7 @@ export function config(argv: string[], env: Record<string, string | undefined>):
   return {
     base: base.replace(/\/+$/, ""),
     model: get(settings.model),
+    scopeProducer,
     timeoutMs: Number(timeout),
     apiKey,
     xmsgDir: `${env.XDG_RUNTIME_DIR}/xmsg`,

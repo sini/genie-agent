@@ -385,7 +385,10 @@
           guard =
             pkgs.runCommand "genie-agent-guard"
               {
-                nativeBuildInputs = [ pkgs.nodejs ];
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.python3
+                ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
@@ -405,6 +408,8 @@
                     ./results/guard-in/injection-run2.json
                     ./tests/guard.test.ts
                     ./tests/guard-out.test.ts
+                    ./tests/guard-scope-mutants.py
+                    ./prompts/guard-in.md
                     ./tests/guard-service.test.ts
                     ./src/dispatcher/xmsg.ts
                     ./src/dispatcher/reply.ts
@@ -429,7 +434,10 @@
                   && grep -q '^ok [0-9]* - oracle (GI-12 c): genie-guard logs one line per verdict (message id, verdict, class, latency ms) and every error$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - an HTTP 500 from ninfer is an error reply, not a verdict$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - scope authority: only exact transport service origin enables public targets$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - scope schema and zero targets: validation precedes calls and legacy trusted attacks stay reviewed$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                python3 tests/guard-scope-mutants.py $TMPDIR/scope-mutants
                 touch $out
               '';
           # The mirror fetcher's gating oracle: two threads on one repo share one clone, a refused URL
@@ -1591,6 +1599,7 @@
           # The guard-in injection corpus, and the held-out one beside it, are well-formed and cover
           # every attack vector; the held-out sidecar names fragments each attack actually carries.
           corpus = pkgs.runCommand "genie-agent-corpus" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+            python3 ${./tests/corpus.py} ${./corpus/injection-scope/cases.jsonl} ${./corpus/injection-scope/must-not-contain.json} --scope
             python3 ${./tests/corpus.py} ${./corpus/injection/cases.jsonl}
             python3 ${./tests/corpus.py} ${./corpus/injection-heldout/cases.jsonl} ${./corpus/injection-heldout/must-not-contain.json}
             python3 ${./tests/corpus.py} ${./corpus/outbound/cases.jsonl}

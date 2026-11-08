@@ -45,6 +45,7 @@ export interface Line {
 // guard-in's input, the user turn of prompts/guard-in.md. Tiers are the bot's, never the text's.
 export interface Envelope {
   source: "message" | "eval_stdout" | "recall" | "web";
+  review_scope?: "all" | "untrusted_lines";
   history: Line[];
   content: { sender?: string; tier?: Line["tier"]; text: string };
 }

@@ -91,6 +91,7 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
 
   // 3. genie-guard.service hardening and LoadCredential
   const guardUnit = summary.units["genie-guard"];
+  assert.ok(guardUnit.serviceConfig.ExecStart.includes("--scope-producer matrix-xmsg@example.node") || guardUnit.serviceConfig.ExecStart.includes("--scope-producer 'matrix-xmsg@example.node'"));
   assert.equal(guardUnit.serviceConfig.User, "sini");
   assert.equal(guardUnit.serviceConfig.PrivateUsers, false);
   assert.equal(guardUnit.serviceConfig.ProtectHome, "tmpfs");
