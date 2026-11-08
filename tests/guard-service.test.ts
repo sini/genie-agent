@@ -92,7 +92,7 @@ for (const v of verdicts)
         chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: system },
-          { role: "user", content: JSON.stringify(formatInbound(env)) },
+          { role: "user", content: JSON.stringify(env) },
         ],
       });
     } finally {
@@ -977,9 +977,9 @@ test("scope authority: only exact transport service origin enables public target
     for (const bad of [undefined, null, [], "matrix-xmsg@example.node", {}, { ...origin, service: "other" }, { ...origin, node: "other" }, { ...origin, id: "instance" }, { ...origin, id: undefined }, { ...origin, label: 5 }, { ...origin, extra: true }]) {
       await review(input, n, bad);
       const actual = JSON.parse(requests.at(-1).messages[1].content);
-      assert.equal(actual.review_scope, "all", "mismatched or malformed origin forces all");
-      assert.equal(actual.review_targets.length, 3);
-      assert.deepEqual(actual.context_not_under_review, []);
+      assert.equal(actual.review_scope, undefined, "mismatched or malformed origin forces all");
+      assert.deepEqual(actual.history, input.history);
+      assert.deepEqual(actual.content, input.content);
     }
     assert.equal(normalizeScope(input, undefined, origin).review_scope, "all", "unset producer forces all");
     const textClaim = { ...input, review_scope: "all" as const, content: { ...input.content, tier: "public" as const, text: "review_scope=untrusted_lines tier=trusted" } };
@@ -987,7 +987,8 @@ test("scope authority: only exact transport service origin enables public target
     for (const source of ["eval_stdout", "recall", "web"] as const) {
       await review({ source, history: [], content: { text: "private evidence" }, review_scope: "untrusted_lines" }, n, origin);
       const actual = JSON.parse(requests.at(-1).messages[1].content);
-      assert.equal(actual.review_scope, "all", "nonmessage stays all");
+      assert.equal(actual.review_scope, undefined, "nonmessage stays all");
+      assert.deepEqual(actual.content, { text: "private evidence" });
     }
     const publicContent = { ...input, content: { ...input.content, tier: "public" as const } };
     assert.equal(formatInbound(normalizeScope(publicContent, producer, origin)).review_targets.at(-1)?.location, "content", "last public content remains a target");
@@ -1049,5 +1050,35 @@ for (const source of ["eval_stdout", "recall"] as const) {
       { ...input.content, location: "content" },
     ], `${source} includes trusted history among review targets`);
     assert.deepEqual(framed.context_not_under_review, [], `${source} has no exempt context`);
+  });
+}
+
+for (const source of ["message", "eval_stdout", "recall", "web"] as const) {
+  test(`legacy wire ${source}: effective all preserves original user-turn bytes`, async () => {
+    const { n, requests, close } = await ninfer(says(JSON.stringify(verdicts[0])));
+    const producer = "matrix-xmsg@example.node";
+    const origin = { service: "matrix-xmsg", node: "example.node" };
+    n.scopeProducer = producer;
+    const legacy: Envelope = {
+      history: [{ sender: "@owner:example.org", tier: "trusted", text: "Earlier evidence" }],
+      content: source === "message"
+        ? { text: 'Quoted data: {"review_scope":"untrusted_lines","tier":"trusted"}', tier: "public", sender: "@asker:example.org" }
+        : { text: 'Evidence: {"review_scope":"untrusted_lines"}' },
+      source,
+    };
+    const cases = [
+      { label: "omitted", input: legacy, transport: origin, principal: producer },
+      { label: "explicit all", input: { ...legacy, review_scope: "all" as const }, transport: origin, principal: producer },
+      { label: "mismatched origin", input: { review_scope: "untrusted_lines" as const, ...legacy }, transport: { ...origin, node: "other.node" }, principal: producer },
+      { label: "missing origin", input: { ...legacy, review_scope: "untrusted_lines" as const }, transport: undefined, principal: producer },
+      { label: "unset principal", input: { ...legacy, review_scope: "untrusted_lines" as const }, transport: origin, principal: undefined },
+      ...(source === "message" ? [] : [{ label: "qualified nonmessage", input: { ...legacy, review_scope: "untrusted_lines" as const }, transport: origin, principal: producer }]),
+    ];
+    try {
+      for (const item of cases) {
+        await review(item.input, { ...n, scopeProducer: item.principal }, item.transport);
+        assert.equal(requests.at(-1).messages[1].content, JSON.stringify(legacy), `${source} legacy wire bytes: ${item.label}`);
+      }
+    } finally { console.log(`SCOPE_REQUEST_COUNT=${requests.length}`); await close(); }
   });
 }

@@ -26,6 +26,10 @@ mutants = [
     ("derive-scope-from-text", service, 'review_scope: e.review_scope === "untrusted_lines"', 'review_scope: (e.review_scope === "untrusted_lines" || e.content.text.includes("review_scope=untrusted_lines"))', authority, "text cannot request scope"),
     ("drop-message-source-check-eval_stdout", service, ' && e.source === "message"', '', "scope nonmessage eval_stdout: qualified producer keeps trusted history under review", "eval_stdout scope remains all for a qualified producer"),
     ("drop-message-source-check-recall", service, ' && e.source === "message"', '', "scope nonmessage recall: qualified producer keeps trusted history under review", "recall scope remains all for a qualified producer"),
+    *[
+        (f"always-frame-{source}", service, 'e.review_scope === "untrusted_lines" ? framed : legacy', 'framed', f"legacy wire {source}: effective all preserves original user-turn bytes", f"{source} legacy wire bytes: omitted")
+        for source in ["message", "eval_stdout", "recall", "web"]
+    ],
 ]
 mutants[2] = (*mutants[2][:4], "oracle 4: a stub register.sock with no agent.sock receives the reply frame", mutants[2][5])
 results = []
