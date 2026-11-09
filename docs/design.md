@@ -1,23 +1,23 @@
 # Design: `genie-agent`, the tiered support expert behind `@genie`
 
-_Owner brainstorm, 2026-10-08 (session `den-ag-design-44`). Every section below was approved in
+_Owner brainstorm, 2026-10-08. Every section below was approved in
 that session. Where a choice is marked *defaulted, reversible*, the owner did not rule on it
 explicitly._
 
-_Revision 2, 2026-10-08: folds the design gate (`reports/genie-agent-design-gate.md` (private design repo), REJECT,
+_Revision 2, 2026-10-08: folds the design gate (private report, REJECT,
 F1–F10). No §2 ruling is re-opened; §12 maps each finding to where it is resolved._
 
-_Revision 3, 2026-10-08: folds the second gate contact (`reports/genie-agent-design-gate-rev2.md` (private design repo),
+_Revision 3, 2026-10-08: folds the second gate contact (private report,
 ACCEPT-WITH-CHANGES, R1–R7), mapped in §12 as well._
 
 _Revision 4, 2026-10-08: adds the expert-tier dispatcher (§5.8) on two owner rulings, rows 14 and
-15, and folds the D0 herdr spike (`reports/genie-d0-herdr-spike.md` (private design repo)), which measured it._
+15, and folds the D0 herdr spike (private report), which measured it._
 
-_Revision 5, 2026-10-08: folds the dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo),
+_Revision 5, 2026-10-08: folds the dispatcher gate (private report,
 REJECT, F1–F10, P1–P3) on four owner rulings, rows 16–19; §12 maps each finding._
 
 _Revision 5.1, 2026-10-08: folds the second contact's conditions
-(`reports/genie-dispatcher-design-gate-r2.md` (private design repo), ACCEPT-WITH-CONDITIONS, G1–G5). No position
+(private report, ACCEPT-WITH-CONDITIONS, G1–G5). No position
 changes; §12 maps each condition._
 
 ## 1. Purpose
@@ -28,7 +28,7 @@ when it cannot answer confidently or when the asker asks it to. It can reproduce
 by **evaluating** (never building) the user's GitHub configuration inside a sandbox, and no
 user-supplied configuration can exhaust a host.
 
-This design amends `genie-k8s-federation-plan.md` (private design repo). The bot and its first-tier expert move into
+This design amends the private genie k8s federation plan. The bot and its first-tier expert move into
 Kubernetes, and the frontier tier stays on a workstation as the users `genie-public` and
 `genie-trusted`.
 
@@ -289,7 +289,7 @@ Each tier runs one resident **dispatcher** as `genie-<tier>`. It is the principa
 addresses as the tier's expert. It holds the map `thread_id → {session uuid, token, live|parked}`
 and the per-thread buffers, and it drives the tier's own herdr session. Messages travel only over
 xmsg; herdr does only the lifecycle. The D0 spike measured the mechanism
-(`reports/genie-d0-herdr-spike.md` (private design repo): herdr 0.9.3, Claude Code 2.1.292 and xmsg 0.1.0 on cortex, run
+(private report: herdr 0.9.3, Claude Code 2.1.292 and xmsg 0.1.0 on cortex, run
 as `sini`), and each step names the spike question that measured it. What D0 did not measure,
 because it ran as `sini`, is listed under Prerequisites and measured by I10.2.
 
@@ -321,7 +321,7 @@ because it ran as `sini`, is listed under Prerequisites and measured by I10.2.
 - Each tier instance discovers Claude sessions from every per-token config directory of its
   tier (`--sessions-dir` per directory, X7), and its dispatcher registers on its own
   `register.sock` as `svc:genie-expert`, attested by a trusted executable and the peer uid (X9;
-  the `svc` harness of `xmsg-federation-design.md` (private design repo) §3.2, given an inbox).
+  the `svc` harness of the private xmsg federation design §3.2, given an inbox).
 - The thread sessions load the xmsg MCP in **reply-only** mode (`xmsg mcp --reply-only`, X8): no
   `list`, no `send`.
 - Federation links (`xmsg-links`, federation plan §6.1) re-cut the one link to `genie@bitstream`
@@ -440,7 +440,7 @@ fresh `genie-<tier>` config directory does not have:
   with its `message_id`;
 - **the per-token `--sessions-dir`** set on the tier's instance (X7);
 - a **slim cwd** chosen for the tier, and `--model` set per tier (*defaulted, reversible*). A fresh
-  session in a `den-ag-design` cwd started at 59,167 tokens (6.0%) on Opus 5.5, all of it
+  session in the private design repository's cwd started at 59,167 tokens (6.0%) on Opus 5.5, all of it
   CLAUDE.md, memory and hooks, and every thread would pay that baseline;
 - **herdr's claude classifier manifest pinned** per tier. Parking and the watchdog hang on it, and
   D0 found it sourced remotely (`agent-detection/remote/claude.toml`).
@@ -722,7 +722,7 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 | F9 missing oracles                  | (a) oracle 10; (b) oracle 12, unit S2's history class; (c) oracle 13, unit I3 (shipped by I2); (d) oracle 16.                                                                                                                           |
 | F10 ninfer contention               | §4 "Latency": an accepted latency cost.                                                                                                                                                                                                 |
 
-Second contact (`reports/genie-agent-design-gate-rev2.md` (private design repo)):
+Second contact (private report):
 
 | finding                                            | resolved in                                                                                                                                                                                        |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -734,7 +734,7 @@ Second contact (`reports/genie-agent-design-gate-rev2.md` (private design repo))
 | R6 one store or two                                | §5.2 layer 4: the thread store is the Job's store root; the `emptyDir` is scratch.                                                                                                                 |
 | R7 unit ids and status                             | The plan's schema unit is K3 (K2 is a landed CI fix); statuses refreshed; §7's schema list matches the landed files.                                                                               |
 
-Dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo)):
+Dispatcher gate (private report):
 
 | finding                                | resolved in                                                                                                                                                                                                                                                |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -752,7 +752,7 @@ Dispatcher gate (`reports/genie-dispatcher-design-gate.md` (private design repo)
 | P2 the redactor's hash match           | §5.2 layer 6: pool tokens are matched by shape only.                                                                                                                                                                                                       |
 | P3 herdr's remote classifier           | §5.8 Prerequisites: the manifest is pinned per tier (I10.2).                                                                                                                                                                                               |
 
-Dispatcher gate, second contact (`reports/genie-dispatcher-design-gate-r2.md` (private design repo)):
+Dispatcher gate, second contact (private report):
 
 | condition                             | resolved in                                                                                                                                                                                          |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

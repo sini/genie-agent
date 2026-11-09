@@ -261,7 +261,7 @@ test("oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false om
 });
 
 test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-write and exactly its repos and memory read-only, runs in a private PID namespace, and only herdr loads the tier token", () => {
-  // GI-15 G0 — Nix Module Evaluation Property (§4.1 of xmsg/gi15-expert-token-channel-spec.md v3.1)
+  // GI-15 G0 — Nix Module Evaluation Property (the GI-15 expert token channel spec v3.1 §4.1)
   assert.deepEqual(summary.noXmsgSocketFailedAssertions, [
     "services.genie-agent.experts.enable requires services.genie-agent.xmsgSocket != null.",
   ]);
