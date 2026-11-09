@@ -159,6 +159,41 @@
             ];
           };
         };
+      rootImage =
+        pkgs: memory:
+        let
+          root = genieRoot pkgs;
+        in
+        pkgs.dockerTools.buildLayeredImage {
+          name = "ghcr.io/sini/genie-root";
+          tag = "latest";
+          contents = [
+            root
+            root.rootSrc
+            pkgs.cacert
+          ]
+          ++ map builtins.dirOf (nixpkgs.lib.splitString ":" root.runtimePath);
+          extraCommands = ''
+            mkdir -p -m 1777 tmp
+            mkdir -p memory
+            cp -R ${memory}/. memory/
+            find memory -type d -exec chmod 0555 {} +
+            find memory -type f -exec chmod 0444 {} +
+          '';
+          fakeRootCommands = ''
+            chown -R 0:0 memory
+          '';
+          config = {
+            User = "65532:65532";
+            Entrypoint = [ "${root}/bin/genie-root" ];
+            Env = [
+              "PATH=${root.runtimePath}"
+              "SSL_CERT_FILE=${root.caBundle}"
+              "NIX_SSL_CERT_FILE=${root.caBundle}"
+              "GENIE_REPO_ROOT=${root.rootSrc}/lib/genie-agent"
+            ];
+          };
+        };
       # Each single executable runs its own main and nothing else: a payload offered through
       # NODE_OPTIONS, a node flag or a script argument never runs, and the binary's own config
       # refusal (exit 2) is the positive control that its main did. Also asserts the executable
@@ -231,7 +266,7 @@
             };
           };
 
-          # I12 will copy this output to /memory in the tier-1 image.
+          # The tier-1 OCI image copies this exact output to /memory.
           operating-memory = pkgs.stdenvNoCC.mkDerivation {
             pname = "genie-operating-memory";
             version = "0.1.0";
@@ -284,12 +319,22 @@
           genie-guard = genieGuard pkgs;
           genie-root = genieRoot pkgs;
           image = guardImage pkgs;
+          root-image = rootImage pkgs packages.${pkgs.stdenv.hostPlatform.system}.operating-memory;
         }
       );
 
       checks = forAllSystems (
         pkgs:
         {
+          root-image-fixtures =
+            pkgs.runCommand "genie-root-image-oracle-fixtures" { nativeBuildInputs = [ pkgs.python3 ]; }
+              ''
+                mkdir oracle
+                cp ${./nix/check_root_image.py} oracle/check_root_image.py
+                cp ${./nix/test_root_image.py} oracle/test_root_image.py
+                python3 oracle/test_root_image.py
+                touch $out
+              '';
           schemas =
             pkgs.runCommand "genie-agent-schemas"
               {
@@ -1703,6 +1748,20 @@
               inherit packages nixosModules;
             };
           };
+          root-image =
+            let
+              root = genieRoot pkgs;
+            in
+            pkgs.runCommand "genie-root-image-oracle" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+              python3 ${./nix/check_root_image.py} \
+                ${rootImage pkgs packages.${pkgs.stdenv.hostPlatform.system}.operating-memory} \
+                ${packages.${pkgs.stdenv.hostPlatform.system}.operating-memory} \
+                ${root}/bin/genie-root \
+                '${root.runtimePath}' \
+                ${root.rootSrc}/lib/genie-agent \
+                ${root.caBundle}
+              touch $out
+            '';
           image =
             pkgs.runCommand "genie-agent-image-oracle"
               {

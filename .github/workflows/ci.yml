@@ -16,6 +16,7 @@ env:
     mdformat-plugins
     operating-memory
     package
+    root-image-fixtures
     root-surface
     schemas
     support-memory
@@ -49,6 +50,7 @@ env:
     genie-guard-sea
     image
     root
+    root-image
     root-sea
     tier1
     tier1-bridge

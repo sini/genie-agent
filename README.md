@@ -94,6 +94,44 @@ The boundary is enforced across process and credential boundaries:
 
 Note: The boundary only holds if the live Hindsight API requires the write token (`Authorization: Bearer <token>`). If it accepts unauthenticated writes today, that is a deployment gap for the owner, not something to fix in code.
 
+## Tier-1 OCI image
+
+`packages.<linux>.root-image` builds `ghcr.io/sini/genie-root`. The existing
+`packages.<linux>.image` output remains the guard image. Both support the flake's
+Linux architectures.
+
+```sh
+nix build .#root-image --out-link result-root-image
+nix build .#checks.x86_64-linux.root-image .#checks.x86_64-linux.root-image-fixtures
+docker load < result-root-image
+```
+
+The root image runs as `65532:65532` and enters the `genie-root` Node single
+executable. It includes the same runtime tools as the host package: `pi`,
+`bwrap`, `nix`, `git` and coreutils. `PATH`, `SSL_CERT_FILE`, `NIX_SSL_CERT_FILE`
+and `GENIE_REPO_ROOT` point to the packaged runtime, CA bundle and root source.
+Python runs only in the offline archive checks; this change adds no Python
+runtime dependency.
+
+The exact `packages.<linux>.operating-memory` corpus is copied to `/memory`.
+Its files are root-owned `0444`, directories are root-owned `0555`, and the image
+declares no volume there. The archive oracle compares a canonical manifest of
+relative paths and file SHA-256 hashes, checks ownership and modes, and resolves
+the actual runtime/source/CA paths across layers. A declared memory volume or a
+changed corpus fails the check. Deployment manifests must separately avoid any
+writable mount over `/memory`; image metadata cannot enforce a pod's mounts.
+
+Supply the normal root configuration through `--config <path>` or `GENIE_CONFIG`,
+set `tier1.memoryRoot` to `/memory`, and provide the configured state/runtime paths
+and xmsg connection. The image contains no credentials and does not configure a
+bus or a deployment. Its contents do not prove bubblewrap compatibility with a
+container runtime or gVisor. Bubblewrap is retained because the current root
+still requires it; runtime integration must be verified in the intended sandbox.
+
+The OCI workflow builds and checks both images for pull requests. Only a push to
+`main` publishes `latest` and `sha-<short-commit>` tags for each image. A branch
+build does not publish an image.
+
 ## Deployment (`nixosModules.default`)
 
 `flake.nix` exports `nixosModules.default` (aliased as `nixosModules.genie-agent`), backed by the shared option surface in `nix/options.nix` (shared with the Kubernetes manifest renderer `I12`). It configures `genie-agent.service` (Tier 1 composition root on `pi`), optional `genie-guard.service`, and optional `genie-herdr@<tier>.service` + `genie-dispatcher@<tier>.service` (`public` and `trusted` expert tiers).
