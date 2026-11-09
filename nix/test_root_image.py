@@ -41,6 +41,7 @@ class RootImageOracle(unittest.TestCase):
             str(self.ca).lstrip("/"): (b"fixture CA\n", 0o444, 0, 0),
         }
         self.members[self.binary.lstrip("/")] = (b"\x7fELFfixture", 0o555, 0, 0)
+        self.members["bin/genie-container-worker"] = (b"#!/bin/sh\nexit 0\n", 0o555, 0, 0)
         for command in ("pi", "nix", "git", "cat"):
             self.members["runtime/bin/" + command] = (b"\x7fELFfixture", 0o555, 0, 0)
 
@@ -77,6 +78,16 @@ class RootImageOracle(unittest.TestCase):
     def test_bwrap_is_not_shipped(self):
         self.members["runtime/bin/bwrap"] = (b"\x7fELFfixture", 0o555, 0, 0)
         with self.assertRaisesRegex(OracleError, "must not ship bwrap"):
+            self.check()
+
+    def test_python_is_not_shipped(self):
+        self.members["runtime/bin/python3.14"] = (b"\x7fELFfixture", 0o555, 0, 0)
+        with self.assertRaisesRegex(OracleError, "must not ship a Python interpreter"):
+            self.check()
+
+    def test_worker_is_required(self):
+        del self.members["bin/genie-container-worker"]
+        with self.assertRaises(OracleError):
             self.check()
 
     def test_missing_or_altered_corpus(self):

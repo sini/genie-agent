@@ -3,8 +3,9 @@
 // stdin, so the supervisor takes the thread from the pipes it arrived on. Nothing sent here names
 // the thread.
 import { BRIDGE, METHODS } from "../supervisor/index.ts";
-import { CUSTODY_ENV, type CustodyConfig, hostCall, modelStream } from "./socket.ts";
-import { type Config, type Host, type Pi, tier1 } from "./index.ts";
+import { CUSTODY_ENV, type CustodyConfig, custodyCall, hostCall, modelStream } from "./socket.ts";
+import { BUILTINS, type Config, type Host, type Pi, tier1 } from "./index.ts";
+import { pathToFileURL } from "node:url";
 
 // The env var `launch` puts the thread's Config in.
 export const CONFIG_ENV = "GENIE_TIER1_CONFIG";
@@ -23,7 +24,7 @@ export function bridge(input: () => Input): Host {
   return Object.fromEntries(METHODS.map((m) => [m, (arg: unknown) => call(m, arg)])) as unknown as Host;
 }
 
-export default function (pi: Pi): void {
+export default async function (pi: Pi): Promise<void> {
   const raw = process.env[CONFIG_ENV];
   if (!raw) throw new Error(`${CONFIG_ENV} is not set`);
   let ui: { input: Input } | undefined;
@@ -43,5 +44,14 @@ export default function (pi: Pi): void {
     if (!ui) throw new Error("no session yet");
     return ui.input;
   });
-  tier1(JSON.parse(raw) as Config, { host })(pi);
+  if (custody?.remoteFiles) {
+    if (!custody.sdk) throw new Error("worker file tool SDK is not configured");
+    const sdk = await import(pathToFileURL(custody.sdk).href);
+    for (const name of BUILTINS) {
+      const factory = sdk[`create${name[0].toUpperCase()}${name.slice(1)}Tool`];
+      const tool = factory(process.cwd());
+      pi.registerTool({ ...tool, execute: (_id: string, arg: unknown) => custodyCall(custody.socket, { method: "file", name, arg }) });
+    }
+  }
+  tier1(JSON.parse(raw) as Config, { host, remoteFiles: custody?.remoteFiles })(pi);
 }

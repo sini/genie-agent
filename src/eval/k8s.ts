@@ -1,11 +1,10 @@
-// The Kubernetes Job backend for the eval runner (plan E3, design §4 step 4, §5.2 layer 4).
-// Renders the Job spec (gVisor runtimeClass, 12Gi/2c Guaranteed QoS, activeDeadlineSeconds 120,
-// thread store volume as store root, scratch emptyDir limit, labels) and submits/watches it
-// against the Kubernetes API in namespace `genie-eval`.
 import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import { relative } from "node:path";
 import type { Runner } from "./lock.ts";
 import {
   effectiveTier,
+  resolveWorktreeSubdir,
   fetchRefused,
   limitHit,
   nixArgv,
@@ -25,6 +24,7 @@ export interface K8sVolumeMount {
   name: string;
   mountPath: string;
   readOnly?: boolean;
+  subPath?: string;
 }
 
 export interface K8sVolume {
@@ -59,6 +59,7 @@ export interface K8sJobSpec {
     spec: {
       runtimeClassName?: string;
       restartPolicy: "Never" | "OnFailure";
+      automountServiceAccountToken: false;
       containers: K8sContainer[];
       volumes?: K8sVolume[];
     };
@@ -137,31 +138,32 @@ export function formatBuilderEntry(
 }
 
 export interface RenderJobOptions {
+  namespace: string;
+  image: string;
+  storeClaimName: string;
   name?: string;
-  namespace?: string;
-  thread?: string;
   runtimeClassName?: string | null;
-  activeDeadlineSeconds?: number;
-  backoffLimit?: number;
-  image?: string;
+  timeoutMs?: number;
+  memoryMax?: number;
+  cpu?: string;
   scratchLimit?: string;
-  storeClaimName?: string;
   storeMountPath?: string;
+  storeSubPath?: string;
   scratchMountPath?: string;
   repoClaimName?: string;
   repoMountPath?: string;
+  repoSubPath?: string;
+  worktreeRoot?: string;
   builderKeySecretName?: string;
   builderKeyMountPath?: string;
   builderKeyFileName?: string;
   builder?: BuilderConfig;
   builders?: string | BuilderConfig;
-  localFlake?: string;
   labels?: Record<string, string>;
   env?: { name: string; value: string }[];
 }
 
 const tail = (s: string) => s.slice(-TAIL_CHARS);
-
 export const sanitise = (s: string): string =>
   s
     .toLowerCase()
@@ -169,141 +171,194 @@ export const sanitise = (s: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 48)
     .replace(/-+$/g, "") || "t";
-
-// Default guaranteed resource bounds: 12Gi memory and 2 cores (requests = limits).
-export const DEFAULT_RESOURCES: K8sResourceRequirements = {
-  requests: { cpu: "2", memory: "12Gi" },
-  limits: { cpu: "2", memory: "12Gi" },
+const threadName = /^(?!.*\.\.)[A-Za-z0-9_$!][A-Za-z0-9._:$!-]*$/;
+const coordinate = /^[A-Za-z0-9._-]+$/;
+const required = (value: string | undefined, name: string): string => {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`Kubernetes ${name} is required`);
+  return value;
+};
+const positive = (value: number, name: string): number => {
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new Error(`invalid Kubernetes ${name}`);
+  return value;
+};
+const prefix = (value: string | undefined): string => {
+  if (value === undefined || value === "") return "";
+  if (
+    !value
+      .split("/")
+      .every(
+        (part) =>
+          /^[A-Za-z0-9_.:-]+$/.test(part) && part !== "." && part !== "..",
+      )
+  )
+    throw new Error("invalid Kubernetes subPath prefix");
+  return `${value}/`;
+};
+const mountPath = (value: string, name: string): string => {
+  if (
+    !value.startsWith("/") ||
+    value === "/" ||
+    value.split("/").some((part) => part === "." || part === "..") ||
+    value.includes("\0") ||
+    value === "/nix/store" ||
+    value.startsWith("/nix/store/")
+  )
+    throw new Error(`invalid Kubernetes ${name}`);
+  return value.replace(/\/+$/, "");
 };
 
-// Renders the Kubernetes Job manifest for one eval launch.
-export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJob {
+export function renderJob(launch: Launch, options: RenderJobOptions): K8sJob {
   const { request } = launch;
-  const thread = options.thread ?? "t";
+  const thread = required(launch.thread, "thread");
+  if (!threadName.test(thread)) throw new Error("invalid Kubernetes thread");
+  const namespace = required(options.namespace, "namespace");
+  const image = required(options.image, "image");
+  const storeClaimName = required(options.storeClaimName, "storeClaimName");
   const safeThread = sanitise(thread);
-  const name =
-    options.name ?? `eval-${safeThread}-${randomUUID().slice(0, 8)}`;
-  const namespace = options.namespace ?? "genie-eval";
-  const flakeRef = options.localFlake
-    ? "path:/src"
-    : `github:${request.repo}/${request.rev}`;
-
-  const labels: Record<string, string> = {
+  const name = options.name ?? `eval-${safeThread}-${randomUUID().slice(0, 8)}`;
+  const storeSubPath = `${prefix(options.storeSubPath)}${thread}`;
+  const sourcePrefix = prefix(options.repoSubPath);
+  const repoMountPath = mountPath(
+    options.repoMountPath ?? "/src",
+    "repoMountPath",
+  );
+  const storeMountPath = mountPath(
+    options.storeMountPath ?? "/thread-store",
+    "storeMountPath",
+  );
+  const scratchMountPath = mountPath(
+    options.scratchMountPath ?? "/tmp",
+    "scratchMountPath",
+  );
+  if (new Set([repoMountPath, storeMountPath, scratchMountPath]).size !== 3)
+    throw new Error("Kubernetes mount paths must be distinct");
+  const timeoutMs = positive(options.timeoutMs ?? 120000, "timeoutMs");
+  const memory =
+    options.memoryMax !== undefined
+      ? String(positive(options.memoryMax, "memoryMax"))
+      : undefined;
+  if (
+    options.cpu !== undefined &&
+    !/^(?:[1-9][0-9]*m|(?:[0-9]+)(?:\.[0-9]+)?)$/.test(options.cpu)
+  )
+    throw new Error("invalid Kubernetes cpu");
+  if (options.cpu !== undefined && Number(options.cpu.replace(/m$/, "")) <= 0)
+    throw new Error("invalid Kubernetes cpu");
+  let flakeRef: string;
+  const volumes: K8sVolume[] = [];
+  const volumeMounts: K8sVolumeMount[] = [];
+  if (request.worktreeSubdir !== undefined) {
+    if (request.repo !== undefined || request.rev !== undefined)
+      throw new Error("worktreeSubdir is mutually exclusive with repo and rev");
+    const repoClaimName = required(options.repoClaimName, "repoClaimName");
+    const worktreeRoot = required(options.worktreeRoot, "worktreeRoot");
+    const source = resolveWorktreeSubdir(
+      worktreeRoot,
+      thread,
+      request.worktreeSubdir,
+    );
+    const st = lstatSync(`${source}/flake.nix`, { throwIfNoEntry: false });
+    if (!st || !st.isFile() || st.isSymbolicLink())
+      throw new Error("worktreeSubdir has no regular flake.nix");
+    const selected = relative(
+      realpathSync(`${worktreeRoot}/${thread}`),
+      source,
+    );
+    volumes.push({
+      name: "repo",
+      persistentVolumeClaim: { claimName: repoClaimName, readOnly: true },
+    });
+    volumeMounts.push({
+      name: "repo",
+      mountPath: repoMountPath,
+      readOnly: true,
+      subPath: `${sourcePrefix}${thread}/${selected}`,
+    });
+    flakeRef = `path:${encodeURI(repoMountPath).replaceAll("#", "%23").replaceAll("?", "%3F")}`;
+  } else {
+    const [owner, repo, ...rest] = (request.repo ?? "").split("/");
+    if (
+      rest.length ||
+      ![owner, repo, request.rev].every((part) => coordinate.test(part ?? ""))
+    )
+      throw new Error("not a github coordinate");
+    flakeRef = `github:${request.repo}/${request.rev}`;
+  }
+  const trusted = effectiveTier(launch) === "trusted";
+  const builderKeyMountPath = mountPath(
+    options.builderKeyMountPath ?? "/builder",
+    "builderKeyMountPath",
+  );
+  const builderKeyFileName = options.builderKeyFileName ?? "key";
+  if (
+    !/^[A-Za-z0-9_.-]+$/.test(builderKeyFileName) ||
+    [".", ".."].includes(builderKeyFileName)
+  )
+    throw new Error("invalid Kubernetes builderKeyFileName");
+  const builderKeyPath = `${builderKeyMountPath}/${builderKeyFileName}`;
+  const builderConfig =
+    options.builder ??
+    (typeof options.builders === "object" ? options.builders : undefined);
+  const buildersArg = builderConfig
+    ? formatBuilderEntry(builderConfig, builderKeyPath)
+    : typeof options.builders === "string"
+      ? options.builders
+      : undefined;
+  const mountBuilderKey = trusted && Boolean(buildersArg?.trim());
+  volumes.push(
+    {
+      name: "thread-store",
+      persistentVolumeClaim: { claimName: storeClaimName },
+    },
+    {
+      name: "scratch",
+      emptyDir: {
+        ...(options.scratchLimit ? { sizeLimit: options.scratchLimit } : {}),
+      },
+    },
+  );
+  volumeMounts.push(
+    { name: "thread-store", mountPath: storeMountPath, subPath: storeSubPath },
+    { name: "scratch", mountPath: scratchMountPath },
+  );
+  if (mountBuilderKey) {
+    volumes.push({
+      name: "builder-key",
+      secret: {
+        secretName: required(
+          options.builderKeySecretName,
+          "builderKeySecretName",
+        ),
+        defaultMode: 0o400,
+      },
+    });
+    volumeMounts.push({
+      name: "builder-key",
+      mountPath: builderKeyMountPath,
+      readOnly: true,
+    });
+  }
+  const labels = {
+    ...options.labels,
     "app.kubernetes.io/name": "genie-eval",
     "app.kubernetes.io/component": "eval",
     "genie.agent/thread": safeThread,
     "genie.agent/tier": launch.sender_tier,
-    ...options.labels,
   };
-
-  const runtimeClassName =
-    options.runtimeClassName === null
-      ? undefined
-      : (options.runtimeClassName ?? "gvisor");
-
-  const isTrusted = effectiveTier(launch) === "trusted";
-
-  const repoVolumeName = "repo";
-  const storeVolumeName = "thread-store";
-  const scratchVolumeName = "scratch";
-  const builderKeyVolumeName = "builder-key";
-
-  const repoMountPath = options.repoMountPath ?? "/src";
-  const storeMountPath = options.storeMountPath ?? "/thread-store";
-  const scratchMountPath = options.scratchMountPath ?? "/tmp";
-  const builderKeyMountPath = options.builderKeyMountPath ?? "/root/.ssh";
-  const builderKeySecretName = options.builderKeySecretName ?? "builder-key";
-  const builderKeyFileName = options.builderKeyFileName ?? "id_ed25519";
-  const builderKeyPath = `${builderKeyMountPath}/${builderKeyFileName}`;
-
-  const builderConfig =
-    options.builder ??
-    (typeof options.builders === "object" ? options.builders : undefined);
-
-  const buildersArg = builderConfig
-    ? formatBuilderEntry(builderConfig, builderKeyPath)
-    : (typeof options.builders === "string" ? options.builders : undefined);
-
-  // Nix eval arguments:
-  // --store <mountPath> points to a local chroot store under the mounted PVC so fetched inputs persist
-  // without shadowing the container image's /nix/store (where nix and its closure live).
-  // max-jobs=0 keeps builds out of the pod (design §5.3).
-  const nixArgs = [
-    "--store",
-    storeMountPath,
-    "--option",
-    "max-jobs",
-    "0",
-    ...nixArgv(launch, flakeRef, buildersArg),
-  ];
-
-  // Job mount set (plan E10, E11, design §5.2 layer 4, §5.3, §6):
-  // untrusted: exactly repo source (read-only), thread store, and scratch emptyDir, with no Secret.
-  // trusted: those three plus the builder-key Secret, read-only.
-  const volumes: K8sVolume[] = [
-    {
-      name: repoVolumeName,
-      persistentVolumeClaim: {
-        claimName: options.repoClaimName ?? `repo-${safeThread}`,
-        readOnly: true,
-      },
-    },
-    {
-      name: storeVolumeName,
-      persistentVolumeClaim: {
-        claimName: options.storeClaimName ?? `thread-store-${safeThread}`,
-      },
-    },
-    {
-      name: scratchVolumeName,
-      emptyDir: {
-        sizeLimit: options.scratchLimit ?? "10Gi",
-      },
-    },
-    ...(isTrusted
-      ? [
-          {
-            name: builderKeyVolumeName,
-            secret: {
-              secretName: builderKeySecretName,
-              defaultMode: 0o400,
-            },
-          },
-        ]
-      : []),
-  ];
-
-  const volumeMounts: K8sVolumeMount[] = [
-    {
-      name: repoVolumeName,
-      mountPath: repoMountPath,
-      readOnly: true,
-    },
-    {
-      name: storeVolumeName,
-      mountPath: storeMountPath,
-    },
-    {
-      name: scratchVolumeName,
-      mountPath: scratchMountPath,
-    },
-    ...(isTrusted
-      ? [
-          {
-            name: builderKeyVolumeName,
-            mountPath: builderKeyMountPath,
-            readOnly: true,
-          },
-        ]
-      : []),
-  ];
-
+  const resource = {
+    ...(options.cpu ? { cpu: options.cpu } : {}),
+    ...(memory ? { memory } : {}),
+  };
   const env = [
-    { name: "HOME", value: "/tmp/home" },
-    { name: "XDG_CACHE_HOME", value: "/tmp/cache" },
+    { name: "HOME", value: `${scratchMountPath}/home` },
+    { name: "XDG_CACHE_HOME", value: `${scratchMountPath}/cache` },
+    { name: "XDG_CONFIG_HOME", value: `${scratchMountPath}/config` },
+    { name: "NIX_CONF_DIR", value: `${scratchMountPath}/conf` },
     { name: "NIX_PATH", value: "" },
-    { name: "TMPDIR", value: "/tmp" },
-    ...(isTrusted
+    { name: "TMPDIR", value: scratchMountPath },
+    ...(mountBuilderKey
       ? [
           {
             name: "NIX_SSHOPTS",
@@ -311,45 +366,51 @@ export function renderJob(launch: Launch, options: RenderJobOptions = {}): K8sJo
           },
         ]
       : []),
-    ...(options.env ?? []),
   ];
-
-  const container: K8sContainer = {
-    name: "eval",
-    image: options.image ?? "ghcr.io/sini/genie-eval:latest",
-    command: ["nix"],
-    args: nixArgs,
-    resources: DEFAULT_RESOURCES,
-    volumeMounts,
-    env,
-  };
-
-  const job: K8sJob = {
+  const reserved = new Set(env.map((item) => item.name));
+  if (options.env?.some((item) => reserved.has(item.name)))
+    throw new Error("Kubernetes environment overrides an evaluation setting");
+  env.push(...(options.env ?? []));
+  return {
     apiVersion: "batch/v1",
     kind: "Job",
-    metadata: {
-      name,
-      namespace,
-      labels,
-    },
+    metadata: { name, namespace, labels },
     spec: {
-      activeDeadlineSeconds: options.activeDeadlineSeconds ?? 120,
-      backoffLimit: options.backoffLimit ?? 0,
+      activeDeadlineSeconds: Math.ceil(timeoutMs / 1000),
+      backoffLimit: 0,
       template: {
-        metadata: {
-          labels,
-        },
+        metadata: { labels },
         spec: {
-          ...(runtimeClassName !== undefined ? { runtimeClassName } : {}),
+          ...(options.runtimeClassName
+            ? { runtimeClassName: options.runtimeClassName }
+            : {}),
           restartPolicy: "Never",
-          containers: [container],
+          automountServiceAccountToken: false,
+          containers: [
+            {
+              name: "eval",
+              image,
+              command: ["nix"],
+              args: [
+                "--store",
+                storeMountPath,
+                "--option",
+                "max-jobs",
+                "0",
+                ...nixArgv(launch, flakeRef, buildersArg),
+              ],
+              ...(Object.keys(resource).length
+                ? { resources: { requests: resource, limits: { ...resource } } }
+                : {}),
+              volumeMounts,
+              env,
+            },
+          ],
           volumes,
         },
       },
     },
   };
-
-  return job;
 }
 
 export interface K8sClientOptions {
@@ -357,6 +418,7 @@ export interface K8sClientOptions {
   namespace?: string;
   token?: string;
   fetch?: typeof fetch;
+  timeoutMs?: number;
 }
 
 export interface WatchJobOptions {
@@ -364,6 +426,7 @@ export interface WatchJobOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
   cleanup?: boolean;
+  signal?: AbortSignal;
 }
 
 // Client for the namespaced Kubernetes batch and core APIs.
@@ -372,12 +435,42 @@ export class K8sClient {
   readonly namespace: string;
   readonly token?: string;
   private readonly fetchFn: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(options: K8sClientOptions) {
+    const api = new URL(required(options.baseUrl, "API baseUrl"));
+    if (
+      !["http:", "https:"].includes(api.protocol) ||
+      api.username ||
+      api.password
+    )
+      throw new Error("invalid Kubernetes API URL");
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
-    this.namespace = options.namespace ?? "genie-eval";
+    this.namespace = required(options.namespace, "namespace");
     this.token = options.token;
     this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.timeoutMs = positive(options.timeoutMs ?? 120000, "API timeoutMs");
+    if (this.timeoutMs > 2147483647)
+      throw new Error("invalid Kubernetes API timeoutMs");
+  }
+
+  private async request(
+    url: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    try {
+      return await this.fetchFn(url, {
+        ...init,
+        redirect: "error",
+        signal: AbortSignal.any([
+          AbortSignal.timeout(this.timeoutMs),
+          ...(signal ? [signal] : []),
+        ]),
+      });
+    } catch {
+      throw new Error("k8s API request failed");
+    }
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -386,76 +479,131 @@ export class K8sClient {
     return h;
   }
 
-  async createJob(job: K8sJob): Promise<K8sJob> {
+  async createJob(job: K8sJob, signal?: AbortSignal): Promise<K8sJob> {
     const ns = job.metadata.namespace ?? this.namespace;
     const url = `${this.baseUrl}/apis/batch/v1/namespaces/${encodeURIComponent(ns)}/jobs`;
-    const res = await this.fetchFn(url, {
-      method: "POST",
-      headers: this.headers({ "content-type": "application/json" }),
-      body: JSON.stringify(job),
-    });
+    const res = await this.request(
+      url,
+      {
+        method: "POST",
+        headers: this.headers({ "content-type": "application/json" }),
+        body: JSON.stringify(job),
+      },
+      signal,
+    );
     if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`k8s createJob failed (${res.status}): ${err}`);
+      throw new Error(`k8s createJob failed (${res.status})`);
     }
     return (await res.json()) as K8sJob;
   }
 
-  async getJob(name: string, namespace?: string): Promise<K8sJob> {
+  async getJob(
+    name: string,
+    namespace?: string,
+    signal?: AbortSignal,
+  ): Promise<K8sJob> {
     const ns = namespace ?? this.namespace;
     const url = `${this.baseUrl}/apis/batch/v1/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(name)}`;
-    const res = await this.fetchFn(url, {
-      method: "GET",
-      headers: this.headers(),
-    });
+    const res = await this.request(
+      url,
+      {
+        method: "GET",
+        headers: this.headers(),
+      },
+      signal,
+    );
     if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`k8s getJob failed (${res.status}): ${err}`);
+      throw new Error(`k8s getJob failed (${res.status})`);
     }
     return (await res.json()) as K8sJob;
   }
 
-  async deleteJob(name: string, namespace?: string): Promise<void> {
+  async deleteJob(
+    name: string,
+    namespace?: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const ns = namespace ?? this.namespace;
     const url = `${this.baseUrl}/apis/batch/v1/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(name)}?propagationPolicy=Background`;
-    const res = await this.fetchFn(url, {
+    const res = await this.request(url, {
       method: "DELETE",
       headers: this.headers(),
-    });
+    }, signal);
     if (!res.ok && res.status !== 404) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`k8s deleteJob failed (${res.status}): ${err}`);
+      throw new Error(`k8s deleteJob failed (${res.status})`);
     }
   }
 
-  async getPodsForJob(jobName: string, namespace?: string): Promise<K8sPod[]> {
+  async getPodsForJob(
+    jobName: string,
+    namespace?: string,
+    signal?: AbortSignal,
+  ): Promise<K8sPod[]> {
     const ns = namespace ?? this.namespace;
     const selector = encodeURIComponent(`job-name=${jobName}`);
     const url = `${this.baseUrl}/api/v1/namespaces/${encodeURIComponent(ns)}/pods?labelSelector=${selector}`;
-    const res = await this.fetchFn(url, {
-      method: "GET",
-      headers: this.headers(),
-    });
+    const res = await this.request(
+      url,
+      {
+        method: "GET",
+        headers: this.headers(),
+      },
+      signal,
+    );
     if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`k8s getPodsForJob failed (${res.status}): ${err}`);
+      throw new Error(`k8s getPodsForJob failed (${res.status})`);
     }
     const data = (await res.json()) as { items?: K8sPod[] };
     return data.items ?? [];
   }
 
-  async getPodLogs(podName: string, namespace?: string): Promise<string> {
+  async getPodLogs(
+    podName: string,
+    namespace?: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const ns = namespace ?? this.namespace;
-    const url = `${this.baseUrl}/api/v1/namespaces/${encodeURIComponent(ns)}/pods/${encodeURIComponent(podName)}/log`;
-    const res = await this.fetchFn(url, {
-      method: "GET",
-      headers: this.headers(),
-    });
+    const url = `${this.baseUrl}/api/v1/namespaces/${encodeURIComponent(ns)}/pods/${encodeURIComponent(podName)}/log?limitBytes=${TAIL_CHARS * 4}`;
+    const res = await this.request(
+      url,
+      {
+        method: "GET",
+        headers: this.headers(),
+      },
+      signal,
+    );
     if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`k8s getPodLogs failed (${res.status}): ${err}`);
+      throw new Error(`k8s getPodLogs failed (${res.status})`);
     }
-    return await res.text();
+    if (!res.body) throw new Error("k8s getPodLogs returned no body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let log = "";
+    const append = (text: string) => {
+      log = (log + text).slice(-TAIL_CHARS);
+      const first = log.charCodeAt(0);
+      if (first >= 0xdc00 && first <= 0xdfff) log = log.slice(1);
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (let offset = 0; offset < value.length; offset += TAIL_CHARS * 4) {
+          append(
+            decoder.decode(value.subarray(offset, offset + TAIL_CHARS * 4), {
+              stream: true,
+            }),
+          );
+        }
+      }
+      append(decoder.decode());
+      return log;
+    } catch {
+      await reader.cancel().catch(() => {});
+      throw new Error("k8s getPodLogs stream failed");
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   // Watches or polls the Job until it reaches Complete or Failed.
@@ -466,7 +614,7 @@ export class K8sClient {
     const ns = options.namespace ?? this.namespace;
 
     while (Date.now() - start < timeoutMs) {
-      const job = await this.getJob(name, ns);
+      const job = await this.getJob(name, ns, options.signal);
       const isComplete =
         job.status?.conditions?.some(
           (c) => c.type === "Complete" && c.status === "True",
@@ -480,7 +628,9 @@ export class K8sClient {
       }
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
-    throw new Error(`k8s watchJob: timed out waiting for job ${name} after ${timeoutMs}ms`);
+    throw new Error(
+      `k8s watchJob: timed out waiting for job ${name} after ${timeoutMs}ms`,
+    );
   }
 }
 
@@ -492,14 +642,21 @@ export async function submitAndWatchJob(
 ): Promise<EvalResult> {
   const name = job.metadata.name;
   const ns = job.metadata.namespace ?? client.namespace;
-  await client.createJob(job);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(positive(options.timeoutMs ?? 120000, "timeoutMs")),
+    ...(options.signal ? [options.signal] : []),
+  ]);
   try {
-    const finished = await client.watchJob(name, { ...options, namespace: ns });
-    const pods = await client.getPodsForJob(name, ns).catch(() => []);
+    await client.createJob(job, signal);
+    const finished = await client.watchJob(name, {
+      ...options,
+      namespace: ns,
+      signal,
+    });
+    const pods = await client.getPodsForJob(name, ns, signal);
     const pod = pods[0];
-    const log = pod
-      ? await client.getPodLogs(pod.metadata.name, ns).catch(() => "")
-      : "";
+    if (!pod) throw new Error("k8s completed Job has no observable pod");
+    const log = await client.getPodLogs(pod.metadata.name, ns, signal);
 
     const deadline =
       finished.status?.conditions?.some(
@@ -533,12 +690,16 @@ export async function submitAndWatchJob(
     };
   } finally {
     if (options.cleanup !== false) {
-      await client.deleteJob(name, ns).catch(() => {});
+      await client
+        .deleteJob(name, ns, AbortSignal.timeout(5000))
+        .catch(() => {});
     }
   }
 }
 
-export interface K8sEvalOptions extends RenderJobOptions, WatchJobOptions {
+export interface K8sEvalOptions
+  extends RenderJobOptions,
+    Omit<WatchJobOptions, "namespace"> {
   client?: K8sClient;
   k8s?: K8sClientOptions;
 }
@@ -546,13 +707,23 @@ export interface K8sEvalOptions extends RenderJobOptions, WatchJobOptions {
 // Executes an eval launch against the Kubernetes backend.
 export async function runK8sEval(
   launch: Launch,
-  options: K8sEvalOptions = {},
+  options: K8sEvalOptions,
 ): Promise<EvalResult> {
   const client =
     options.client ??
-    new K8sClient(options.k8s ?? { baseUrl: "http://127.0.0.1:8080" });
+    (options.k8s
+      ? new K8sClient({
+          ...options.k8s,
+          namespace: options.namespace,
+          timeoutMs: options.timeoutMs ?? options.k8s.timeoutMs,
+        })
+      : undefined);
+  if (!client) throw new Error("Kubernetes API must be configured");
   const job = renderJob(launch, options);
-  return submitAndWatchJob(client, job, options);
+  return submitAndWatchJob(client, job, {
+    ...options,
+    timeoutMs: options.timeoutMs ?? 120000,
+  });
 }
 
 // Wraps the Kubernetes backend as a Runner function matching E1's interface.

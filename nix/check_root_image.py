@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import posixpath
+import re
 import shutil
 import tarfile
 import tempfile
@@ -140,6 +141,8 @@ def check_image(archive, memory, binary, runtime_path, root_source, ca_bundle):
             else:
                 raise OracleError("root runtime missing executable: " + command)
         require(not any(name.endswith("/bin/bwrap") for name in image.files), "root image must not ship bwrap")
+        require(not any(re.search(r"/bin/python(?:\d+(?:\.\d+)*)?$", name) for name in image.files), "root image must not ship a Python interpreter")
+        image.executable("/bin/genie-container-worker")
         for volume in cfg.get("Volumes", {}):
             name = normalized(volume)
             require(name not in ("", "memory") and not name.startswith("memory/"), "root image declares a volume masking /memory")

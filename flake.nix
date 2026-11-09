@@ -19,7 +19,7 @@
         nixpkgs.lib.makeBinPath [
           pkgs.pi-coding-agent
           pkgs.nix
-          pkgs.git
+          pkgs.gitMinimal
           pkgs.coreutils
         ];
       modelSdk =
@@ -40,6 +40,7 @@
                 "dispatcher"
                 "tier1"
                 "tier1-bridge"
+                "bwrap-selection"
                 "eval-argv"
                 "root"
               ]
@@ -195,6 +196,12 @@
         pkgs: memory:
         let
           root = genieRoot pkgs;
+          worker = pkgs.writeShellScriptBin "genie-container-worker" ''
+            export GENIE_REPO_ROOT=${root.rootSrc}/lib/genie-agent
+            export GENIE_PI_AI=${modelSdk pkgs}
+            export PATH=${root.runtimePath}:$PATH
+            exec ${pkgs.nodejs}/bin/node ${root.rootSrc}/lib/genie-agent/src/tier1/container-worker.ts "$@"
+          '';
         in
         pkgs.dockerTools.buildLayeredImage {
           name = "ghcr.io/sini/genie-root";
@@ -202,6 +209,7 @@
           contents = [
             root
             root.rootSrc
+            worker
             pkgs.cacert
           ]
           ++ map builtins.dirOf (nixpkgs.lib.splitString ":" root.runtimePath);
@@ -311,6 +319,11 @@
                 --set GENIE_PI_AI "${modelSdk pkgs}" \
                 --set-default SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
                 --set-default NIX_SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
+                --prefix PATH : ${portableRuntimePath pkgs}
+              makeWrapper ${pkgs.nodejs}/bin/node $out/bin/genie-container-worker \
+                --add-flags "$out/lib/genie-agent/dist/src/tier1/container-worker.js" \
+                --set GENIE_REPO_ROOT "$out/lib/genie-agent" \
+                --set GENIE_PI_AI "${modelSdk pkgs}" \
                 --prefix PATH : ${portableRuntimePath pkgs}
             '';
             passthru = {
@@ -741,6 +754,81 @@
           # result reaches the model only as the supervisor's guard Screen lets it (plan C3.2): a stub
           # web server and a fake GuardClient. A stub model on the sandbox's loopback; the
           # forged-thread cell runs over the fake pi.
+          bwrap-selection =
+            pkgs.runCommand "genie-agent-bwrap-selection"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.bubblewrap
+                  pkgs.coreutils
+                ];
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src
+                    ./schemas
+                    ./skills
+                    ./prompts
+                    ./tests/bwrap-selection.test.ts
+                  ];
+                };
+              }
+              ''
+                cd $src
+                node --test --test-force-exit --test-reporter=tap tests/bwrap-selection.test.ts > $TMPDIR/tap
+                cat $TMPDIR/tap
+                for cell in 'usable bwrap selects BWRAP_ISOLATION for tier 1' 'usable bwrap selects BWRAP_ISOLATION for eval'; do
+                  sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -xF -- "$cell" > /dev/null || exit 1
+                done
+                grep -x '# fail 0' $TMPDIR/tap
+                grep -x '# skipped 0' $TMPDIR/tap
+                touch $out
+              '';
+          container-worker =
+            pkgs.runCommand "genie-agent-container-worker"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.ripgrep
+                  pkgs.fd
+                  pkgs.coreutils
+                ]
+                ++ nixpkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.bubblewrap;
+                src = nixpkgs.lib.fileset.toSource {
+                  root = ./.;
+                  fileset = nixpkgs.lib.fileset.unions [
+                    ./src
+                    ./schemas
+                    ./skills
+                    ./prompts
+                    ./tests/container.test.ts
+                    ./tests/fixtures/supervisor
+                    ./tests/fixtures/container-launch.mjs
+                  ];
+                };
+              }
+              ''
+                cd $src
+                export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
+                export GENIE_PI_AI=${modelSdk pkgs}
+                ${nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "export GENIE_REQUIRE_CONTAINER_NAMESPACE=1"}
+                rc=0
+                node --test --test-force-exit --test-reporter=tap tests/container.test.ts > $TMPDIR/tap || rc=$?
+                cat $TMPDIR/tap
+                [ "$rc" -eq 0 ] || exit "$rc"
+                for cell in \
+                  'container files: root executes shipped tools with thread confinement, exact edit quota and read-only memory' \
+                  'container files: disconnected requests abort running work and queued requests cannot write' \
+                  'container files: running SDK receives cancellation' \
+                  'container sessions: fixed captured destination, ordered chunks, atomic commit and abandoned cleanup' \
+                  'container worker: actual packaged pi uses root files and model, persists before settlement and resumes' \
+                  'container executor: startup failure and forced teardown run explicit stop before socket cleanup'; do
+                  sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -xF -- "$cell" > /dev/null || exit 1
+                done
+                grep -x '# fail 0' $TMPDIR/tap
+                grep -x '# skipped 0' $TMPDIR/tap
+                touch $out
+              '';
           tier1-bridge =
             pkgs.runCommand "genie-agent-tier1-bridge"
               {
@@ -929,8 +1017,7 @@
                 grep -qx "ok [0-9]* - an eval cgroup's OOM count unreadable falls back to the whole cgroup's" $TMPDIR/tap || { echo "missing cell: the whole cgroup's fallback"; exit 1; }
                 touch $out
               '';
-          # The Kubernetes eval runner (plan E3): render the Job spec (runtimeClass gvisor, 12Gi/2c, deadline,
-          # thread store root, scratch emptyDir limit, labels) and submit/watch against a stub k8s API.
+          # Configured Kubernetes Jobs: thread/source authority and limits against a fixture API.
           eval-k8s =
             pkgs.runCommand "genie-agent-eval-k8s"
               {
@@ -950,7 +1037,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/eval-k8s.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: snapshot plus property checks on the rendered Job spec$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F6): renderJob sanitises thread at all three k8s sites (label genie.agent/thread, repo PVC claimName, thread-store PVC claimName)$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: snapshot plus property checks on the rendered Job spec$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F6): captured thread selects confined source and store while labels are sanitised$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The thread-state store: a thread's transcript, tier and eval cache survive its process

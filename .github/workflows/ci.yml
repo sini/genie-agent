@@ -46,6 +46,8 @@ env:
     supervisor
     tier
   INTEGRATION_CHECKS: >-
+    bwrap-selection
+    container-worker
     dispatcher-sea
     expert-isolation
     genie-guard-sea

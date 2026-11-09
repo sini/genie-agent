@@ -13,6 +13,17 @@ const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
 const VERBATIM_ISOLATION_STATEMENT =
   "**Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus. The expert tiers do not share that user's Claude credentials: each tier authenticates with its own Claude setup-token, which systemd reads from `experts.<tier>.tokenEnvironmentFile` into that tier's `genie-herdr@<tier>` unit only, and no expert unit mounts the user's `~/.claude` beyond the tier's configured memory directory, read-only. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, and `PrivatePIDs=true` on the expert units), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel or network isolation between `@public` and `@trusted` expert sessions, which run as the same OS user.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).";
 
+test("Nix options preserve explicit generic executor configuration", () => {
+  const c = summary.executorRootAttrs;
+  assert.equal(c.eval.backend, "kubernetes");
+  assert.equal(c.eval.kubernetes.namespace, "chosen-namespace");
+  assert.equal(c.eval.kubernetes.tokenFile, "/run/credentials/eval-api");
+  assert.deepEqual(c.eval.kubernetes.store, { claimName: "chosen-store", subPath: "stores" });
+  assert.equal(c.tier1.executor.command, "fixture-launch");
+  assert.deepEqual(c.tier1.executor.stop, { command: "fixture-stop", args: ["{instance}"] });
+  assert.equal(c.tier1.executor.socketPath, "/run/genie/root.sock");
+});
+
 test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expert deny rules, store-path-free secrets, and README isolation disclosure", () => {
   // 1. Secret path type rejects /nix/store paths, store-context strings, and relative paths
   assert.equal(summary.secretPathChecks.acceptsRunSecrets, true, "secretPathType must accept /run/secrets/...");
@@ -231,7 +242,7 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
   assert.deepEqual(summary.fullRootAttrs.guard, { enable: true });
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.eval).sort(),
-    ["builders", "memoryMax", "timeoutMs"],
+    ["backend", "builders", "memoryMax", "timeoutMs"],
   );
   assert.deepEqual(Object.keys(summary.fullRootAttrs.experts).sort(), ["public", "trusted"]);
   assert.equal(summary.fullRootAttrs.experts.public, "genie-support@sini.bitstream");

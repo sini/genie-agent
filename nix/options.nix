@@ -208,6 +208,12 @@ rec {
               description = "Path where operating-memory is mounted for Tier 1.";
             };
 
+            executor = lib.mkOption {
+              type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+              default = null;
+              description = "Explicit separate-container command/stop pair and socket mapping. See docs/executors.md. Only the per-thread socket directory is shared.";
+            };
+
             questionTimeoutMs = lib.mkOption {
               type = lib.types.nullOr lib.types.ints.positive;
               default = null;
@@ -404,6 +410,21 @@ rec {
               description = "Optional per-eval timeout in milliseconds.";
             };
 
+            backend = lib.mkOption {
+              type = lib.types.enum [
+                "local"
+                "kubernetes"
+              ];
+              default = "local";
+              description = "Explicit evaluation executor; configured backend failures do not fall back.";
+            };
+
+            kubernetes = lib.mkOption {
+              type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+              default = null;
+              description = "Kubernetes executor API, image, namespace and PVC mapping inputs. See docs/executors.md. Credentials are root-only tokenFile paths.";
+            };
+
             builders = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
@@ -413,7 +434,7 @@ rec {
             memoryMax = lib.mkOption {
               type = lib.types.nullOr lib.types.ints.positive;
               default = 4294967296;
-              description = "Per-eval cgroup memory.max in bytes (default 4 GiB; null disables cgroup memory limit).";
+              description = "Requested per-eval memory bytes (default 4 GiB); local cgroup or Kubernetes resource limit when available.";
             };
           };
         };
@@ -653,6 +674,9 @@ rec {
         maxConcurrentTurns = cfg.tier1.maxConcurrentTurns;
         maxQueueWaitSecs = cfg.tier1.maxQueueWaitSecs;
       }
+      // lib.optionalAttrs (cfg.tier1.executor != null) {
+        executor = cfg.tier1.executor;
+      }
       // lib.optionalAttrs (cfg.tier1.questionTimeoutMs != null) {
         questionTimeoutMs = cfg.tier1.questionTimeoutMs;
       }
@@ -688,16 +712,21 @@ rec {
         threadLink = cfg.broker.threadLink;
       };
 
-      evalAttrs =
-        lib.optionalAttrs (cfg.eval.timeoutMs != null) {
-          timeoutMs = cfg.eval.timeoutMs;
-        }
-        // lib.optionalAttrs (cfg.eval.builders != null) {
-          builders = cfg.eval.builders;
-        }
-        // lib.optionalAttrs (cfg.eval.memoryMax != null) {
-          memoryMax = cfg.eval.memoryMax;
-        };
+      evalAttrs = {
+        backend = cfg.eval.backend;
+      }
+      // lib.optionalAttrs (cfg.eval.kubernetes != null) {
+        kubernetes = cfg.eval.kubernetes;
+      }
+      // lib.optionalAttrs (cfg.eval.timeoutMs != null) {
+        timeoutMs = cfg.eval.timeoutMs;
+      }
+      // lib.optionalAttrs (cfg.eval.builders != null) {
+        builders = cfg.eval.builders;
+      }
+      // lib.optionalAttrs (cfg.eval.memoryMax != null) {
+        memoryMax = cfg.eval.memoryMax;
+      };
     in
     {
       stateRoot = toString cfg.stateRoot;

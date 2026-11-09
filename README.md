@@ -136,6 +136,10 @@ Run `nix run .#portable-baseline` to exercise the compiled Root/Pi launch and na
 local fixtures. CI runs this process check outside the Nix build sandbox; the
 `portable-baseline` flake check separately validates the compiled Root/Pi launch.
 
+For a separate Pi container sharing only its thread socket, or evaluation as Kubernetes Jobs,
+see [configured executors](docs/executors.md). Both adapters require explicit deployment inputs;
+configured failures never select the local fallback.
+
 ## Tier-1 OCI image
 
 `packages.<linux>.root-image` builds `ghcr.io/sini/genie-root`. The existing
@@ -166,9 +170,9 @@ writable mount over `/memory`; image metadata cannot enforce a pod's mounts.
 Supply the normal root configuration through `--config <path>` or `GENIE_CONFIG`,
 set `tier1.memoryRoot` to `/memory`, and provide the configured state/runtime paths
 and xmsg connection. The image contains no credentials and does not configure a
-bus or a deployment. Its contents do not prove bubblewrap compatibility with a
-container runtime or gVisor. Bubblewrap is retained because the current root
-still requires it; runtime integration must be verified in the intended sandbox.
+bus or a deployment. It also includes `/bin/genie-container-worker` for the separate
+Pi container, selected by overriding the entrypoint. Its contents do not prove
+deployment mount, network or runtime isolation; verify those in the intended sandbox.
 
 The OCI workflow builds and checks both images for pull requests. Only a push to
 `main` publishes `latest` and `sha-<short-commit>` tags for each image. A branch

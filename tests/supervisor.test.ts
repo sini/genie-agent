@@ -25,6 +25,48 @@ const alive = (pid: number) => {
 const messages = async (s: Supervisor, thread: string) =>
   JSON.stringify(((await s.command(thread, { type: "get_messages" })).data as { messages: unknown[] }).messages);
 
+test("replacement waits for the previous executor cleanup before opening thread custody", async () => {
+  let starts = 0;
+  let entered!: () => void;
+  let release!: () => void;
+  const cleanupEntered = new Promise<void>((done) => { entered = done; });
+  const cleanupGate = new Promise<void>((done) => { release = done; });
+  const s = new Supervisor(() => {
+    const generation = ++starts;
+    return { command: process.execPath, args: [fake], cleanup: generation === 1 ? async () => { entered(); await cleanupGate; } : undefined };
+  });
+  try {
+    await s.command("cleanup-generation", { type: "get_state" });
+    const teardown = s.teardown("cleanup-generation");
+    await cleanupEntered;
+    const replacement = s.command("cleanup-generation", { type: "get_state" });
+    await new Promise((done) => setTimeout(done, 30));
+    assert.equal(starts, 1, "replacement must wait for generation-owned cleanup");
+    release(); await teardown; await replacement;
+    assert.equal(starts, 2);
+  } finally { release(); await s.shutdown(); }
+});
+
+test("a command immediately before teardown cannot spawn through a stale empty cleanup lookup", async () => {
+  let starts = 0;
+  let entered!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((done) => { entered = done; });
+  const gate = new Promise<void>((done) => { release = done; });
+  const s = new Supervisor(() => {
+    const generation = ++starts;
+    return { command: process.execPath, args: [fake], cleanup: generation === 1 ? async () => { entered(); await gate; } : undefined };
+  });
+  try {
+    await s.command("reverse-order", { type: "get_state" });
+    const command = s.command("reverse-order", { type: "get_state" }).catch(() => undefined);
+    const teardown = s.teardown("reverse-order");
+    await reached;
+    assert.equal(starts, 1, "command-before-teardown must not open replacement custody");
+    release(); await teardown; await command;
+  } finally { release(); await s.shutdown(); }
+});
+
 test("oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B", async () => {
   const events: [string, Record][] = [];
   const s = new Supervisor(() => ({ command: process.execPath, args: [fake] }), (t, r) => events.push([t, r]));

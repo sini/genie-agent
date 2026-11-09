@@ -8,7 +8,7 @@
 // transcript, and archived with a tier label only (C8, design §4 step 6, §5.8).
 //
 // xmsg and Matrix enter only through the seams below; GA builds their real adapters.
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
@@ -36,7 +36,10 @@ import {
 import { router } from "../escalation/route.ts";
 import { withCache } from "../eval/cache.ts";
 import { perThread, type Runner } from "../eval/lock.ts";
-import { type EvalRequest, type RunOptions, runEval } from "../eval/run.ts";
+import type { EvalRequest } from "../eval/run.ts";
+import { configuredEval, validateEvalConfig, type EvalConfig } from "./eval.ts";
+import { containerLaunch, type ContainerExecutor } from "../tier1/container.ts";
+import { RootFileService, piToolsPath } from "../tier1/files.ts";
 import { Gc } from "../gc/index.ts";
 import { type Envelope, type Line, verdictErrors } from "../guard/verdict.ts";
 import { type Clock, type HandlerErrorKind, type HandlerErrorSink, Lifecycle } from "../lifecycle/index.ts";
@@ -125,7 +128,7 @@ export interface Config {
   pi: string;
   // Tier 1's configured pi model API.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
-  tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string } };
+  tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string }; executor?: ContainerExecutor };
   // Inbound guard-in screening switch (G11; default true).
   guard?: { enable?: boolean };
   // Optional guard-in screening switch for `git` read outputs (GC1 OQ-2; default false).
@@ -149,7 +152,7 @@ export interface Config {
     guardOut?: { enable?: boolean; base?: string; model?: string; keyFile?: string };
   };
   // Eval limits are requested from detected host adapters; unavailable enforcement is reported.
-  eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax" | "bwrap">;
+  eval?: EvalConfig;
   experts?: Record<Tier, string>;
   xmsg?: XmsgIoOptions;
 }
@@ -230,6 +233,13 @@ export async function guardIn(
 }
 
 export function validateRootConfig(c: Config): { guardEnable: boolean; guardOutEnable: boolean } {
+  validateEvalConfig(c.eval);
+  const executor = c.tier1?.executor;
+  if (executor !== undefined) {
+    const command = (value: unknown): value is { command: string; args: string[] } => Boolean(value && typeof value === "object" && typeof (value as any).command === "string" && (value as any).command.length && Array.isArray((value as any).args) && (value as any).args.every((arg: unknown) => typeof arg === "string"));
+    if (!command(executor) || !command(executor.stop) || typeof executor.socketPath !== "string" || !executor.socketPath.startsWith("/")) throw new Error("tier1.executor requires command, args, stop and absolute socketPath");
+    if (c.tier1.sandbox?.bwrap) throw new Error("tier1.sandbox.bwrap belongs to the local executor");
+  }
   const guardEnable = c.guard?.enable ?? true;
   const guardOutEnable = c.broker?.guardOut?.enable ?? true;
   if (guardEnable && c.xmsg !== undefined && "guard" in c.xmsg) {
@@ -324,7 +334,7 @@ export function main(
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
   const readOnlyBinds = tier1ReadOnlyBinds({ pi: c.pi, memoryRoot: c.tier1.memoryRoot });
   const exportedRoots = [c.stateRoot, c.mirror.worktreeRoot, ...[...readOnlyBinds.system, ...readOnlyBinds.application].map((bind) => bind[1])].filter((p): p is string => Boolean(p)).map((p) => existsSync(p) ? realpathSync(p) : resolve(p));
-  for (const credential of [c.model.keyFile, c.broker?.tokenFile, c.broker?.guardOut?.keyFile, c.githubReadTokenFile, c.s3?.secretKeyFile]) {
+  for (const credential of [c.model.keyFile, c.broker?.tokenFile, c.broker?.guardOut?.keyFile, c.githubReadTokenFile, c.s3?.secretKeyFile, c.eval?.kubernetes?.tokenFile]) {
     if (!credential || !existsSync(credential)) continue;
     const file = realpathSync(credential);
     if (exportedRoots.some((root) => file === root || file.startsWith(`${root}/`))) throw new Error("credential file must be outside tier-1 exported roots");
@@ -334,12 +344,7 @@ export function main(
   const evalIn = withCache(
     store,
     perThread(
-      run ??
-        ((l) =>
-          runEval(l, {
-            ...c.eval,
-            worktreeRoot: c.mirror.worktreeRoot,
-          })),
+      run ?? configuredEval(c.eval, c.mirror.worktreeRoot),
     ),
   );
   const screen = webScreen(io.guard, { enabled: guardEnable });
@@ -422,20 +427,40 @@ export function main(
 
   const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
   const { baseUrl, api, id, keyFile } = c.model;
+  const { executor, sandbox: _sandbox, ...tier1Config } = c.tier1;
+  const configForThread = (thread: string) => {
+    const root = `${c.mirror.worktreeRoot}/${thread}`;
+    mkdirSync(root, { recursive: true, mode: 0o755 });
+    return { ...tier1Config, root };
+  };
+  const fileServices = new Map<string, RootFileService>();
   let hostForThread: (thread: string) => Host;
   const custody = new Custody({
     model: { baseUrl, api, id, apiKey: secret(keyFile) },
     sdk: () => piAiPath(c.pi),
     host: (thread) => hostForThread(thread),
+    ...(executor ? {
+      socketRoot: executor.socketRoot,
+      files: (thread: string) => {
+        let service = fileServices.get(thread);
+        if (!service) { service = new RootFileService(configForThread(thread), () => piToolsPath(piAiPath(c.pi))); fileServices.set(thread, service); }
+        return service;
+      },
+      session: (thread: string) => `${store.dir(thread)}/session/thread.jsonl`,
+    } : {}),
   });
-  const launch = tier1Launch({
+  const threadCustody = (thread: string) => ({ socket: custody.open(thread), model: custody.publicModel, cleanup: async () => { try { await custody.closeThread(thread); } finally { fileServices.delete(thread); } } });
+  const launch = executor ? containerLaunch({
+    executor, custody: threadCustody, config: configForThread,
+    memory: Boolean(c.tier1.memoryRoot), memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
+    screened: guardEnable,
+  }) : tier1Launch({
     pi: c.pi,
-    custody: (thread) => ({ socket: custody.open(thread), model: custody.publicModel, cleanup: () => custody.closeThread(thread) }),
+    custody: threadCustody,
     memory: Boolean(c.tier1.memoryRoot),
     memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
     screened: guardEnable,
-    // GS2 (P2): the jail is the Launch's construction. Config may only name the bwrap binary; there is
-    // no production path to an unjailed pi.
+    // Local execution adds the usable host jail when available.
     sandbox: {
       ...(c.tier1.sandbox?.bwrap ? { bwrap: c.tier1.sandbox.bwrap } : {}),
       stateRoot: c.stateRoot,
@@ -443,7 +468,7 @@ export function main(
       agentDir,
       memoryRoot: c.tier1.memoryRoot,
     },
-    config: (t) => ({ ...c.tier1, root: `${c.mirror.worktreeRoot}/${t}` }),
+    config: configForThread,
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
 
@@ -502,7 +527,7 @@ export function main(
   const supervisor: Supervisor = new Supervisor(
     (t) => {
       const l = launch(t);
-      return { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+      return executor ? l : { ...l, env: { ...l.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
     },
     async (t, r) => {
       try {
@@ -563,7 +588,7 @@ export function main(
         const result = await evalIn(t, {
           request: req,
           sender_tier: tier,
-          ...(req.worktreeSubdir !== undefined ? { thread: t } : {}),
+          thread: t,
         });
         setContext(t, { eval_transcript: [...context(t).eval_transcript, { request, result }] });
         return result;
@@ -922,7 +947,7 @@ export function main(
         const evalResult = await evalIn(pending.thread, {
           request: evalReq,
           sender_tier: "trusted",
-          ...(evalReq.worktreeSubdir !== undefined ? { thread: pending.thread } : {}),
+          thread: pending.thread,
         });
         const postContent = typeof evalResult.stdout_tail === "string" && evalResult.stdout_tail.length > 0
           ? evalResult.stdout_tail

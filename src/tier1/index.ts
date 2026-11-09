@@ -102,6 +102,7 @@ export interface Config {
 export interface Deps {
   host: Host;
   resolve?: Resolver;
+  remoteFiles?: boolean;
 }
 
 // The subset of pi's ExtensionAPI (@earendil-works/pi-coding-agent, dist/core/extensions/types.d.ts)
@@ -453,7 +454,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
         const u = checkUrl(params.url);
         await pin(u, fetchOptions);
         const { path, rev } = await deps.host.clone(params.url);
-        return text(JSON.stringify({ path: confine(cfg.root, path, cfg.memoryRoot), rev }));
+        return text(JSON.stringify({ path: deps.remoteFiles ? path : confine(cfg.root, path, cfg.memoryRoot), rev }));
       },
     },
     {
@@ -529,6 +530,7 @@ export function tier1(cfg: Config, deps: Deps): (pi: Pi) => void {
     pi.on("session_start", async () => pi.setActiveTools([...TOOLS]));
     pi.on("tool_call", async (e) => {
       if (!(TOOLS as readonly string[]).includes(e.toolName)) return { block: true, reason: `${e.toolName} is not a tier-1 tool` };
+      if (deps.remoteFiles && (BUILTINS as readonly string[]).includes(e.toolName)) return undefined;
       if ((WRITE_BUILTINS as readonly string[]).includes(e.toolName)) {
         try {
           const realTarget = confineWrite(cfg.root, e.input.path, {

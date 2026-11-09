@@ -73,6 +73,8 @@ let
         pkgs.openssl
         pkgs.nix
         pkgs.pi-coding-agent
+        pkgs.ripgrep
+        pkgs.fd
       ];
       script = ''
         set -euo pipefail

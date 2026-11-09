@@ -2,7 +2,7 @@ import { connect } from "node:net";
 
 export const CUSTODY_ENV = "GENIE_CUSTODY";
 export interface PublicModel { id: string; api: string; baseUrl: string }
-export interface CustodyConfig { socket: string; model: PublicModel; sdk?: string }
+export interface CustodyConfig { socket: string; model: PublicModel; sdk?: string; remoteFiles?: boolean }
 export interface ModelEvent { type: string; [name: string]: any }
 
 async function* records(socket: string, request: unknown, signal?: AbortSignal): AsyncGenerator<any> {
@@ -29,6 +29,11 @@ async function* records(socket: string, request: unknown, signal?: AbortSignal):
 export async function hostCall(socket: string, name: string, arg: unknown): Promise<any> {
   for await (const r of records(socket, { method: "host", name, arg })) return r.ok;
   throw new Error("root did not answer Host request");
+}
+
+export async function custodyCall(socket: string, request: unknown): Promise<any> {
+  for await (const r of records(socket, request)) return r.ok;
+  throw new Error("root did not answer custody request");
 }
 
 // The client receives normalized SDK events; no provider HTTP request or credential runs here.

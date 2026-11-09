@@ -1,5 +1,14 @@
 // The node APIs tier 1's tools use beyond the other src/*/node.d.ts, declared here rather than
 // pulling in @types/node.
+interface Buffer {
+  toString(encoding: "base64"): string;
+}
+declare module "node:buffer" {
+  export const Buffer: {
+    from(data: string | Uint8Array, encoding?: "utf8" | "base64"): Buffer;
+    concat(list: readonly Uint8Array[]): Buffer;
+  };
+}
 declare module "node:dns/promises" {
   export function lookup(
     hostname: string,
@@ -37,6 +46,10 @@ declare module "node:net" {
   }
 }
 declare module "node:fs" {
+  export function accessSync(path: string): void;
+  export function appendFileSync(path: string, data: Uint8Array): void;
+  export function readSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  export function fstatSync(fd: number): { isFile(): boolean; size: number };
   interface Dirent {
     isDirectory(): boolean;
   }

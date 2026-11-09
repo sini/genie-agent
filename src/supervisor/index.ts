@@ -49,7 +49,7 @@ export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKI
 // How a thread's process starts, e.g. `pi --mode rpc -e <tier-1 extension> --session-dir <store>`.
 // C4's resume and P2's per-thread state change the arguments, not the supervisor. env is added
 // to the supervisor's own.
-export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string }; inheritEnv?: boolean; cwd?: string; detached?: boolean; cleanup?: () => void | Promise<void> };
+export type Launch = (thread: string) => { command: string; args: string[]; initialInput?: string; env?: { [k: string]: string }; inheritEnv?: boolean; cwd?: string; detached?: boolean; cleanup?: () => void | Promise<void> };
 
 // The title of the RPC `input` dialog that carries a Host call from tier 1's extension
 // (src/tier1/extension.ts); the supervisor answers no other dialog.
@@ -79,6 +79,7 @@ interface Proc {
 
 export class Supervisor {
   private procs = new Map<string, Proc>();
+  private closing = new Map<string, Promise<void>>();
   private next = 0;
   private launch: Launch;
   private onEvent: (thread: string, record: Record) => void;
@@ -102,7 +103,8 @@ export class Supervisor {
 
   // Send one command to the thread's process, spawning it first if it has none, and resolve
   // with pi's response. A process that exits before answering rejects.
-  command(thread: string, cmd: { type: string; [key: string]: unknown }): Promise<Record> {
+  async command(thread: string, cmd: { type: string; [key: string]: unknown }): Promise<Record> {
+    for (let closing = this.closing.get(thread); closing; closing = this.closing.get(thread)) await closing;
     const p = this.procs.get(thread) ?? this.spawn(thread);
     const id = `c${this.next++}`;
     return new Promise((resolve, reject) => {
@@ -114,21 +116,24 @@ export class Supervisor {
   // Close the thread's stdin, pi's orderly shutdown, and kill it if it is still running after
   // graceMs. Other threads' processes are untouched.
   async teardown(thread: string, graceMs = 5_000): Promise<void> {
+    const closing = this.closing.get(thread);
+    if (closing) return closing;
     const p = this.procs.get(thread);
     if (!p) return;
     this.procs.delete(thread);
     p.child.stdin.end();
     const timer = setTimeout(() => killWithChildren(p.child, "SIGKILL", p.detached), graceMs);
-    await p.exited;
-    clearTimeout(timer);
+    const wait = p.exited.finally(() => { clearTimeout(timer); if (this.closing.get(thread) === wait) this.closing.delete(thread); });
+    this.closing.set(thread, wait);
+    await wait;
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all(this.threads().map((t) => this.teardown(t)));
+    await Promise.all([...this.threads().map((t) => this.teardown(t)), ...this.closing.values()]);
   }
 
   private spawn(thread: string): Proc {
-    const { command, args, env, inheritEnv, cleanup, cwd, detached } = this.launch(thread);
+    const { command, args, initialInput, env, inheritEnv, cleanup, cwd, detached } = this.launch(thread);
     const child = spawn(command, args, { cwd, detached, stdio: ["pipe", "pipe", "inherit"], env: (inheritEnv === false ? env : { ...process.env, ...env }) as { [k: string]: string } });
     const pending: Proc["pending"] = new Map();
     const exited = new Promise<void>((resolve) => {
@@ -141,13 +146,18 @@ export class Supervisor {
         if (this.procs.get(thread)?.child === child) this.procs.delete(thread);
         for (const { reject } of pending.values()) reject(new Error(`thread ${thread}: pi ${why}`));
         pending.clear();
-        void Promise.resolve().then(() => cleanup?.()).then(resolve, resolve);
+        const cleaned = Promise.resolve().then(() => cleanup?.()).catch(() => console.error("tier-1 executor cleanup failed")).then(() => {
+          if (this.closing.get(thread) === cleaned) this.closing.delete(thread);
+          resolve();
+        });
+        if (!this.closing.has(thread)) this.closing.set(thread, cleaned);
       };
       child.on("error", (err) => done(`failed: ${err.message}`));
       child.on("exit", (code, signal) => done(`exited (${signal ?? code})`));
     });
     // A write to a process that has gone fails here; its exit rejects what was pending.
     child.stdin.on("error", () => {});
+    if (initialInput !== undefined) child.stdin.write(initialInput);
     // Split on LF only: readline also splits on U+2028/U+2029, which are valid inside JSON.
     let buf = "";
     child.stdout.setEncoding("utf8");

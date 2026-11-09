@@ -248,6 +248,52 @@ let
   fullCfg = evalFull.config.services.genie-agent;
   noGuardCfg = evalNoGuard.config.services.genie-agent;
 
+  executorConfig = evalLocal.extendModules {
+    modules = [
+      {
+        services.genie-agent = {
+          tier1.executor = {
+            command = "fixture-launch";
+            args = [
+              "{instance}"
+              "{socketDir}"
+            ];
+            stop = {
+              command = "fixture-stop";
+              args = [ "{instance}" ];
+            };
+            socketPath = "/run/genie/root.sock";
+          };
+          eval = {
+            backend = "kubernetes";
+            kubernetes = {
+              baseUrl = "https://api.example.org";
+              namespace = "chosen-namespace";
+              image = "registry.example.org/evaluator:fixed";
+              tokenFile = "/run/credentials/eval-api";
+              store = {
+                claimName = "chosen-store";
+                subPath = "stores";
+              };
+              source = {
+                claimName = "chosen-source";
+                subPath = "worktrees";
+              };
+            };
+          };
+        };
+      }
+    ];
+  };
+  executorRootJson =
+    shared.mkRootConfigJson { inherit lib pkgs; } executorConfig.config.services.genie-agent
+      {
+        modelKeyFile = "/run/credentials/model-key";
+        guardOutKeyFile = "/run/credentials/guard-out-key";
+        brokerTokenFile = null;
+        s3SecretKeyFile = null;
+      };
+
   localRootJson = shared.mkRootConfigJson { inherit lib pkgs; } localCfg {
     modelKeyFile = "/run/credentials/genie-agent.service/model-key";
     guardOutKeyFile = "/run/credentials/genie-agent.service/guard-out-key";
@@ -366,6 +412,7 @@ let
     localRootAttrs = localRootJson.passthru.attrs;
     fullRootAttrs = fullRootJson.passthru.attrs;
     noGuardRootAttrs = noGuardRootJson.passthru.attrs;
+    executorRootAttrs = executorRootJson.passthru.attrs;
   };
 in
 pkgs.runCommand "genie-agent-nixos-module"
@@ -399,9 +446,11 @@ pkgs.runCommand "genie-agent-nixos-module"
     const localConfig: Config = $(cat "${localRootJson}");
     const fullConfig: Config = $(cat "${fullRootJson}");
     const noGuardConfig: Config = $(cat "${noGuardRootJson}");
+    const executorConfig: Config = $(cat "${executorRootJson}");
     void localConfig;
     void fullConfig;
     void noGuardConfig;
+    void executorConfig;
     EOF
     tsc --noEmit -p .
     rm -f src/root/check-config-types.ts

@@ -33,6 +33,14 @@
   "tests/eval-argv.test.ts": [
     "the untrusted argv is E1's, byte for byte, whatever builders are configured"
   ],
+  "tests/container.test.ts": [
+    "container files: root executes shipped tools with thread confinement, exact edit quota and read-only memory",
+    "container files: disconnected requests abort running work and queued requests cannot write",
+    "container files: running SDK receives cancellation",
+    "container sessions: fixed captured destination, ordered chunks, atomic commit and abandoned cleanup",
+    "container worker: actual packaged pi uses root files and model, persists before settlement and resumes",
+    "container executor: startup failure and forced teardown run explicit stop before socket cleanup"
+  ],
   "tests/eval-cache.test.ts": [
     "oracle: eval-result cache keyed (repo, rev, attr, flags) runs 0 evals on second identical request"
   ],

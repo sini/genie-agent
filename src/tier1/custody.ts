@@ -1,11 +1,14 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { dirname, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { METHODS } from "../supervisor/index.ts";
 import type { Host } from "./index.ts";
 import type { PublicModel } from "./socket.ts";
+import type { RootFileService } from "./files.ts";
 
 // Resolve from the configured/shipped pi, never a second ambient pi installation.
 export function piAiPath(pi: string): string {
@@ -23,14 +26,22 @@ export function piAiPath(pi: string): string {
 }
 
 const SAFE_OPTIONS = ["temperature", "maxTokens", "reasoning", "thinkingBudgets", "transport", "cacheRetention", "sessionId", "samplingParams", "metadata", "websocketConnectTimeoutMs"];
-interface ThreadSocket { server: Server; connections: Set<Socket>; dir: string }
+interface ThreadSocket { server: Server; connections: Set<Socket>; dir: string; upload?: { id: string; file: string; offset: number } }
+export interface CustodyOptions {
+  model: PublicModel & { apiKey: string };
+  sdk: string | (() => string);
+  host: (thread: string) => Host;
+  files?: (thread: string) => RootFileService;
+  session?: (thread: string) => string;
+  socketRoot?: string;
+}
 
 export class Custody {
   readonly publicModel: PublicModel;
   private sockets = new Map<string, ThreadSocket>();
   private sdk: Promise<any> | undefined;
-  private options: { model: PublicModel & { apiKey: string }; sdk: string | (() => string); host: (thread: string) => Host };
-  constructor(options: { model: PublicModel & { apiKey: string }; sdk: string | (() => string); host: (thread: string) => Host }) {
+  private options: CustodyOptions;
+  constructor(options: CustodyOptions) {
     this.options = options;
     // Public metadata does not expose either the credential or the upstream destination.
     this.publicModel = { id: options.model.id, api: "genie-custody", baseUrl: "http://root.invalid" };
@@ -39,7 +50,8 @@ export class Custody {
   open(thread: string): string {
     const existing = this.sockets.get(thread);
     if (existing) return `${existing.dir}/root.sock`;
-    const dir = mkdtempSync("/tmp/genie-custody-");
+    if (this.options.socketRoot) mkdirSync(this.options.socketRoot, { recursive: true, mode: 0o700 });
+    const dir = mkdtempSync(`${this.options.socketRoot ?? "/tmp"}/genie-custody-`);
     const connections = new Set<Socket>();
     const server = createServer((socket) => {
       connections.add(socket);
@@ -72,6 +84,12 @@ export class Custody {
         if (!(METHODS as readonly string[]).includes(request.name)) throw new Error("unknown Host method");
         const result = await this.options.host(thread)[request.name as typeof METHODS[number]](request.arg);
         socket.end(`${JSON.stringify({ ok: result ?? null })}\n`);
+      } else if (request.method === "file") {
+        if (!this.options.files) throw new Error("file service is not configured");
+        const result = await this.options.files(thread).execute(request.name, request.arg, signal);
+        socket.end(`${JSON.stringify({ ok: result })}\n`);
+      } else if (request.method === "session") {
+        socket.end(`${JSON.stringify({ ok: this.session(thread, request) })}\n`);
       } else if (request.method === "model") {
         if (!request.context || !Array.isArray(request.context.messages)) throw new Error("invalid model context");
         const sdk = await (this.sdk ??= import(pathToFileURL(typeof this.options.sdk === "function" ? this.options.sdk() : this.options.sdk).href));
@@ -104,10 +122,51 @@ export class Custody {
     }
   }
 
+  private session(thread: string, request: any): unknown {
+    if (!this.options.session) throw new Error("session service is not configured");
+    const file = this.options.session(thread), entry = this.sockets.get(thread)!;
+    if (request.op === "read") {
+      if (!Number.isSafeInteger(request.offset) || request.offset < 0) throw new Error("invalid session offset");
+      let fd: number;
+      try { fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW); }
+      catch { return { data: "", next: 0, total: 0 }; }
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) throw new Error("invalid session file");
+        if (request.offset > st.size) throw new Error("invalid session offset");
+        const bytes = new Uint8Array(Math.min(65536, st.size - request.offset));
+        const n = readSync(fd, bytes, 0, bytes.length, request.offset);
+        return { data: Buffer.from(bytes.subarray(0, n)).toString("base64"), next: request.offset + n, total: st.size };
+      } finally { closeSync(fd); }
+    }
+    if (request.op === "begin") {
+      if (entry.upload) rmSync(entry.upload.file, { recursive: false, force: true });
+      const id = randomUUID(), staging = `${file}.upload-${id}`;
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      writeFileSync(staging, "", { mode: 0o600 }); entry.upload = { id, file: staging, offset: 0 };
+      return { id };
+    }
+    const upload = entry.upload;
+    if (!upload || request.id !== upload.id) throw new Error("invalid session upload");
+    if (request.op === "chunk") {
+      if (request.offset !== upload.offset || typeof request.data !== "string" || request.data.length > 87384) throw new Error("invalid session chunk");
+      const data = Buffer.from(request.data, "base64");
+      if (data.length > 65536 || data.toString("base64") !== request.data) throw new Error("invalid session chunk");
+      appendFileSync(upload.file, data); upload.offset += data.length;
+      return { next: upload.offset };
+    }
+    if (request.op === "commit" && request.size === upload.offset) {
+      renameSync(upload.file, file); delete entry.upload;
+      return { saved: true };
+    }
+    throw new Error("invalid session operation");
+  }
+
   async closeThread(thread: string): Promise<void> {
     const entry = this.sockets.get(thread);
     if (!entry) return;
     this.sockets.delete(thread);
+    if (entry.upload) rmSync(entry.upload.file, { recursive: false, force: true });
     for (const socket of entry.connections) socket.destroy();
     await new Promise<void>((resolve) => entry.server.close(() => resolve()));
     rmSync(entry.dir, { recursive: true, force: true });

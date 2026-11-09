@@ -285,6 +285,121 @@ const host = async (thread: string, method: string, arg: unknown) =>
   JSON.parse(((await root.supervisor.command(thread, { type: "host", title: BRIDGE, placeholder: JSON.stringify({ method, arg }) })).data as any).value);
 const draft = (escalate_forced: boolean) => ({ answer: "set enable = true", confidence: 0.95, gaps: [], escalate_forced });
 
+test("configured Kubernetes backend receives ordinary and approved evals with captured thread and budgets", async () => {
+  const jobs: any[] = [];
+  const auth: unknown[] = [];
+  let fail = false;
+  const api = createServer((req, res) => {
+    auth.push(req.headers.authorization);
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      if (req.method === "POST") {
+        if (fail) { res.writeHead(500).end("upstream-sensitive-body"); return; }
+        const job = JSON.parse(body); jobs.push(job); res.end(JSON.stringify(job));
+      } else if (req.method === "DELETE") res.end("{}");
+      else if (new URL(req.url!, "http://fixture").pathname.endsWith("/log")) res.end("job-result");
+      else if (req.url?.includes("/pods?")) res.end(JSON.stringify({ items: [{ metadata: { name: "completed" }, status: { containerStatuses: [{ name: "eval", state: { terminated: { exitCode: 0 } } }] } }] }));
+      else res.end(JSON.stringify({ status: { succeeded: 1 } }));
+    });
+  });
+  await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+  const home = mkdtempSync(`${tmp}/configured-k8s-`);
+  const cfg = JSON.parse(readFileSync(`${tmp}/config.json`, "utf8"));
+  const token = "fixture-k8s-custody";
+  writeFileSync(`${home}/api-key`, token);
+  Object.assign(cfg, {
+    stateRoot: `${home}/state`, storeRoot: `${home}/store`,
+    guard: { enable: false }, broker: { guardOut: { enable: false } }, s3: null,
+    eval: { backend: "kubernetes", timeoutMs: 7000, memoryMax: 123456789, kubernetes: {
+      baseUrl: `http://127.0.0.1:${(api.address() as AddressInfo).port}`,
+      tokenFile: `${home}/api-key`, namespace: "custom-eval", image: "example.invalid/evaluator:fixture",
+      store: { claimName: "configured-store", subPath: "owned" }, cpu: "500m",
+    } },
+  });
+  writeFileSync(`${home}/config.json`, JSON.stringify(cfg));
+  const pendingBatches: Inbound[][] = [];
+  const posted: any[] = [];
+  const app = main(`${home}/config.json`, {
+    intake: { next: async () => pendingBatches.shift() ?? null },
+    post: { post: async (_t, msg) => { posted.push(msg); return `approval-${posted.length}`; } },
+    xmsg: { send: async () => "configured-k8s-message" },
+  });
+  const thread = "captured-k8s";
+  const call = async (request: unknown) => JSON.parse(((await app.supervisor.command(thread, {
+    type: "host", title: BRIDGE, placeholder: JSON.stringify({ method: "eval", arg: request }),
+  })).data as any).value);
+  try {
+    pendingBatches.push([{ thread, envelope: envelope(BOB, "evaluate my repository") }]);
+    await app.run();
+    assert.equal((await call({ repo: "owner/repo", rev: "main", attr: "ordinary", trusted: "no" })).ok.stdout_tail, "job-result");
+    assert.equal((await call({ repo: "owner/repo", rev: "main", attr: "approved", trusted: "yes" })).ok.refused, "trusted eval");
+    const target = app.store.pendingActions(thread)[0].posted_event_id;
+    assert.ok(target);
+    pendingBatches.push([{ thread, control: "approve", tier: "trusted", sender_id: ALICE, target }]);
+    await app.run();
+    assert.equal(jobs.length, 2, "ordinary and approved evals must both select the configured backend");
+    for (const job of jobs) {
+      assert.equal(job.metadata.namespace, "custom-eval");
+      assert.equal(job.metadata.labels["genie.agent/thread"], thread);
+      assert.equal(job.spec.activeDeadlineSeconds, 7);
+      const pod = job.spec.template.spec;
+      assert.equal(pod.runtimeClassName, undefined);
+      assert.equal(pod.containers[0].image, cfg.eval.kubernetes.image);
+      assert.equal(pod.containers[0].resources.limits.memory, "123456789");
+      assert.equal(pod.containers[0].resources.limits.cpu, "500m");
+      assert.equal(pod.containers[0].volumeMounts.find((m: any) => m.name === "thread-store").subPath, `owned/${thread}`);
+      assert.ok(!pod.volumes.some((v: any) => v.secret), "no implicit builder credential");
+    }
+    assert.deepEqual(jobs.map((j) => j.metadata.labels["genie.agent/tier"]), ["public", "trusted"]);
+    assert.ok(auth.length > 0 && auth.every((value) => value === `Bearer ${token}`));
+    assert.equal(app.store.read(thread)?.sender_tier, "public", "approval must not promote the thread");
+    fail = true;
+    const result = await call({ repo: "owner/repo", rev: "main", attr: "failure", trusted: "no" });
+    assert.match(result.error, /k8s createJob failed/);
+    assert.ok(!result.error.includes("upstream-sensitive-body"), "upstream failures must not echo their body");
+  } finally {
+    await app.stop(); api.closeAllConnections(); await new Promise<void>((done) => api.close(() => done()));
+  }
+});
+
+test("configured container executor mediates a real Pi write and commits its Root transcript", { timeout: 30000 }, async () => {
+  const home = mkdtempSync(`${tmp}/configured-container-`);
+  const credential = "configured-container-model-canary";
+  const model = await stubModel({ apiKey: credential });
+  writeFileSync(`${home}/model-key`, credential);
+  const cfg = JSON.parse(readFileSync(`${tmp}/config.json`, "utf8"));
+  Object.assign(cfg, {
+    stateRoot: `${home}/state`, storeRoot: `${home}/store`, s3: null,
+    mirror: { mirrorRoot: `${home}/mirrors`, worktreeRoot: `${home}/worktrees` },
+    pi: process.env.PI ?? "pi", guard: { enable: false }, broker: { guardOut: { enable: false } },
+    model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: `${home}/model-key` },
+    tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], executor: {
+      command: process.execPath, args: [new URL("../src/tier1/container-worker.ts", import.meta.url).pathname],
+      socketRoot: `${home}/sockets`, socketPath: "/run/genie/root.sock", pi: process.env.PI ?? "pi", repoRoot: process.cwd(),
+      stop: { command: process.execPath, args: ["-e", "process.exit(0)"] },
+    } },
+  });
+  // This fixture launcher maps the captured per-thread socket rather than sharing any Root files.
+  cfg.tier1.executor.args = [new URL("./fixtures/supervisor/container-launch.mjs", import.meta.url).pathname, "{socketDir}", new URL("../src/tier1/container-worker.ts", import.meta.url).pathname];
+  writeFileSync(`${home}/config.json`, JSON.stringify(cfg));
+  const batches: Inbound[][] = [];
+  const app = main(`${home}/config.json`, { intake: { next: async () => batches.shift() ?? null }, post: { post: async () => {} }, xmsg: { send: async () => "configured-worker-message" } });
+  try {
+    const thread = "configured-worker";
+    batches.push([{ thread, envelope: envelope(ALICE, JSON.stringify({ tool: "write", args: { path: "created.txt", content: "root-mediated-write" } })) }]);
+    await app.run();
+    const session = `${home}/state/${thread}/session/thread.jsonl`;
+    for (let i = 0; i < 200 && !existsSync(session); i++) await new Promise((done) => setTimeout(done, 50));
+    assert.equal(readFileSync(`${home}/worktrees/${thread}/created.txt`, "utf8"), "root-mediated-write");
+    assert.match(readFileSync(session, "utf8"), /root-mediated-write/);
+    assert.ok(model.authentications.length > 0 && model.authentications.every((v) => v === `Bearer ${credential}`));
+    assert.ok(readdirSync(`${home}/sockets`).length > 0, "Root must use configured socket volume");
+  } finally { await app.stop(); model.close(); }
+  assert.deepEqual(readdirSync(`${home}/sockets`), [], "Root stop must remove thread sockets");
+});
+
 test("oracle: one inbound line reaches pi's prompt with its tier observed", async () => {
   await inbound({ thread: "a", envelope: envelope(ALICE, "why does my module not apply?") });
   assert.ok(prompts().includes("why does my module not apply?"));
@@ -306,7 +421,7 @@ test("oracle: eval runs at the thread's tier from P2's state, never the request'
   const request = { repo: "o/r", rev: "main", attr: "x", trusted: "no" };
   assert.deepEqual((await host("p", "eval", request)).ok.stdout_tail, "42");
   await host("a", "eval", request);
-  assert.deepEqual(launches.slice(-2), [{ request, sender_tier: "public" }, { request, sender_tier: "trusted" }]);
+  assert.deepEqual(launches.slice(-2), [{ request, sender_tier: "public", thread: "p" }, { request, sender_tier: "trusted", thread: "a" }]);
 });
 
 test("oracle: a draft reply reaches Post, and a forced one reaches XmsgSend at C6's address", async () => {
@@ -660,7 +775,7 @@ test("oracle: main launches real pi against a stub model", async () => {
         if (agentDir) assert.ok(!readFileSync(`${agentDir}/models.json`, "utf8").includes(credential), "root credential reappeared in models.json");
       }
     }
-    assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted" }]);
+    assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted", thread: "real_pi" }]);
   } finally {
     await realRoot.stop();
     model.close();
@@ -932,7 +1047,7 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
 
   // Action ran once with trusted capability
   assert.equal(launches.length, launchesBefore + 1, "action must run exactly once");
-  assert.deepEqual(launches.at(-1), { request: request1, sender_tier: "trusted" });
+  assert.deepEqual(launches.at(-1), { request: request1, sender_tier: "trusted", thread });
 
   // Approver logged and result posted
   const lastPostResult = posts.at(-1);
@@ -969,7 +1084,7 @@ test("oracle: one-shot approval runs action once trusted, logs approver, posts r
     sender_id: ALICE,
   });
   assert.equal(launches.length, launchesBefore + 2, "target2 must run exactly once");
-  assert.deepEqual(launches.at(-1), { request: request2, sender_tier: "trusted" });
+  assert.deepEqual(launches.at(-1), { request: request2, sender_tier: "trusted", thread: thread2 });
   assert.equal(root.store.pendingActions(thread2).length, 0, "all pending actions consumed");
   assert.equal(root.store.read(thread2)?.sender_tier, "public", "thread tier must remain public");
 
