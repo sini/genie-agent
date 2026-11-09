@@ -123,10 +123,11 @@ test("oracle: a read-only store path is removed", async () => {
   // Control: the store as built refuses a plain recursive remove.
   const control = `${tmp}/control`;
   readOnlyStore(control);
-  assert.throws(() => rmSync(control, { recursive: true, force: true }), /EACCES/);
+  assert.throws(() => rmSync(control, { recursive: true, force: true }));
+  assert.equal(existsSync(control), true, "the read-only control must resist plain removal");
   thread("g-ro");
   await new Gc({ store, mirror, clock: new FakeClock(T0 + 97 * H), archive: async () => {} }).sweep();
-  assert.equal(existsSync(`${store.storeRoot}/g-ro`), false);
+  assert.equal(existsSync(`${store.storeRoot}/g-ro`), false, "GC must remove the read-only store path");
   assert.equal(existsSync(`${store.stateRoot}/g-ro`), false);
 });
 
