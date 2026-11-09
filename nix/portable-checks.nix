@@ -110,7 +110,7 @@ let
         cat "$TMPDIR/tap"
         [ "$rc" -eq 0 ] && grep -q '^# fail 0$' "$TMPDIR/tap" || exit 1
         ${lib.concatMapStringsSep "\n" (cell: ''
-          sed -n 's/^ok [0-9]* - //p' "$TMPDIR/tap" | grep -qxF -- ${lib.escapeShellArg cell} || {
+          sed -n 's/^ok [0-9]* - //p' "$TMPDIR/tap" | grep -xF -- ${lib.escapeShellArg cell} > /dev/null || {
             echo "missing portable cell: "${lib.escapeShellArg cell}
             exit 1
           }
