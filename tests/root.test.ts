@@ -366,6 +366,7 @@ test("configured Kubernetes backend receives ordinary and approved evals with ca
 
 test("configured container executor mediates a real Pi write and commits its Root transcript", { timeout: 30000 }, async () => {
   const home = mkdtempSync(`${tmp}/configured-container-`);
+  const socketRoot = mkdtempSync("/tmp/genie-cfg-socket-");
   const credential = "configured-container-model-canary";
   const model = await stubModel({ apiKey: credential });
   writeFileSync(`${home}/model-key`, credential);
@@ -377,7 +378,7 @@ test("configured container executor mediates a real Pi write and commits its Roo
     model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: `${home}/model-key` },
     tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [], executor: {
       command: process.execPath, args: [new URL("../src/tier1/container-worker.ts", import.meta.url).pathname],
-      socketRoot: `${home}/sockets`, socketPath: "/run/genie/root.sock", pi: process.env.PI ?? "pi", repoRoot: process.cwd(),
+      socketRoot, socketPath: "/run/genie/root.sock", pi: process.env.PI ?? "pi", repoRoot: process.cwd(),
       stop: { command: process.execPath, args: ["-e", "process.exit(0)"] },
     } },
   });
@@ -395,9 +396,10 @@ test("configured container executor mediates a real Pi write and commits its Roo
     assert.equal(readFileSync(`${home}/worktrees/${thread}/created.txt`, "utf8"), "root-mediated-write");
     assert.match(readFileSync(session, "utf8"), /root-mediated-write/);
     assert.ok(model.authentications.length > 0 && model.authentications.every((v) => v === `Bearer ${credential}`));
-    assert.ok(readdirSync(`${home}/sockets`).length > 0, "Root must use configured socket volume");
+    assert.ok(readdirSync(socketRoot).length > 0, "Root must use configured socket volume");
   } finally { await app.stop(); model.close(); }
-  assert.deepEqual(readdirSync(`${home}/sockets`), [], "Root stop must remove thread sockets");
+  assert.deepEqual(readdirSync(socketRoot), [], "Root stop must remove thread sockets");
+  rmSync(socketRoot, { recursive: true });
 });
 
 test("oracle: one inbound line reaches pi's prompt with its tier observed", async () => {
