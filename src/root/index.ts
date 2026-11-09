@@ -148,8 +148,8 @@ export interface Config {
     allowedRepos?: string[];
     guardOut?: { enable?: boolean; base?: string; model?: string; keyFile?: string };
   };
-  // E1/E4/E2.3 RunOptions; memoryMax, when set, needs a delegated cgroup per eval.
-  eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax">;
+  // Eval limits are requested from detected host adapters; unavailable enforcement is reported.
+  eval?: Pick<RunOptions, "timeoutMs" | "builders" | "memoryMax" | "bwrap">;
   experts?: Record<Tier, string>;
   xmsg?: XmsgIoOptions;
 }

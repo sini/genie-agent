@@ -41,7 +41,7 @@ class RootImageOracle(unittest.TestCase):
             str(self.ca).lstrip("/"): (b"fixture CA\n", 0o444, 0, 0),
         }
         self.members[self.binary.lstrip("/")] = (b"\x7fELFfixture", 0o555, 0, 0)
-        for command in ("pi", "bwrap", "nix", "git", "cat"):
+        for command in ("pi", "nix", "git", "cat"):
             self.members["runtime/bin/" + command] = (b"\x7fELFfixture", 0o555, 0, 0)
 
     def archive(self):
@@ -74,6 +74,11 @@ class RootImageOracle(unittest.TestCase):
     def test_complete_image(self):
         self.check()
 
+    def test_bwrap_is_not_shipped(self):
+        self.members["runtime/bin/bwrap"] = (b"\x7fELFfixture", 0o555, 0, 0)
+        with self.assertRaisesRegex(OracleError, "must not ship bwrap"):
+            self.check()
+
     def test_missing_or_altered_corpus(self):
         original = self.members["memory/MEMORY.md"]
         del self.members["memory/MEMORY.md"]
@@ -100,7 +105,7 @@ class RootImageOracle(unittest.TestCase):
                     self.check()
 
     def test_runtime_source_and_ca_presence(self):
-        for name, expected in [("runtime/bin/bwrap", "runtime missing executable"),
+        for name, expected in [("runtime/bin/git", "runtime missing executable"),
                                (str(self.source).lstrip("/") + "/main.ts", "source corpus differs"),
                                (str(self.ca).lstrip("/"), "image path missing")]:
             original = self.members.pop(name)

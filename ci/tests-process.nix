@@ -7,19 +7,20 @@
 #   nix develop ./ci --command ci --tests-process
 {
   perSystem =
-    { pkgs, ... }:
+    { pkgs, lib, ... }:
     let
-      inherit (pkgs) lib;
       src = lib.fileset.toSource {
         root = ../.;
         fileset = lib.fileset.unions [
           ../src/eval
+          ../src/isolation.ts
+          ../src/isolation-node.d.ts
           ../tests/eval.test.ts
           ../tests/fixtures/eval
         ];
       };
     in
-    {
+    lib.mkIf pkgs.stdenv.hostPlatform.isLinux {
       apps.tests-process.program = pkgs.writeShellScriptBin "tests-process" ''
         set -e
         # The tools the runner calls, declared rather than ambient, and never an evaluator.

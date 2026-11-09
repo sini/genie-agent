@@ -40,6 +40,7 @@ env:
     mirror
     nixos-module
     pr
+    portable-unit
     redactor
     state
     supervisor
@@ -52,6 +53,7 @@ env:
     root
     root-image
     root-sea
+    portable-baseline
     tier1
     tier1-bridge
     xmsg-integration
@@ -247,6 +249,8 @@ jobs:
             nix build -L --keep-going --no-link --print-out-paths "${vm_refs[@]}" | tee -a /tmp/attic-paths || rc=$?
           fi
           exit "$rc"
+      - name: Portable native baseline launch
+        run: nix run .#portable-baseline
       - name: Push to Attic cache
         if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         env:
@@ -339,3 +343,30 @@ jobs:
       - run: nix fmt -- --ci
         working-directory: ci
 
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+          extra_nix_config: |
+            max-jobs = 2
+            cores = 2
+      - name: Verify native macOS runner
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+      - name: Build portable Node root launcher
+        run: nix build -L --no-link .#packages.aarch64-darwin.genie-root-node
+      - name: Portable unit plane
+        run: nix build -L --no-link ./ci#checks.aarch64-darwin.portable-unit
+      - name: Launch root, pi and Nix without bwrap
+        run: |
+          nix build -L --no-link ./ci#checks.aarch64-darwin.portable-baseline
+          nix run .#portable-baseline

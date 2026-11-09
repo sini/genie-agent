@@ -128,7 +128,7 @@ def check_image(archive, memory, binary, runtime_path, root_source, ca_bundle):
         require(env.get("SSL_CERT_FILE") == ca_bundle and env.get("NIX_SSL_CERT_FILE") == ca_bundle, "root image CA environment differs")
         require(image.read(ca_bundle) == Path(ca_bundle).read_bytes(), "root image CA bytes differ")
         require(image.manifest(root_source) == disk_manifest(root_source), "root image source corpus differs")
-        for command in ("pi", "bwrap", "nix", "git", "cat"):
+        for command in ("pi", "nix", "git", "cat"):
             candidates = [directory + "/" + command for directory in runtime_path.split(":")]
             for candidate in candidates:
                 try:
@@ -139,6 +139,7 @@ def check_image(archive, memory, binary, runtime_path, root_source, ca_bundle):
                 break
             else:
                 raise OracleError("root runtime missing executable: " + command)
+        require(not any(name.endswith("/bin/bwrap") for name in image.files), "root image must not ship bwrap")
         for volume in cfg.get("Volumes", {}):
             name = normalized(volume)
             require(name not in ("", "memory") and not name.startswith("memory/"), "root image declares a volume masking /memory")

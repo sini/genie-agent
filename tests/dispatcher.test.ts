@@ -3,6 +3,8 @@
 // including across a dispatcher kill and a restart from the journal. Run with
 // `node --test tests/dispatcher.test.ts`.
 import { test } from "node:test";
+// These cases select the Linux expert host adapter; portable journal/lifecycle cases stay active.
+const expertHostTest = process.platform === "linux" ? test : test.skip;
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -264,7 +266,7 @@ test("the cli adapter lists agents by pane", async () => {
   assert.deepEqual(calls[0].argv, ["herdr", "--session", "public", "agent", "list"]);
 });
 
-test(
+expertHostTest(
   "oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude",
   { timeout: 30_000 },
   async () => {
@@ -351,7 +353,7 @@ test(
   },
 );
 
-test(
+expertHostTest(
   "oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair",
   { timeout: 30_000 },
   async () => {
@@ -633,7 +635,7 @@ function findHandoffPidBySock(sockPath: string): number {
   throw new Error(`could not find HANDOFF_SERVER_PY process for ${sockPath}`);
 }
 
-test(
+expertHostTest(
   "oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials",
   { timeout: 30_000 },
   async () => {
@@ -950,7 +952,7 @@ test(
   },
 );
 
-test(
+expertHostTest(
   "oracle GT3 (N1): Dispatcher.open migrates legacy configDir token ids to tier-token and escalates through CliHerdr token channel while rejecting forged invalid token ids",
   { timeout: 15_000 },
   async () => {
@@ -1308,3 +1310,23 @@ test("oracle GX1 (F5): loadJournal validates entries (after N1 migration) and GC
   del.stop();
 });
 
+
+
+test("portable dispatcher migrates legacy token references without launching an adapter", async () => {
+  const { herdr, o } = setup();
+  const first = await Dispatcher.open(o);
+  const thread = await first.escalate("legacy");
+  await first.park("legacy");
+  const configDir = thread.configDir;
+  first.journal.threads.legacy.token = configDir;
+  first.journal.tokens = { [configDir]: { state: "available" }, "other-id": { state: "available" } };
+  first.journal.threads.other = { ...first.journal.threads.legacy, token: "other-id", session: "11111111-2222-4333-8444-555555555555" };
+  first.save();
+  const starts = herdr.starts.length;
+  const reopened = await Dispatcher.open(o);
+  assert.equal(reopened.journal.threads.legacy.token, "tier-token");
+  assert.equal(reopened.journal.threads.other.token, "other-id");
+  assert.ok(!Object.hasOwn(reopened.journal.tokens, configDir));
+  assert.deepEqual(reopened.journal.tokens["tier-token"], { state: "available" });
+  assert.equal(herdr.starts.length, starts);
+});

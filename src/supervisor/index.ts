@@ -12,10 +12,15 @@ import type { Host } from "../tier1/index.ts";
 // direct child wakes up in waitpid(), and Node does not reap reparented grandchildren.
 // Killing the direct child's children first and giving the direct child a brief window to reap
 // them and exit cleanly avoids leaving zombies on PID 1.
-export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKILL" = "SIGKILL"): void {
+export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKILL" = "SIGKILL", group = false): void {
   const pid = child.pid;
+  const kill = () => {
+    if (group && pid !== undefined) {
+      try { process.kill(-pid, signal); } catch { child.kill(signal); }
+    } else child.kill(signal);
+  };
   let killedChild = false;
-  if (pid !== undefined) {
+  if (pid !== undefined && process.platform === "linux") {
     try {
       const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/);
       for (const c of children) {
@@ -32,19 +37,19 @@ export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKI
   if (killedChild) {
     const t = setTimeout(() => {
       try {
-        child.kill(signal);
+        kill();
       } catch {}
     }, 50);
     (t as unknown as { unref?: () => void }).unref?.();
   } else {
-    child.kill(signal);
+    kill();
   }
 }
 
 // How a thread's process starts, e.g. `pi --mode rpc -e <tier-1 extension> --session-dir <store>`.
 // C4's resume and P2's per-thread state change the arguments, not the supervisor. env is added
 // to the supervisor's own.
-export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string }; inheritEnv?: boolean; cleanup?: () => void | Promise<void> };
+export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string }; inheritEnv?: boolean; cwd?: string; detached?: boolean; cleanup?: () => void | Promise<void> };
 
 // The title of the RPC `input` dialog that carries a Host call from tier 1's extension
 // (src/tier1/extension.ts); the supervisor answers no other dialog.
@@ -67,6 +72,7 @@ export type Record = { type: string; id?: string; [key: string]: unknown };
 
 interface Proc {
   child: ChildProcess;
+  detached: boolean;
   pending: Map<string, { resolve(r: Record): void; reject(e: Error): void }>;
   exited: Promise<void>;
 }
@@ -112,7 +118,7 @@ export class Supervisor {
     if (!p) return;
     this.procs.delete(thread);
     p.child.stdin.end();
-    const timer = setTimeout(() => killWithChildren(p.child, "SIGKILL"), graceMs);
+    const timer = setTimeout(() => killWithChildren(p.child, "SIGKILL", p.detached), graceMs);
     await p.exited;
     clearTimeout(timer);
   }
@@ -122,14 +128,16 @@ export class Supervisor {
   }
 
   private spawn(thread: string): Proc {
-    const { command, args, env, inheritEnv, cleanup } = this.launch(thread);
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"], env: (inheritEnv === false ? env : { ...process.env, ...env }) as { [k: string]: string } });
+    const { command, args, env, inheritEnv, cleanup, cwd, detached } = this.launch(thread);
+    const child = spawn(command, args, { cwd, detached, stdio: ["pipe", "pipe", "inherit"], env: (inheritEnv === false ? env : { ...process.env, ...env }) as { [k: string]: string } });
     const pending: Proc["pending"] = new Map();
     const exited = new Promise<void>((resolve) => {
       let finished = false;
       const done = (why: string) => {
         if (finished) return;
         finished = true;
+        // The group can outlive pi itself, including an orderly EOF exit before the timer fires.
+        if (detached) killWithChildren(child, "SIGKILL", true);
         if (this.procs.get(thread)?.child === child) this.procs.delete(thread);
         for (const { reject } of pending.values()) reject(new Error(`thread ${thread}: pi ${why}`));
         pending.clear();
@@ -169,7 +177,7 @@ export class Supervisor {
         } else this.onEvent(thread, r);
       }
     });
-    const p = { child, pending, exited };
+    const p = { child, pending, exited, detached: detached ?? false };
     this.procs.set(thread, p);
     return p;
   }

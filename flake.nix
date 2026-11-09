@@ -14,6 +14,44 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       # The services run on bitstream only.
       onLinux = pkgs: nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux;
+      portableRuntimePath =
+        pkgs:
+        nixpkgs.lib.makeBinPath [
+          pkgs.pi-coding-agent
+          pkgs.nix
+          pkgs.git
+          pkgs.coreutils
+        ];
+      modelSdk =
+        pkgs:
+        "${pkgs.pi-coding-agent}/lib/node_modules/pi-monorepo/node_modules/@earendil-works/pi-ai/dist/compat.js";
+      forAllCheckSystems =
+        rootPackages: f:
+        forAllSystems (
+          pkgs:
+          let
+            allChecks = f pkgs;
+          in
+          (
+            if pkgs.stdenv.hostPlatform.isLinux then
+              allChecks
+            else
+              builtins.removeAttrs allChecks [
+                "dispatcher"
+                "tier1"
+                "tier1-bridge"
+                "eval-argv"
+                "root"
+              ]
+          )
+          // import ./nix/portable-checks.nix {
+            inherit pkgs;
+            lib = nixpkgs.lib;
+            rootPackage = rootPackages.${pkgs.stdenv.hostPlatform.system}.default;
+            modelSdk = modelSdk pkgs;
+            unitChecks = allChecks;
+          }
+        );
       # A service as a Node single executable, the path xmsg's `--svc-exe` attests (design §5.8,
       # Topology). Its blob is the bundled main, and `execArgvExtension: "none"` makes it ignore
       # NODE_OPTIONS, so the attested path runs nothing but that main.
@@ -113,13 +151,7 @@
               cp -r package.json tsconfig.json src schemas skills prompts $out/lib/genie-agent/
             '';
           };
-          runtimePath = nixpkgs.lib.makeBinPath [
-            pkgs.pi-coding-agent
-            pkgs.bubblewrap
-            pkgs.nix
-            pkgs.git
-            pkgs.coreutils
-          ];
+          runtimePath = portableRuntimePath pkgs;
           seaPkg = sea {
             name = "genie-root";
             main = "src/root/main.ts";
@@ -129,7 +161,7 @@
               ./skills
               ./prompts
             ];
-            esbuildFlags = ''--banner:js="process.env.GENIE_REPO_ROOT ??= \"${rootSrc}/lib/genie-agent\";process.env.GENIE_PI_AI = \"${pkgs.pi-coding-agent}/lib/node_modules/pi-monorepo/node_modules/@earendil-works/pi-ai/dist/compat.js\";"'';
+            esbuildFlags = ''--banner:js="process.env.GENIE_REPO_ROOT ??= \"${rootSrc}/lib/genie-agent\";process.env.GENIE_PI_AI = \"${modelSdk pkgs}\";"'';
             description = "genie-agent's tier-1 composition root, as a Node single executable";
           } pkgs;
         in
@@ -238,6 +270,15 @@
         '';
     in
     rec {
+      apps = forAllSystems (pkgs: {
+        portable-baseline = {
+          type = "app";
+          program = "${
+            self.checks.${pkgs.stdenv.hostPlatform.system}.portable-baseline.processPlane
+          }/bin/genie-agent-portable-native";
+        };
+      });
+
       packages = forAllSystems (
         pkgs:
         {
@@ -251,20 +292,39 @@
                 ./tsconfig.json
                 ./src
                 ./schemas
+                ./skills
+                ./prompts
                 ./bin
               ];
             };
-            nativeBuildInputs = [ pkgs.typescript ];
+            nativeBuildInputs = [
+              pkgs.typescript
+              pkgs.makeWrapper
+            ];
             buildPhase = "tsc -p .";
             installPhase = ''
-              mkdir -p $out/lib/genie-agent
-              cp -r package.json dist schemas $out/lib/genie-agent/
+              mkdir -p $out/lib/genie-agent $out/bin
+              cp -r package.json dist src schemas skills prompts $out/lib/genie-agent/
+              makeWrapper ${pkgs.nodejs}/bin/node $out/bin/genie-root-node \
+                --add-flags "$out/lib/genie-agent/dist/src/root/main.js" \
+                --set GENIE_REPO_ROOT "$out/lib/genie-agent" \
+                --set GENIE_PI_AI "${modelSdk pkgs}" \
+                --set-default SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
+                --set-default NIX_SSL_CERT_FILE "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" \
+                --prefix PATH : ${portableRuntimePath pkgs}
             '';
+            passthru = {
+              runtimePath = portableRuntimePath pkgs;
+              caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+            };
             meta = {
+              mainProgram = "genie-root-node";
               description = "Tiered support expert behind @genie";
               license = nixpkgs.lib.licenses.mit;
             };
           };
+
+          genie-root-node = packages.${pkgs.stdenv.hostPlatform.system}.default;
 
           # The tier-1 OCI image copies this exact output to /memory.
           operating-memory = pkgs.stdenvNoCC.mkDerivation {
@@ -323,7 +383,7 @@
         }
       );
 
-      checks = forAllSystems (
+      checks = forAllCheckSystems packages (
         pkgs:
         {
           root-image-fixtures =
@@ -558,6 +618,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/tier1
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/lifecycle
                     ./src/state
                     ./src/supervisor
@@ -692,6 +754,8 @@
                     ./src/state
                     ./src/supervisor
                     ./src/tier1
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/mirror
                     ./src/guard/verdict.ts
                     ./schemas
@@ -738,6 +802,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./tests/eval-lock.test.ts
                   ];
                 };
@@ -760,6 +826,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/state
                     ./tests/eval-cache.test.ts
                   ];
@@ -787,6 +855,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/state
                     ./src/tier1/schema.ts
                     ./schemas/eval-request.json
@@ -838,6 +908,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./schemas/eval-result.json
                     ./tests/eval-limits.test.ts
                   ];
@@ -867,6 +939,8 @@
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./tests/eval-k8s.test.ts
                   ];
                 };
@@ -1122,12 +1196,16 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
                     ./src/mirror
                     ./src/redactor
                     ./src/supervisor
                     ./src/tier1
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./schemas
                     ./tests/broker.test.ts
                   ];
@@ -1189,6 +1267,8 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
                     ./src/mirror
@@ -1225,6 +1305,8 @@
                   fileset = nixpkgs.lib.fileset.unions [
                     ./src/broker
                     ./src/eval
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/guard
                     ./src/dispatcher/xmsg.ts
                     ./src/mirror

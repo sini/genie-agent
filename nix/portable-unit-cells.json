@@ -1,0 +1,94 @@
+{
+  "tests/archive.test.ts": [
+    "oracle: close \u21d2 exactly one PUT holding all four sections, absent ones explicit, the transcript pi's session file"
+  ],
+  "tests/bank.test.ts": [
+    "HindsightWriteClient: recall and retain serialization over HTTP and fail-closed token enforcement"
+  ],
+  "tests/broker.test.ts": [
+    "oracle: a proposal that fails guard-out is not acted on"
+  ],
+  "tests/custody.test.ts": [
+    "custody: configured key and destination win over pi headers and destination",
+    "custody: Host authority belongs to the socket, and teardown closes it",
+    "custody: provider errors redact credentials and cancellation aborts upstream",
+    "custody: Anthropic API retains its own authentication and stream semantics",
+    "custody: actual packaged pi streams and round-trips a Host tool through root"
+  ],
+  "tests/delivery.test.ts": [
+    "oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered"
+  ],
+  "tests/dispatcher-gc.test.ts": [
+    "oracle 26: never parked with a message outstanding or in buffer"
+  ],
+  "tests/dispatcher.test.ts": [
+    "a first escalation launches a minted uuid under its token's config directory"
+  ],
+  "tests/distiller.test.ts": [
+    "Oracle 20 cell 1: the genie root's bank client has no retain (recall-only)"
+  ],
+  "tests/escalation.test.ts": [
+    "oracle: a forced draft sends with no \ud83d\udd0d"
+  ],
+  "tests/eval-argv.test.ts": [
+    "the untrusted argv is E1's, byte for byte, whatever builders are configured"
+  ],
+  "tests/eval-cache.test.ts": [
+    "oracle: eval-result cache keyed (repo, rev, attr, flags) runs 0 evals on second identical request"
+  ],
+  "tests/eval-k8s.test.ts": [
+    "oracle: snapshot plus property checks on the rendered Job spec"
+  ],
+  "tests/eval-limits.test.ts": [
+    "an eval cgroup's OOM count unreadable falls back to the whole cgroup's"
+  ],
+  "tests/eval-lock.test.ts": [
+    "oracle 15: two requests on one thread never overlap, and run in arrival order"
+  ],
+  "tests/gc.test.ts": [
+    "oracle: at 95 h kept, at 97 h archived and gone: state, store and worktrees, whatever the status"
+  ],
+  "tests/gist.test.ts": [
+    "oracle: a gist proposal is exactly one POST /gists with the redacted content and the Bearer token"
+  ],
+  "tests/guard-out.test.ts": [
+    "every valid verdict-out fixture parses to itself"
+  ],
+  "tests/guard-service.test.ts": [
+    "a garbage model reply is relayed as a reject with the parse-failure reason"
+  ],
+  "tests/guard.test.ts": [
+    "every valid verdict fixture parses to itself"
+  ],
+  "tests/lifecycle.test.ts": [
+    "oracle: active \u21d2 parked at 1 h \u21d2 resumed on a message with its context intact"
+  ],
+  "tests/mirror.test.ts": [
+    "oracle: two threads on one repo share one clone, each with its own worktree"
+  ],
+  "tests/portable-runtime.test.ts": [
+    "portable adapter detection requires an executed payload, not an existing binary",
+    "portable pi baseline has a private home, clean environment and an explicit isolation report",
+    "portable eval uses native paths, a clean home and no false memory enforcement",
+    "portable eval timeout terminates its owned process group",
+    "portable supervisor cleans descendants on normal and unexpected pi exit"
+  ],
+  "tests/pr.test.ts": [
+    "oracle: a pr proposal opens exactly one PR, whose body links the thread"
+  ],
+  "tests/redactor.test.ts": [
+    "redacts a truncated key block to the end of the text"
+  ],
+  "tests/root.test.ts": [
+    "oracle: one inbound line reaches pi's prompt with its tier observed"
+  ],
+  "tests/state.test.ts": [
+    "oracle: restart, then resume \u21d2 the same transcript, tier and cache"
+  ],
+  "tests/supervisor.test.ts": [
+    "oracle: a fact planted in thread A is absent from thread B; teardown of A frees A and leaves B"
+  ],
+  "tests/tier.test.ts": [
+    "oracle: a public originator \u21d2 public from its first message"
+  ]
+}

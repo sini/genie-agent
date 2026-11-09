@@ -13,7 +13,7 @@ declare module "node:child_process" {
   export function spawn(
     command: string,
     args: string[],
-    options?: { env?: Record<string, string>; stdio?: string[]; timeout?: number; killSignal?: string },
+    options?: { cwd?: string; detached?: boolean; env?: Record<string, string>; stdio?: string[]; timeout?: number; killSignal?: string },
   ): ChildProcess;
 }
 declare module "node:fs" {

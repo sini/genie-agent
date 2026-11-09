@@ -106,12 +106,35 @@ Packaged root pins the model SDK shipped with its pi dependency. Source runs res
 the configured pi executable (or an explicit `GENIE_PI_AI` module path). Selecting another pi process
 in a packaged root config does not replace its pinned generation SDK. Root forwards normalized streaming
 and tool events; disconnect or cancellation aborts upstream work. Pi cannot choose headers, credentials
-or a different destination. The current Linux launch still uses bwrap.
+or a different destination. Usable Linux bwrap adds the host jail; otherwise the portable baseline
+logs `baseline: credential custody, no OS isolation` and runs without handing credentials to pi.
 
 Custody is not OS secrecy: on a same-UID, unjailed baseline, this program can prevent its own credential
 delivery and enforce its tool/read policy. It cannot claim that arbitrary compromised native code is
 unable to inspect all files/processes owned by that UID. A separate OS user is the portable step up,
-including on macOS; baseline support follows in a separate change.
+including on macOS.
+
+## Portable root launcher
+
+`packages.<system>.genie-root-node` (also the default package) provides `genie-root-node` on Linux
+and macOS. It runs compiled JavaScript with the packaged schemas, prompts, skills and pi extension,
+and pins the same shipped model SDK used by the Linux SEA:
+
+```sh
+nix build .#genie-root-node
+./result/bin/genie-root-node --config ./genie.json
+```
+
+The wrapper supplies pi, Nix, Git and coreutils on PATH, plus immutable CA bundle defaults for TLS. It preserves the ambient PATH for optional
+host adapters. The Linux `genie-root` SEA remains available for executable attestation; the portable
+Node wrapper does not provide the SEA's executable identity guarantee. A missing jail or cgroup is
+reported as a baseline or an unenforced memory request, rather than a platform refusal. Evaluation
+keeps pure-eval and a clean environment; no restrict-eval policy is enabled by default. A cgroup
+budget covers the evaluator and its owned children, not daemon or remote builders.
+
+Run `nix run .#portable-baseline` to exercise the compiled Root/Pi launch and native Nix with
+local fixtures. CI runs this process check outside the Nix build sandbox; the
+`portable-baseline` flake check separately validates the compiled Root/Pi launch.
 
 ## Tier-1 OCI image
 
@@ -126,8 +149,8 @@ docker load < result-root-image
 ```
 
 The root image runs as `65532:65532` and enters the `genie-root` Node single
-executable. It includes the same runtime tools as the host package: `pi`,
-`bwrap`, `nix`, `git` and coreutils. `PATH`, `SSL_CERT_FILE`, `NIX_SSL_CERT_FILE`
+executable. It includes the portable runtime tools: `pi`, `nix`, `git` and coreutils.
+It does not ship bwrap; that remains an optional host adapter. `PATH`, `SSL_CERT_FILE`, `NIX_SSL_CERT_FILE`
 and `GENIE_REPO_ROOT` point to the packaged runtime, CA bundle and root source.
 Python runs only in the offline archive checks; this change adds no Python
 runtime dependency.

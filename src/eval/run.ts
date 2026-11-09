@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { BASELINE_ISOLATION, BWRAP_ISOLATION, usableBwrap } from "../isolation.ts";
 
 const threadName = /^(?!.*\.\.)[A-Za-z0-9_$!][A-Za-z0-9._:$!-]*$/;
 
@@ -39,6 +40,8 @@ export interface EvalResult {
 
 export interface RunOptions {
   timeoutMs?: number;
+  bwrap?: string;
+  onStatus?: (message: string) => void;
   // A local flake directory evaluated in place of github:<repo>/<rev>. Tests only.
   localFlake?: string;
   // Root directory of per-thread worktrees (<worktreeRoot>/<thread>/<subdir>) for worktreeSubdir evals (GC1 §2.2).
@@ -46,9 +49,7 @@ export interface RunOptions {
   // The remote builders a trusted eval builds its IFD on (design §5.3), in Nix's `builders` syntax:
   // the launcher's deployment config, never the request. Unset, a trusted eval builds in its own store.
   builders?: string;
-  // Bytes. The eval's own cgroup's memory.max, so an eval's OOM kill bounds the eval and never the runner
-  // that reports on it. It needs a cgroup per eval (below): without one the runner refuses to run rather
-  // than run the eval uncapped or capped together with itself.
+  // Bytes requested from the optional delegated cgroup adapter. Missing enforcement is reported.
   memoryMax?: number;
   // Optional CA bundle file override. Tests only.
   caBundle?: string;
@@ -373,7 +374,8 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
       throw new Error(`not a github coordinate: ${request.repo ?? ""}/${request.rev ?? ""}`);
     }
   }
-  const flakeRef = boundFlake ? "path:/src" : `github:${request.repo}/${request.rev}`;
+  const bwrapBin = usableBwrap(options.bwrap, ["--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"]);
+  const flakeRef = boundFlake ? (bwrapBin ? "path:/src" : `path:${encodeURI(resolve(boundFlake)).replaceAll("#", "%23").replaceAll("?", "%3F")}`) : `github:${request.repo}/${request.rev}`;
   const nix = which("nix");
   const caBundle = resolveCaBundle(options.caBundle);
   const resolveEtc = (p: string): string => {
@@ -395,7 +397,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
   // The bwrap jail already isolates user/pid/ipc/uts/mount namespaces; disable Nix's inner
   // CLONE_NEWUSER build sandbox so local IFD builds do not write /proc/<inner_pid>/uid_map
   // against the outer-namespace /proc bind mount.
-  writeFileSync(`${tmp}/conf/nix.conf`, "sandbox = false\n");
+  if (bwrapBin) writeFileSync(`${tmp}/conf/nix.conf`, "sandbox = false\n");
   if (request.secrets === "stub") {
     const secretsDir = `${tmp}/secrets`;
     mkdirSync(secretsDir);
@@ -413,34 +415,50 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     localFlake: boundFlake,
     builders: options.builders,
   });
-  const cg = evalCgroup();
+  let cg = evalCgroup();
+  if (options.memoryMax !== undefined && cg) {
+    try { writeFileSync(`${cg}/memory.max`, String(options.memoryMax)); } catch {
+      try { rmdirSync(cg); } catch {}
+      cg = null;
+    }
+  }
+  const report = options.onStatus ?? console.error;
+  report(bwrapBin ? BWRAP_ISOLATION : BASELINE_ISOLATION);
+  if (options.memoryMax !== undefined) report(`memory: requested=${options.memoryMax}, enforced=${cg ? options.memoryMax : "none (no delegated cgroup)"}, scope=evaluator and owned children; daemon/remote builders excluded`);
   // The whole cgroup's count: the only one without an eval cgroup, and the fallback when systemd takes
   // back the controllers of a cgroup it writes but never delegated, which removes the eval's memory.events.
   const whole = cg ? cgroupParent : null;
-  const oomBefore = oomKills(whole);
+  const oomBefore = cg ? oomKills(whole) : -1;
   try {
-    if (options.memoryMax !== undefined) {
-      if (!cg) throw new Error("memoryMax needs a cgroup per eval, and this runner's cgroup is not delegated to it");
-      writeFileSync(`${cg}/memory.max`, String(options.memoryMax));
-    }
     // In its own cgroup, bwrap is moved there before it runs, so every process of the eval is in it.
+    const target = bwrapBin ?? nix;
+    const targetArgs = bwrapBin ? bwrap : nixArgv(launch, flakeRef, options.builders);
     const [command, args] = cg
-      ? [which("sh"), ["-c", 'echo 0 > "$0/cgroup.procs" && exec "$@"', cg, which("env", false), "-u", "SHLVL", which("bwrap"), ...bwrap]]
-      : [which("bwrap"), bwrap];
+      ? [which("sh"), ["-c", 'echo 0 > "$0/cgroup.procs" && exec "$@"', cg, which("env", false), "-u", "SHLVL", target, ...targetArgs]]
+      : [target, targetArgs];
+    const environment = bwrapBin ? { ...JAIL_ENV, NIX_SSL_CERT_FILE: caBundle } : {
+      HOME: `${tmp}/home`, XDG_CACHE_HOME: `${tmp}/cache`, XDG_CONFIG_HOME: `${tmp}/config`, XDG_STATE_HOME: `${tmp}/state`,
+      NIX_PATH: "", NIX_CONF_DIR: `${tmp}/conf`, NIX_SSL_CERT_FILE: caBundle,
+    };
+    for (const dir of ["home", "cache", "config", "state"]) mkdirSync(`${tmp}/${dir}`, { recursive: true, mode: 0o700 });
     return await new Promise<EvalResult>((resolve, reject) => {
       const child = spawn(command, args, {
-        env: {
-          ...JAIL_ENV,
-          NIX_SSL_CERT_FILE: caBundle,
-        },
+        env: environment,
+        cwd: bwrapBin ? undefined : tmp,
+        detached: !bwrapBin,
         stdio: ["ignore", "pipe", "pipe"],
       });
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
         const pid = child.pid;
+        const kill = () => {
+          if (!bwrapBin && pid !== undefined) {
+            try { process.kill(-pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+          } else child.kill("SIGKILL");
+        };
         let killedChild = false;
-        if (pid !== undefined) {
+        if (pid !== undefined && process.platform === "linux") {
           try {
             const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/);
             for (const c of children) {
@@ -457,12 +475,12 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
         if (killedChild) {
           const t = setTimeout(() => {
             try {
-              child.kill("SIGKILL");
+              kill();
             } catch {}
           }, 50);
           (t as unknown as { unref?: () => void }).unref?.();
         } else {
-          child.kill("SIGKILL");
+          kill();
         }
       }, options.timeoutMs ?? 120_000);
       let stdout = "";
@@ -480,12 +498,12 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
         // bwrap reports a command killed by SIGKILL as 128 + 9.
         const sigkilled = timedOut || signal === "SIGKILL" || code === 137;
         const evalOoms = cg ? oomKills(cg) : -1;
-        const oomAfter = oomKills(whole);
+        const oomAfter = cg ? oomKills(whole) : -1;
         const limit_hit = limitHit({
           // Only this runner's own timeout sets `timedOut`; a kill from anywhere else leaves it false.
           deadline: timedOut,
           sigkilled,
-          oomKilled: oomCounted(evalOoms, oomBefore, oomAfter),
+          oomKilled: cg ? oomCounted(evalOoms, oomBefore, oomAfter) : false,
           fetchRefused: exit !== 0 && fetchRefused(stderr),
         });
         resolve({ exit, stdout_tail: stdout, stderr_tail: stderr, limit_hit });
@@ -493,7 +511,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     });
   } finally {
     // Store paths are read-only; make them writable so the store can be deleted.
-    await new Promise((r) => spawn("chmod", ["-R", "u+w", tmp]).on("close", r));
+    await new Promise((r) => spawn("chmod", ["-R", "u+w", tmp]).on("close", r).on("error", r));
     rmSync(tmp, { recursive: true, force: true });
     // ponytail: a straggler still in the cgroup leaves it behind, empty once it exits.
     try {
@@ -550,6 +568,7 @@ const oomKills = (cg?: string | null): number => {
 // cgroup the user owns but was not delegated passes too, and systemd may disable its controllers mid-eval.
 let cgroupParent: string | null | undefined;
 const evalCgroup = (): string | null => {
+  if (process.platform !== "linux") return null;
   if (cgroupParent === undefined) {
     cgroupParent = null;
     const rawOwn = existsSync("/proc/self/cgroup") ? ownCgroup() : "";

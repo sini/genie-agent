@@ -11,6 +11,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, test } from "node:test";
+const linuxHostTest = process.platform === "linux" ? test : test.skip;
 import type { XmsgSend } from "../src/escalation/index.ts";
 import { EXPERTS } from "../src/escalation/route.ts";
 import type { Launch } from "../src/eval/run.ts";
@@ -644,18 +645,20 @@ test("oracle: main launches real pi against a stub model", async () => {
     assert.ok(model.requests.length >= 2, `expected at least 2 model requests, got ${model.requests.length}`);
     assert.equal(model.requests[0]?.model, "m");
     assert.ok(model.authentications.every((auth) => auth === `Bearer ${credential}`));
-    const pids = [realRoot.supervisor.pid(thread)!];
-    for (const pid of pids) {
-      const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
-      if (children) pids.push(...children.split(/\s+/).map(Number));
-    }
-    assert.ok(pids.length >= 2, "actual pi child must be inspected");
-    for (const pid of pids) {
-      assert.ok(!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(credential), "root credential reappeared in argv");
-      const env = readFileSync(`/proc/${pid}/environ`, "utf8");
-      assert.ok(!env.includes(credential), "root credential reappeared in env");
-      const agentDir = env.split("\0").find((line) => line.startsWith("PI_CODING_AGENT_DIR="))?.split("=").slice(1).join("=");
-      if (agentDir) assert.ok(!readFileSync(`${agentDir}/models.json`, "utf8").includes(credential), "root credential reappeared in models.json");
+    if (process.platform === "linux") {
+      const pids = [realRoot.supervisor.pid(thread)!];
+      for (const pid of pids) {
+        const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
+        if (children) pids.push(...children.split(/\s+/).map(Number));
+      }
+      assert.ok(pids.length >= 2, "actual pi child must be inspected");
+      for (const pid of pids) {
+        assert.ok(!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(credential), "root credential reappeared in argv");
+        const env = readFileSync(`/proc/${pid}/environ`, "utf8");
+        assert.ok(!env.includes(credential), "root credential reappeared in env");
+        const agentDir = env.split("\0").find((line) => line.startsWith("PI_CODING_AGENT_DIR="))?.split("=").slice(1).join("=");
+        if (agentDir) assert.ok(!readFileSync(`${agentDir}/models.json`, "utf8").includes(credential), "root credential reappeared in models.json");
+      }
     }
     assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted" }]);
   } finally {
@@ -2755,7 +2758,7 @@ test("oracle GX2 (F4): Host.eval validates coordinates in schemas/eval-request.j
   await root.supervisor.teardown(th);
 });
 
-test("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED", async () => {
+linuxHostTest("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memory ro, worktree ro, session rw, agentDir ro, hiding /run/credentials, other threads' stateRoot, /run/xmsg, and parent /proc, while preserving model, web, clone, and session, and all six mutants go RED", async () => {
   const gs2Tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-gs2-root-test-`);
   const memDir = `${gs2Tmp}/memory`;
   mkdirSync(memDir, { recursive: true });
@@ -3039,7 +3042,7 @@ process.stdin.on("end", () => process.exit(0));
   }
 });
 
-test("oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies", () => {
+linuxHostTest("oracle GS2 (N3): bwrap is PID 1 in both tier1Launch and runEval jails (no --as-pid-1), and SIGKILL teardown when node is PID 1 leaves 0 zombies", () => {
   const n3Script = `${tmp}/gs2-n3-reap.mjs`;
   writeFileSync(
     n3Script,

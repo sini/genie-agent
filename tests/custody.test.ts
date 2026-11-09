@@ -151,15 +151,17 @@ test("custody: actual packaged pi streams and round-trips a Host tool through ro
     assert.ok(hosts.includes('A:recall:"custody"'), JSON.stringify((await s.command("A", { type: "get_messages" })).data?.messages?.filter((m: any) => m.role === "assistant")));
     assert.ok(model.requests.length >= 2, "real pi did not complete tool round trip");
     assert.ok(model.authentications.every((a) => a === `Bearer ${key}`));
-    const pids = [s.pid("A")!];
-    for (const pid of pids) {
-      const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
-      if (children) pids.push(...children.split(/\s+/).map(Number));
-    }
-    assert.ok(pids.length >= 2, "must inspect actual pi beyond bwrap");
-    for (const pid of pids) {
-      assert.ok(!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(key), "actual child argv contains credential");
-      assert.ok(!readFileSync(`/proc/${pid}/environ`, "utf8").includes(key), "actual child env contains credential");
+    if (process.platform === "linux") {
+      const pids = [s.pid("A")!];
+      for (const pid of pids) {
+        const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
+        if (children) pids.push(...children.split(/\s+/).map(Number));
+      }
+      assert.ok(pids.length >= 2, "must inspect actual pi beyond bwrap");
+      for (const pid of pids) {
+        assert.ok(!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(key), "actual child argv contains credential");
+        assert.ok(!readFileSync(`/proc/${pid}/environ`, "utf8").includes(key), "actual child env contains credential");
+      }
     }
     assert.ok(JSON.stringify((await s.command("A", { type: "get_messages" })).data).includes("done"));
     const credentialFile = `${tmp}/root-key`;

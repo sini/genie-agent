@@ -3,8 +3,9 @@
 // a skill's path for the model to `read`, and C1 confines `read` to worktrees, so each body goes in
 // through `--append-system-prompt` instead. pi's own discovery of extensions, skills, prompt
 // templates and context files is off.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { BASELINE_ISOLATION, BWRAP_ISOLATION, usableBwrap } from "../isolation.ts";
 import { checkThread } from "../state/index.ts";
 import type { Launch } from "../supervisor/index.ts";
 import { CONFIG_ENV } from "./extension.ts";
@@ -143,6 +144,7 @@ export function tier1Launch(o: {
   env?: Record<string, string>;
   // Per-thread bwrap sandbox configuration (GS2 / XA5-F1).
   sandbox?: PiSandbox;
+  onStatus?: (message: string) => void;
   custody?: (thread: string) => CustodyConfig & { cleanup?: () => void | Promise<void> };
 }): Launch {
   const appendPrompts = [skillsPrompt()];
@@ -194,7 +196,7 @@ export function tier1Launch(o: {
         process.env.PI_CODING_AGENT_DIR ??
         `${(fallbackSbRoot ??= mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-tier1-sb-`))}/agent`,
     );
-    const bwrapBin = whichBin(sb.bwrap ?? "bwrap");
+    const bwrapBin = usableBwrap(sb.bwrap);
     const piBin = whichBin(o.pi);
     const memRoot = sb.memoryRoot ?? cfg.memoryRoot ?? (o.memoryPath ? dirname(o.memoryPath) : undefined);
 
@@ -273,11 +275,31 @@ export function tier1Launch(o: {
       ...extraArgs,
       ...apiKeyArgs,
     ];
+    const home = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-home-`);
+    const cleanEnv = {
+      PATH: process.env.PATH ?? "/bin:/usr/bin", HOME: home,
+      XDG_CONFIG_HOME: `${home}/config`, XDG_CACHE_HOME: `${home}/cache`, XDG_STATE_HOME: `${home}/state`,
+      ...(process.env.PI_RECORD ? { PI_RECORD: process.env.PI_RECORD } : {}),
+      ...(process.env.PI_SETTLE ? { PI_SETTLE: process.env.PI_SETTLE } : {}),
+      ...(custodyJson ? { [CUSTODY_ENV]: custodyJson } : {}),
+      [CONFIG_ENV]: cfgJson, PI_CODING_AGENT_DIR: agentDir,
+      PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
+      ...(caBundle ? { SSL_CERT_FILE: caBundle, NIX_SSL_CERT_FILE: caBundle } : {}),
+      ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}),
+      ...(process.env.GENIE_REPO_ROOT ? { GENIE_REPO_ROOT: process.env.GENIE_REPO_ROOT } : {}),
+      ...(o.env ?? {}),
+    };
+    (o.onStatus ?? console.error)(bwrapBin ? BWRAP_ISOLATION : BASELINE_ISOLATION);
+    if (!bwrapBin) return {
+      command: piBin, args: [...fixed, ...extraArgs, ...apiKeyArgs], env: cleanEnv,
+      inheritEnv: false, cwd: threadWorktree, detached: true,
+      cleanup: async () => { try { await custody?.cleanup?.(); } finally { rmSync(home, { recursive: true, force: true }); } },
+    };
     return {
       command: bwrapBin,
       args: bwrapArgs,
       inheritEnv: false,
-      cleanup: custody?.cleanup,
+      cleanup: async () => { try { await custody?.cleanup?.(); } finally { rmSync(home, { recursive: true, force: true }); } },
       env: {
         PATH: process.env.PATH ?? "/bin:/usr/bin",
         ...(process.env.PI_RECORD ? { PI_RECORD: process.env.PI_RECORD } : {}),
