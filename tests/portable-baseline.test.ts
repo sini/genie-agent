@@ -59,10 +59,11 @@ test("portable baseline: native Nix evaluates with pure mode and a clean environ
   for (const [name, bin] of [["nix", nix], ["chmod", executable("chmod")!], ["sh", executable("sh")!], ["env", executable("env")!]]) symlinkSync(bin, `${dir}/bin/${name}`);
   const flake = `${dir}/flake #?%`; mkdirSync(flake);
   writeFileSync(`${flake}/flake.nix`, '{ outputs = _: { value = 42; home = builtins.getEnv "ROOT_ONLY_CREDENTIAL"; }; }');
+  const linked = `${dir}/linked-source`; symlinkSync(dir, linked);
   const previous = process.env.PATH; process.env.PATH = `${dir}/bin`; process.env.ROOT_ONLY_CREDENTIAL = "must-not-be-in-eval";
   const reports: string[] = [];
   try {
-    const result = await runEval({ sender_tier: "public", request: { attr: "value", trusted: "no" } }, { localFlake: relative(process.cwd(), flake), onStatus: s => reports.push(s), memoryMax: 256 * 1024 * 1024 });
+    const result = await runEval({ sender_tier: "public", request: { attr: "value", trusted: "no" } }, { localFlake: relative(process.cwd(), `${linked}/flake #?%`), onStatus: s => reports.push(s), memoryMax: 256 * 1024 * 1024 });
     assert.equal(result.exit, 0, result.stderr_tail); assert.equal(result.stdout_tail.trim(), "42");
     const pure = await runEval({ sender_tier: "public", request: { attr: "home", trusted: "no" } }, { localFlake: flake, onStatus: s => reports.push(s) });
     assert.equal(pure.exit, 0, pure.stderr_tail); assert.equal(pure.stdout_tail.trim(), '""');

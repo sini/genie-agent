@@ -33,7 +33,7 @@ test("portable pi baseline has a private home, clean environment and an explicit
 
 test("portable eval uses native paths, a clean home and no false memory enforcement", async () => {
   const { runEval } = await import("../src/eval/run.ts");
-  const { symlinkSync, mkdirSync, readFileSync } = await import("node:fs");
+  const { symlinkSync, mkdirSync, readFileSync, realpathSync } = await import("node:fs");
   const reports: string[] = [];
   const bin = `${tmp}/bin`, flake = `${tmp}/flake`;
   mkdirSync(bin); mkdirSync(flake);
@@ -51,7 +51,7 @@ test("portable eval uses native paths, a clean home and no false memory enforcem
     assert.equal(result.exit, 0);
     assert.equal(result.stdout_tail, "42");
     const observed = JSON.parse(readFileSync(record, "utf8"));
-    assert.ok(observed.argv.includes(`path:${flake}#value`));
+    assert.ok(observed.argv.includes(`path:${realpathSync(flake)}#value`));
     assert.equal(observed.env.ROOT_ONLY_CREDENTIAL, undefined);
     assert.equal(observed.env.NIX_PATH, "");
     assert.notEqual(observed.env.HOME, "/work/home");

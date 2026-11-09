@@ -375,7 +375,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     }
   }
   const bwrapBin = usableBwrap(options.bwrap, ["--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"]);
-  const flakeRef = boundFlake ? (bwrapBin ? "path:/src" : `path:${encodeURI(resolve(boundFlake)).replaceAll("#", "%23").replaceAll("?", "%3F")}`) : `github:${request.repo}/${request.rev}`;
+  const flakeRef = boundFlake ? (bwrapBin ? "path:/src" : `path:${encodeURI(realpathSync(resolve(boundFlake))).replaceAll("#", "%23").replaceAll("?", "%3F")}`) : `github:${request.repo}/${request.rev}`;
   const nix = which("nix");
   const caBundle = resolveCaBundle(options.caBundle);
   const resolveEtc = (p: string): string => {
