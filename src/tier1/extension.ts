@@ -3,6 +3,7 @@
 // stdin, so the supervisor takes the thread from the pipes it arrived on. Nothing sent here names
 // the thread.
 import { BRIDGE, METHODS } from "../supervisor/index.ts";
+import { CUSTODY_ENV, type CustodyConfig, hostCall, modelStream } from "./socket.ts";
 import { type Config, type Host, type Pi, tier1 } from "./index.ts";
 
 // The env var `launch` puts the thread's Config in.
@@ -29,7 +30,16 @@ export default function (pi: Pi): void {
   pi.on("session_start", async (_e, ctx) => {
     ui = ctx.ui;
   });
-  const host = bridge(() => {
+  const custody = process.env[CUSTODY_ENV] ? JSON.parse(process.env[CUSTODY_ENV]!) as CustodyConfig : undefined;
+  if (custody) {
+    if (!pi.registerProvider) throw new Error("pi does not support root model custody");
+    pi.registerProvider("genie", {
+      ...custody.model, apiKey: "root-custody-placeholder",
+      models: [{ id: custody.model.id, name: custody.model.id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 16384 }],
+      streamSimple: (model: any, context: unknown, options: any) => modelStream(custody.socket, model, context, options),
+    });
+  }
+  const host = custody ? Object.fromEntries(METHODS.map((name) => [name, (arg: unknown) => hostCall(custody.socket, name, arg)])) as unknown as Host : bridge(() => {
     if (!ui) throw new Error("no session yet");
     return ui.input;
   });

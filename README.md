@@ -94,6 +94,25 @@ The boundary is enforced across process and credential boundaries:
 
 Note: The boundary only holds if the live Hindsight API requires the write token (`Authorization: Bearer <token>`). If it accepts unauthenticated writes today, that is a deployment gap for the owner, not something to fix in code.
 
+## Tier-1 credential custody
+
+Root owns model and broker credentials. Each thread gets its own Unix socket; the socket binds Host
+operations to that thread, and root chooses the configured model API, destination and authentication.
+Pi receives public model metadata and a fixed nonsecret SDK presence placeholder, never the model key
+in argv, environment or models.json. Put credential files outside every exported root, including state, worktrees, memory, application
+source and runtime paths. Startup checks the same read-only bind list that constructs the jail. The evaluation harness uses the same root-mediated model path.
+
+Packaged root pins the model SDK shipped with its pi dependency. Source runs resolve the SDK from
+the configured pi executable (or an explicit `GENIE_PI_AI` module path). Selecting another pi process
+in a packaged root config does not replace its pinned generation SDK. Root forwards normalized streaming
+and tool events; disconnect or cancellation aborts upstream work. Pi cannot choose headers, credentials
+or a different destination. The current Linux launch still uses bwrap.
+
+Custody is not OS secrecy: on a same-UID, unjailed baseline, this program can prevent its own credential
+delivery and enforce its tool/read policy. It cannot claim that arbitrary compromised native code is
+unable to inspect all files/processes owned by that UID. A separate OS user is the portable step up,
+including on macOS; baseline support follows in a separate change.
+
 ## Tier-1 OCI image
 
 `packages.<linux>.root-image` builds `ghcr.io/sini/genie-root`. The existing

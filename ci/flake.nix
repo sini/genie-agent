@@ -103,6 +103,7 @@
                       export XMSG_BIN="${xmsgNoCheck}/bin/xmsg"
                       export GENIE_GUARD_BIN="${genie-agent.packages.${system}.genie-guard}/bin/genie-guard"
                       export GENIE_ROOT_BIN="${genie-agent.packages.${system}.genie-root}/bin/genie-root"
+                      export PI="${nixpkgs.lib.getExe pkgs.pi-coding-agent}"
                       rc=0
                       node --test --test-force-exit --test-reporter=tap tests/integration/xmsg.test.ts > $TMPDIR/tap || rc=$?
                       cat $TMPDIR/tap

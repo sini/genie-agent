@@ -44,7 +44,7 @@ export function killWithChildren(child: ChildProcess, signal: "SIGTERM" | "SIGKI
 // How a thread's process starts, e.g. `pi --mode rpc -e <tier-1 extension> --session-dir <store>`.
 // C4's resume and P2's per-thread state change the arguments, not the supervisor. env is added
 // to the supervisor's own.
-export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string } };
+export type Launch = (thread: string) => { command: string; args: string[]; env?: { [k: string]: string }; inheritEnv?: boolean; cleanup?: () => void | Promise<void> };
 
 // The title of the RPC `input` dialog that carries a Host call from tier 1's extension
 // (src/tier1/extension.ts); the supervisor answers no other dialog.
@@ -122,15 +122,18 @@ export class Supervisor {
   }
 
   private spawn(thread: string): Proc {
-    const { command, args, env } = this.launch(thread);
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...env } as { [k: string]: string } });
+    const { command, args, env, inheritEnv, cleanup } = this.launch(thread);
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"], env: (inheritEnv === false ? env : { ...process.env, ...env }) as { [k: string]: string } });
     const pending: Proc["pending"] = new Map();
     const exited = new Promise<void>((resolve) => {
+      let finished = false;
       const done = (why: string) => {
+        if (finished) return;
+        finished = true;
         if (this.procs.get(thread)?.child === child) this.procs.delete(thread);
         for (const { reject } of pending.values()) reject(new Error(`thread ${thread}: pi ${why}`));
         pending.clear();
-        resolve();
+        void Promise.resolve().then(() => cleanup?.()).then(resolve, resolve);
       };
       child.on("error", (err) => done(`failed: ${err.message}`));
       child.on("exit", (code, signal) => done(`exited (${signal ?? code})`));

@@ -129,7 +129,7 @@
               ./skills
               ./prompts
             ];
-            esbuildFlags = ''--banner:js="process.env.GENIE_REPO_ROOT ??= \"${rootSrc}/lib/genie-agent\";"'';
+            esbuildFlags = ''--banner:js="process.env.GENIE_REPO_ROOT ??= \"${rootSrc}/lib/genie-agent\";process.env.GENIE_PI_AI = \"${pkgs.pi-coding-agent}/lib/node_modules/pi-monorepo/node_modules/@earendil-works/pi-ai/dist/compat.js\";"'';
             description = "genie-agent's tier-1 composition root, as a Node single executable";
           } pkgs;
         in
@@ -697,6 +697,7 @@
                     ./schemas
                     ./skills
                     ./prompts/tier1.md
+                    ./tests/custody.test.ts
                     ./tests/tier1-bridge.test.ts
                     ./tests/fixtures/supervisor
                   ];
@@ -706,7 +707,7 @@
                 cd $src
                 export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/tier1-bridge.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/tier1-bridge.test.ts tests/custody.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q "^ok [0-9]* - oracle: a tool call in thread A reaches the supervisor's Host as A and its result returns to the tool; B's as B$" $TMPDIR/tap && grep -q "^ok [0-9]* - oracle: the launched system prompt carries tier 1's prompt and every skill's body$" $TMPDIR/tap && grep -q '^ok [0-9]* - a Host call that names another thread is attributed to the thread whose pipes carried it$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 for cell in \
@@ -716,6 +717,15 @@
                   "a page the guard is unavailable for is withheld from tier 1's context"; do
                   sed -n 's/^ok [0-9]* - oracle: //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing cell: $cell"; exit 1; }
                 done
+                for cell in \
+                  "custody: configured key and destination win over pi headers and destination" \
+                  "custody: Host authority belongs to the socket, and teardown closes it" \
+                  "custody: provider errors redact credentials and cancellation aborts upstream" \
+                  "custody: Anthropic API retains its own authentication and stream semantics" \
+                  "custody: actual packaged pi streams and round-trips a Host tool through root"; do
+                  sed -n 's/^ok [0-9]* - //p' $TMPDIR/tap | grep -qxF -- "$cell" || { echo "missing custody cell: $cell"; exit 1; }
+                done
+                grep -q '^# skipped 0$' $TMPDIR/tap || exit 1
                 touch $out
               '';
           # The per-thread eval lock (design oracle 15): one eval in flight per thread, threads overlap,

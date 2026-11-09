@@ -8,6 +8,7 @@ import { dirname, resolve } from "node:path";
 import { checkThread } from "../state/index.ts";
 import type { Launch } from "../supervisor/index.ts";
 import { CONFIG_ENV } from "./extension.ts";
+import { CUSTODY_ENV, type CustodyConfig } from "./socket.ts";
 import { type Config, memoryPrompt } from "./index.ts";
 
 export { memoryPrompt };
@@ -69,10 +70,33 @@ const repo = process.env.GENIE_REPO_ROOT
     ? new URL("../../", import.meta.url)
     : pathToFileURL(`${process.cwd()}/`);
 
+type ReadOnlyBind = [flag: string, source: string, destination: string];
+
+// The credential preflight and actual jail consume this same export list.
+export function tier1ReadOnlyBinds(o: { pi: string; prompt?: string; memoryRoot?: string; agentDir?: string }): { system: ReadOnlyBind[]; application: ReadOnlyBind[] } {
+  const repoDir = new URL(".", repo).pathname.replace(/\/+$/, "");
+  const piBin = whichBin(o.pi);
+  const systemPromptPath = o.prompt ?? new URL("prompts/tier1.md", repo).pathname;
+  const system: ReadOnlyBind[] = [["--ro-bind", "/nix/store", "/nix/store"]];
+  for (const source of ["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"]) {
+    const actual = resolveReal(source);
+    if (actual) system.push(["--ro-bind-try", actual, source]);
+  }
+  const caBundle = resolveCaFile();
+  if (caBundle) for (const destination of [caBundle, "/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/certs/ca-bundle.crt"]) system.push(["--ro-bind-try", caBundle, destination]);
+  for (const source of ["/bin", "/usr", "/lib", "/lib64"]) system.push(["--ro-bind-try", source, source]);
+  const application: ReadOnlyBind[] = [];
+  if (o.memoryRoot && existsSync(o.memoryRoot)) application.push(["--ro-bind", o.memoryRoot, o.memoryRoot]);
+  if (repoDir && !repoDir.startsWith("/nix/store/") && existsSync(repoDir)) application.push(["--ro-bind", repoDir, repoDir]);
+  if (piBin.startsWith("/") && !piBin.startsWith("/nix/store/") && (!repoDir || !piBin.startsWith(`${repoDir}/`)) && existsSync(piBin)) application.push(["--ro-bind", piBin, piBin]);
+  if (systemPromptPath.startsWith("/") && !systemPromptPath.startsWith("/nix/store/") && (!repoDir || !systemPromptPath.startsWith(`${repoDir}/`)) && (!o.agentDir || !systemPromptPath.startsWith(`${o.agentDir}/`)) && existsSync(systemPromptPath)) application.push(["--ro-bind", systemPromptPath, systemPromptPath]);
+  return { system, application };
+}
+
 // Write pi's models.json into agentDir so production and eval share identical provider/model defaults.
 export function writePiModelsJson(
   agentDir: string,
-  model: { baseUrl: string; api?: string; apiKey?: string; id: string },
+  model: { baseUrl: string; api?: string; id: string },
 ): void {
   writeFileSync(
     `${agentDir}/models.json`,
@@ -81,7 +105,7 @@ export function writePiModelsJson(
         genie: {
           baseUrl: model.baseUrl,
           api: model.api ?? "openai-completions",
-          apiKey: model.apiKey || "stub",
+          apiKey: "root-custody-placeholder",
           models: [{ id: model.id }],
         },
       },
@@ -119,6 +143,7 @@ export function tier1Launch(o: {
   env?: Record<string, string>;
   // Per-thread bwrap sandbox configuration (GS2 / XA5-F1).
   sandbox?: PiSandbox;
+  custody?: (thread: string) => CustodyConfig & { cleanup?: () => void | Promise<void> };
 }): Launch {
   const appendPrompts = [skillsPrompt()];
   if (o.memory) {
@@ -127,7 +152,6 @@ export function tier1Launch(o: {
   if (o.screened === false) {
     appendPrompts.push(UNSCREENED_PROMPT);
   }
-  const repoDir = new URL(".", repo).pathname.replace(/\/+$/, "");
   const systemPromptPath = o.prompt ?? new URL("prompts/tier1.md", repo).pathname;
   const fixed = [
     "--mode", "rpc",
@@ -178,25 +202,14 @@ export function tier1Launch(o: {
     mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 
-    const apiKeyArgs: string[] = [];
-    if (extraArgs.includes("--model") && !extraArgs.includes("--api-key")) {
-      let apiKey = "stub";
-      try {
-        const parsedModels = JSON.parse(readFileSync(`${agentDir}/models.json`, "utf8"));
-        const modelArg = extraArgs[extraArgs.indexOf("--model") + 1] ?? "";
-        const prov = modelArg.split("/")[0] || "genie";
-        const configuredKey = parsedModels?.providers?.[prov]?.apiKey;
-        if (typeof configuredKey === "string" && configuredKey.length > 0) {
-          apiKey = configuredKey;
-        }
-      } catch {}
-      apiKeyArgs.push("--api-key", apiKey);
-    }
+    const apiKeyArgs: string[] = ["--api-key", "root-custody-placeholder"];
+    const custody = o.custody?.(thread);
+    if (custody) writePiModelsJson(agentDir, custody.model);
+    const custodyJson = custody && JSON.stringify(custody);
+    const socketDir = custody && dirname(custody.socket);
 
-    const resolvConf = resolveReal("/etc/resolv.conf");
-    const etcHosts = resolveReal("/etc/hosts");
-    const nsswitchConf = resolveReal("/etc/nsswitch.conf");
     const caBundle = resolveCaFile();
+    const exports = tier1ReadOnlyBinds({ pi: o.pi, prompt: systemPromptPath, memoryRoot: memRoot, agentDir });
 
     // /tmp is already a private tmpfs below; masking it again (and remounting it read-only) would
     // only take pi's scratch space away.
@@ -217,21 +230,7 @@ export function tier1Launch(o: {
       "--new-session",
       "--unshare-user",
       "--unshare-pid",
-      "--ro-bind", "/nix/store", "/nix/store",
-      ...(resolvConf ? ["--ro-bind-try", resolvConf, "/etc/resolv.conf"] : []),
-      ...(etcHosts ? ["--ro-bind-try", etcHosts, "/etc/hosts"] : []),
-      ...(nsswitchConf ? ["--ro-bind-try", nsswitchConf, "/etc/nsswitch.conf"] : []),
-      ...(caBundle
-        ? [
-            "--ro-bind-try", caBundle, caBundle,
-            "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-certificates.crt",
-            "--ro-bind-try", caBundle, "/etc/ssl/certs/ca-bundle.crt",
-          ]
-        : []),
-      "--ro-bind-try", "/bin", "/bin",
-      "--ro-bind-try", "/usr", "/usr",
-      "--ro-bind-try", "/lib", "/lib",
-      "--ro-bind-try", "/lib64", "/lib64",
+      ...exports.system.flat(),
       "--dev", "/dev",
       "--bind", "/proc", "/proc",
       "--tmpfs", "/tmp",
@@ -240,24 +239,12 @@ export function tier1Launch(o: {
         : []),
       ...(worktreeMaskFirst ? [...worktreeMask, ...stateMask] : [...stateMask, ...worktreeMask]),
       "--bind", sessionDir, sessionDir,
+      ...(socketDir ? ["--ro-bind", socketDir, socketDir] : []),
       ...(!agentDirContainsRoots
         ? ["--ro-bind", agentDir, agentDir]
         : []),
       "--bind", threadWorktree, threadWorktree,
-      ...(memRoot && existsSync(memRoot) ? ["--ro-bind", memRoot, memRoot] : []),
-      ...(repoDir && !repoDir.startsWith("/nix/store/") && existsSync(repoDir)
-        ? ["--ro-bind", repoDir, repoDir]
-        : []),
-      ...(piBin.startsWith("/") && !piBin.startsWith("/nix/store/") && (!repoDir || !piBin.startsWith(`${repoDir}/`)) && existsSync(piBin)
-        ? ["--ro-bind", piBin, piBin]
-        : []),
-      ...(systemPromptPath.startsWith("/") &&
-      !systemPromptPath.startsWith("/nix/store/") &&
-      (!repoDir || !systemPromptPath.startsWith(`${repoDir}/`)) &&
-      !systemPromptPath.startsWith(`${agentDir}/`) &&
-      existsSync(systemPromptPath)
-        ? ["--ro-bind", systemPromptPath, systemPromptPath]
-        : []),
+      ...exports.application.flat(),
       ...(separateWorktreeRoot ? ["--remount-ro", worktreeRoot] : []),
       "--remount-ro", stateRoot,
       "--clearenv",
@@ -268,6 +255,7 @@ export function tier1Launch(o: {
       "--setenv", "PI_SKIP_VERSION_CHECK", "1",
       "--setenv", "PI_TELEMETRY", "0",
       "--setenv", CONFIG_ENV, cfgJson,
+      ...(custodyJson ? ["--setenv", CUSTODY_ENV, custodyJson] : []),
       ...(caBundle
         ? [
             "--setenv", "SSL_CERT_FILE", caBundle,
@@ -288,7 +276,13 @@ export function tier1Launch(o: {
     return {
       command: bwrapBin,
       args: bwrapArgs,
+      inheritEnv: false,
+      cleanup: custody?.cleanup,
       env: {
+        PATH: process.env.PATH ?? "/bin:/usr/bin",
+        ...(process.env.PI_RECORD ? { PI_RECORD: process.env.PI_RECORD } : {}),
+        ...(process.env.PI_SETTLE ? { PI_SETTLE: process.env.PI_SETTLE } : {}),
+        ...(custodyJson ? { [CUSTODY_ENV]: custodyJson } : {}),
         [CONFIG_ENV]: cfgJson,
         PI_CODING_AGENT_DIR: agentDir,
         PI_OFFLINE: "1",

@@ -112,6 +112,7 @@ export interface ToolCall {
   input: Record<string, unknown>;
 }
 export interface Pi {
+  registerProvider?(name: string, config: any): void;
   registerTool(tool: {
     name: string;
     label: string;

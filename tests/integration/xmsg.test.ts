@@ -17,6 +17,7 @@ import process from "node:process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { stubModel } from "../fixtures/supervisor/stub-model.ts";
 import { Delivery, Dispatcher, SocketXmsg, type Inbound } from "../../src/dispatcher/index.ts";
 
 const XMSG_BIN = process.env.XMSG_BIN;
@@ -1870,6 +1871,8 @@ test(
       genie: svcExeGenie,
     });
 
+    const credential = "sea-model-test-canary";
+    const model = await stubModel({ apiKey: credential });
     let rootProc: ChildProcess | null = null;
     try {
       // 1. Before genie-root even starts, a plain `node` process (`process.execPath`) trying to
@@ -1889,10 +1892,10 @@ test(
       );
 
       // 2. Spawn the real `genie-root` SEA binary and verify it registers as `genie` on xmsg serve.
-      const piBin = join(node.dir, "fake-pi");
-      writeFileSync(piBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const piBin = process.env.PI;
+      assert.ok(piBin && existsSync(piBin), "PI must select the packaged pi for the SEA model oracle");
       const modelKey = join(node.dir, "model-key");
-      writeFileSync(modelKey, "k\n");
+      writeFileSync(modelKey, credential);
       const cfgPath = join(node.dir, "root-config.json");
       writeFileSync(
         cfgPath,
@@ -1901,7 +1904,7 @@ test(
           storeRoot: join(node.dir, "store"),
           mirror: { mirrorRoot: join(node.dir, "mirrors"), worktreeRoot: join(node.dir, "worktrees") },
           pi: piBin,
-          model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: modelKey },
+          model: { baseUrl: model.url, api: "openai-completions", id: "m", keyFile: modelKey },
           tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
           guard: { enable: false },
           broker: { guardOut: { enable: false } },
@@ -1940,9 +1943,19 @@ test(
         await sleep(25);
       }
       assert.equal(registered, true, `genie-root SEA binary must register as genie on xmsg serve (stderr: ${rootStderr})`);
+      const message = JSON.stringify({ tool: "reply", args: { answer: "SEA custody round trip", confidence: 0.99, gaps: [], escalate_forced: "no" } });
+      const forward = `[matrix] room=#support:example.org thread=$sea_custody user=alice (trusted)\n\n<request>\n${JSON.stringify({ sender: "alice", sender_id: "@alice:example.org", tier: "trusted", text: message })}\n</request>`;
+      const sent = await unixHttp(node.httpSock, "POST", "/v1/messages", { to: "genie", from: "matrix-xmsg", text: forward });
+      assert.equal(sent.status, 202, sent.body);
+      const reply = await unixHttp(node.httpSock, "GET", `/v1/messages/${encodeURIComponent(sent.json.message_id)}/replies?wait=5`);
+      assert.equal(reply.status, 200, reply.body);
+      assert.ok(Array.isArray(reply.json) && reply.json.some((item: any) => JSON.parse(item.text).text?.includes("SEA custody round trip")), `SEA model/Host round trip failed: ${reply.body}; ${rootStderr}`);
+      assert.ok(model.requests.length > 0, "packaged SEA must load its SDK and call the stub model");
+      assert.ok(model.authentications.every((value) => value === `Bearer ${credential}`), "packaged SEA must keep model authentication in root");
     } finally {
       await stopChild(rootProc);
       await node.stop();
+      model.close();
     }
   },
 );

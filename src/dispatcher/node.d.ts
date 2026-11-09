@@ -71,3 +71,21 @@ declare module "node:process" {
   };
   export default process;
 }
+
+declare module "node:module" {
+  export function createRequire(filename: string | URL): { resolve(specifier: string): string };
+}
+declare module "node:net" {
+  export interface Socket extends AsyncIterable<string> {
+    destroyed: boolean;
+    once(event: "close" | "drain", listener: () => void): void;
+    end(data?: string): void;
+  }
+  export interface Server {
+    on(event: "error", listener: (error: Error) => void): void;
+    listen(path: string): void;
+    close(callback: () => void): void;
+  }
+  export function connect(path: string): Socket;
+  export function createServer(listener: (socket: Socket) => void): Server;
+}

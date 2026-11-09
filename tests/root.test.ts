@@ -19,11 +19,13 @@ import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } fro
 import { git } from "../src/mirror/index.ts";
 import { DEADLINE_NOTICE, type Inbound, main, parseMatrixForward, REFUSAL, validateRootConfig, WITHHELD, XmsgIo } from "../src/root/index.ts";
 import { parseArgs } from "../src/root/main.ts";
+import { piAiPath } from "../src/tier1/custody.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
 import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-root-test-`);
 process.env.PI_RECORD = tmp;
+process.env.GENIE_PI_AI = piAiPath(process.env.PI ?? "pi");
 // tier1Launch runs `pi` as one executable; this one is the fake.
 const pi = `${tmp}/pi`;
 writeFileSync(pi, `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`);
@@ -582,10 +584,25 @@ test("oracle: an expired thread whose removal throws after tombstoning still res
 
 
 
+
+test("custody: root refuses credential files inside exported read roots", () => {
+  const cfg = JSON.parse(readFileSync(`${tmp}/config.json`, "utf8"));
+  const file = `${cfg.mirror.worktreeRoot}/exported-credential`;
+  mkdirSync(cfg.mirror.worktreeRoot, { recursive: true });
+  writeFileSync(file, "credential-test");
+  cfg.model.keyFile = file;
+  const config = `${tmp}/custody-invalid.json`;
+  writeFileSync(config, JSON.stringify(cfg));
+  assert.throws(() => main(config, { intake: { next: async () => null }, post: { post: async () => {} }, guard, xmsg }), /credential file must be outside tier-1 exported roots/);
+  cfg.model.keyFile = new URL("../prompts/tier1.md", import.meta.url).pathname;
+  writeFileSync(config, JSON.stringify(cfg));
+  assert.throws(() => main(config, { intake: { next: async () => null }, post: { post: async () => {} }, guard, xmsg }), /credential file must be outside tier-1 exported roots/, "source exports must not expose a configured credential");
+});
 test("oracle: main launches real pi against a stub model", async () => {
-  const model = await stubModel();
+  const credential = "root-model-test-canary";
+  const model = await stubModel({ apiKey: credential });
   const piTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-real-pi-test-`);
-  for (const f of ["model", "s3", "token"]) writeFileSync(`${piTmp}/${f}-key`, "k\n");
+  for (const f of ["model", "s3", "token"]) writeFileSync(`${piTmp}/${f}-key`, f === "model" ? credential : "k\n");
   const cfg = `${piTmp}/config.json`;
   writeFileSync(
     cfg,
@@ -626,6 +643,20 @@ test("oracle: main launches real pi against a stub model", async () => {
 
     assert.ok(model.requests.length >= 2, `expected at least 2 model requests, got ${model.requests.length}`);
     assert.equal(model.requests[0]?.model, "m");
+    assert.ok(model.authentications.every((auth) => auth === `Bearer ${credential}`));
+    const pids = [realRoot.supervisor.pid(thread)!];
+    for (const pid of pids) {
+      const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
+      if (children) pids.push(...children.split(/\s+/).map(Number));
+    }
+    assert.ok(pids.length >= 2, "actual pi child must be inspected");
+    for (const pid of pids) {
+      assert.ok(!readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(credential), "root credential reappeared in argv");
+      const env = readFileSync(`/proc/${pid}/environ`, "utf8");
+      assert.ok(!env.includes(credential), "root credential reappeared in env");
+      const agentDir = env.split("\0").find((line) => line.startsWith("PI_CODING_AGENT_DIR="))?.split("=").slice(1).join("=");
+      if (agentDir) assert.ok(!readFileSync(`${agentDir}/models.json`, "utf8").includes(credential), "root credential reappeared in models.json");
+    }
     assert.deepEqual(realLaunches, [{ request: { repo: "o/r", rev: "main", attr: "x", trusted: "no" }, sender_tier: "trusted" }]);
   } finally {
     await realRoot.stop();
@@ -2838,13 +2869,13 @@ process.stdin.on("data", async (chunk) => {
       const modelsJson = tryRead(agentDir + "/models.json");
       let modelFetchOk = false;
       if (modelsJson.ok) {
-        const parsed = JSON.parse(modelsJson.text);
-        const res = await fetch(parsed.providers.genie.baseUrl + "/chat/completions", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "m", messages: [{ role: "assistant", content: "ping" }] }),
-        });
-        modelFetchOk = res.ok;
+        const { connect } = await import("node:net");
+        const custody = JSON.parse(process.env.GENIE_CUSTODY || "{}");
+        const socket = connect(custody.socket);
+        socket.write(JSON.stringify({ method: "model", context: { messages: [{ role: "assistant", api: "openai-completions", provider: "genie", model: "m", content: [{ type: "text", text: "ping" }], timestamp: 0, stopReason: "stop", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }] } }) + "\\n");
+        let records = "";
+        for await (const chunk of socket) records += chunk;
+        modelFetchOk = records.includes('"type":"done"');
       }
       let webFetchOk = false;
       if (cfg.searxngUrl) {

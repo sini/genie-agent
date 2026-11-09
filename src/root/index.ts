@@ -8,7 +8,8 @@
 // transcript, and archived with a tier label only (C8, design §4 step 6, §5.8).
 //
 // xmsg and Matrix enter only through the seams below; GA builds their real adapters.
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
 import { gist } from "../broker/gist.ts";
@@ -54,8 +55,9 @@ import { Supervisor } from "../supervisor/index.ts";
 import { seedGuard } from "../supervisor/seed.ts";
 import type { Draft } from "../tier1/draft.ts";
 import { type GhReadRequest, ghRead } from "../tier1/github.ts";
-import type { Config as Tier1Config } from "../tier1/index.ts";
-import { tier1Launch, writePiModelsJson } from "../tier1/launch.ts";
+import type { Config as Tier1Config, Host } from "../tier1/index.ts";
+import { tier1Launch, tier1ReadOnlyBinds } from "../tier1/launch.ts";
+import { Custody, piAiPath } from "../tier1/custody.ts";
 import { errors, load } from "../tier1/schema.ts";
 import { observe, parseEnvelope, type TrustControl } from "../tier/index.ts";
 import { parseMatrixForward } from "./io.ts";
@@ -121,7 +123,7 @@ export interface Config {
   mirror: MirrorConfig;
   // The pi executable.
   pi: string;
-  // Tier 1's OpenAI-compatible model.
+  // Tier 1's configured pi model API.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
   tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string } };
   // Inbound guard-in screening switch (G11; default true).
@@ -320,6 +322,13 @@ export function main(
 ) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
+  const readOnlyBinds = tier1ReadOnlyBinds({ pi: c.pi, memoryRoot: c.tier1.memoryRoot });
+  const exportedRoots = [c.stateRoot, c.mirror.worktreeRoot, ...[...readOnlyBinds.system, ...readOnlyBinds.application].map((bind) => bind[1])].filter((p): p is string => Boolean(p)).map((p) => existsSync(p) ? realpathSync(p) : resolve(p));
+  for (const credential of [c.model.keyFile, c.broker?.tokenFile, c.broker?.guardOut?.keyFile, c.githubReadTokenFile, c.s3?.secretKeyFile]) {
+    if (!credential || !existsSync(credential)) continue;
+    const file = realpathSync(credential);
+    if (exportedRoots.some((root) => file === root || file.startsWith(`${root}/`))) throw new Error("credential file must be outside tier-1 exported roots");
+  }
   const store = new ThreadStateStore(c.stateRoot, c.storeRoot);
   const archive = c.s3 ? archiver(store, c.s3) : async () => {};
   const evalIn = withCache(
@@ -411,12 +420,17 @@ export function main(
     },
   });
 
-  // pi reads its model from its agent dir; the key goes into a file there, never argv or env.
   const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
   const { baseUrl, api, id, keyFile } = c.model;
-  writePiModelsJson(agentDir, { baseUrl, api, apiKey: secret(keyFile), id });
+  let hostForThread: (thread: string) => Host;
+  const custody = new Custody({
+    model: { baseUrl, api, id, apiKey: secret(keyFile) },
+    sdk: () => piAiPath(c.pi),
+    host: (thread) => hostForThread(thread),
+  });
   const launch = tier1Launch({
     pi: c.pi,
+    custody: (thread) => ({ socket: custody.open(thread), model: custody.publicModel, cleanup: () => custody.closeThread(thread) }),
     memory: Boolean(c.tier1.memoryRoot),
     memoryPath: c.tier1.memoryRoot ? `${c.tier1.memoryRoot}/MEMORY.md` : undefined,
     screened: guardEnable,
@@ -503,7 +517,7 @@ export function main(
         await lifecycle.event(t, r);
       }
     },
-    (t) => ({
+    (hostForThread = (t) => ({
       // The tier is the thread's, from P2's state, never the request's (E4's effectiveTier clamps it).
       // When the thread's tier refuses a capability (e.g. trusted eval on a public thread), tier 1's
       // tool result names it, the supervisor records the pending action with params fixed, and the bot
@@ -771,7 +785,7 @@ export function main(
         }
         return screen(reply);
       },
-    }),
+    })),
   );
 
   // Close archives too (design §6, "on close and on GC"). A failed archive is logged and the close
@@ -942,6 +956,7 @@ export function main(
       lifecycle.stop();
       gc.stop();
       await supervisor.shutdown();
+      await custody.close();
     },
   };
 }

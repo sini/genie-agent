@@ -12,7 +12,8 @@ import { CHECKIN_MS, type Clock, QUESTION_TIMEOUT_MS, TurnController } from "../
 import { type Record as PiRecord, Supervisor } from "../supervisor/index.ts";
 import { type Draft, draftOf, type Message } from "./draft.ts";
 import { BUILTINS, confine, type Host, memoryPrompt } from "./index.ts";
-import { skillsPrompt, tier1Launch, writePiModelsJson } from "./launch.ts";
+import { Custody, piAiPath } from "./custody.ts";
+import { skillsPrompt, tier1Launch } from "./launch.ts";
 
 export { skillsPrompt };
 
@@ -633,10 +634,12 @@ async function executePiArm(opts: PiArmOptions): Promise<{
   allRetrievalResults: MemoryRetrievalResult[];
 }> {
   const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-eval-pi-`);
-  writePiModelsJson(agentDir, {
-    baseUrl: opts.base,
-    apiKey: opts.apiKey,
-    id: opts.model,
+  const pi = opts.pi ?? process.env.PI ?? "pi";
+  let hostForThread: (thread: string) => Host;
+  const custody = new Custody({
+    model: { baseUrl: opts.base, api: "openai-completions", apiKey: opts.apiKey ?? "stub", id: opts.model },
+    sdk: () => piAiPath(pi),
+    host: (thread) => hostForThread(thread),
   });
 
   let promptPath = opts.promptTextOrPath;
@@ -647,7 +650,8 @@ async function executePiArm(opts: PiArmOptions): Promise<{
   }
 
   const launch = tier1Launch({
-    pi: opts.pi ?? process.env.PI ?? "pi",
+    pi,
+    custody: (thread) => ({ socket: custody.open(thread), model: custody.publicModel, cleanup: () => custody.closeThread(thread) }),
     agentDir,
     prompt: promptPath,
     memory: opts.memory,
@@ -740,7 +744,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
         ctx.settle();
       }
     },
-    (t): Host => ({
+    (hostForThread = (t): Host => ({
       eval: async (req) => {
         if (opts.hostOverrides?.eval) return opts.hostOverrides.eval(req);
         return { exit: 1, stdout_tail: "", stderr_tail: "eval is unavailable in this evaluation", limit_hit: "none" };
@@ -839,7 +843,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
         if (opts.hostOverrides?.gh_read) return opts.hostOverrides.gh_read(req);
         throw new Error("gh_read is unavailable in this evaluation");
       },
-    }),
+    })),
   );
 
   const runResults: RunResult[] = [];
@@ -978,6 +982,7 @@ async function executePiArm(opts: PiArmOptions): Promise<{
   } finally {
     turns.stop();
     await supervisor.shutdown();
+    await custody.close();
     rmSync(agentDir, { recursive: true, force: true });
   }
 

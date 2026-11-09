@@ -4,13 +4,16 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-export async function stubModel(): Promise<{ url: string; requests: any[]; close(): void }> {
+export async function stubModel(options: { apiKey?: string } = {}): Promise<{ url: string; requests: any[]; authentications: string[]; close(): void }> {
+  const authentications: string[] = [];
   const requests: any[] = [];
   let n = 0;
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
+      authentications.push(String(req.headers.authorization));
+      if (options.apiKey && req.headers.authorization !== `Bearer ${options.apiKey}`) { res.writeHead(401).end(); return; }
       const r = JSON.parse(body);
       requests.push(r);
       const last = r.messages.at(-1);
@@ -28,6 +31,7 @@ export async function stubModel(): Promise<{ url: string; requests: any[]; close
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
     requests,
+    authentications,
     close: () => {
       server.closeAllConnections?.();
       server.close();
