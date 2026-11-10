@@ -1807,6 +1807,7 @@
                 grep -q '^ok [0-9]* - oracle O-GP7-repair-persisted-refused-eval: context(t) drops legacy persisted refused-eval entries lacking result.exit from context.json while preserving valid EvalResult entries so pre-GP7 threads escalate cleanly$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (loadCredential adapter off): main reads configured credential files from credentialsDir and ignores decoy CREDENTIALS_DIRECTORY$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle (fail-closed credentials): main and configuredEval reject missing or empty configured credentials and skip unconfigured optional credentials$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle (M32 guard-in): all-trusted envelope skips guard-in while any public history line or public request screens the whole envelope$' $TMPDIR/tap || exit 1
                 [ "$(grep -c 'escalation\.reply(' src/root/index.ts)" -eq 1 ] && awk '/const escalateAfterPost = async/,/^  };/' src/root/index.ts | grep -q 'escalation\.reply(' || {
                   echo "guard failed: every escalation.reply call in src/root/index.ts must sit inside escalateAfterPost" >&2
                   exit 1
@@ -2000,6 +2001,22 @@
                   --replace-fail '    if (credential === null || credential === undefined) continue;' '    if (!credential || !existsSync(credential)) continue;'
                 if (cd $TMPDIR/mut-root-cred-skip && node --test --test-force-exit --test-name-pattern='oracle \(fail-closed credentials\)' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-root-skip-missing-credential survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-root-m32-req-only
+                chmod -R u+w $TMPDIR/mut-root-m32-req-only
+                substituteInPlace $TMPDIR/mut-root-m32-req-only/src/root/index.ts \
+                  --replace-fail '    history.every((l) => l.tier === "trusted")' '    history.every((l) => l.tier !== "public")'
+                if (cd $TMPDIR/mut-root-m32-req-only && node --test --test-force-exit --test-name-pattern='oracle \(M32 guard-in\)' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-root-m32-hist-not-public survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-root-m32-req-not-pub
+                chmod -R u+w $TMPDIR/mut-root-m32-req-not-pub
+                substituteInPlace $TMPDIR/mut-root-m32-req-not-pub/src/root/index.ts \
+                  --replace-fail '    content.tier === "trusted" &&' '    content.tier !== "public" &&'
+                if (cd $TMPDIR/mut-root-m32-req-not-pub && node --test --test-force-exit --test-name-pattern='oracle \(M32 guard-in\)' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-root-m32-req-not-public survived in root" >&2
                   exit 1
                 fi
                 touch $out

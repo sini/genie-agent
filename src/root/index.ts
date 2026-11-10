@@ -201,8 +201,9 @@ export const approvalRequest = approvalNotice;
 
 // guard-in on an inbound envelope (design §4 step 1): the trigger's line is the content and every
 // context line its history, in envelope order, each with its authenticated tier. Runs on every
-// inbound envelope, including fail-open forwards (`<request screened="false" note="…">`), except when
-// matrix-xmsg has already screened the request and marked the outer `<request screened="true">` tag (GAP-7, Q5).
+// inbound envelope carrying any untrusted line, including fail-open forwards (`<request screened="false" note="…">`),
+// except when matrix-xmsg has already screened the request and marked the outer `<request screened="true">` tag
+// (GAP-7, Q5) or when every line in the envelope (`content` and all `history`) carries `tier === "trusted"`.
 // The text tier 1 may see: the line on allow, the guard's cleaned_text on rewrite. Anything else refuses it.
 // When `enabled` is false (G11), passes `content.text` through unscreened without calling the guard.
 export async function guardIn(
@@ -213,6 +214,7 @@ export async function guardIn(
   const enabled = opts.enabled ?? true;
   const history: Line[] = [];
   let content: Line | undefined;
+  let headerTier: Tier | undefined;
   let inRequest = false;
   let seenRequest = false;
   let headerPreScreened = false;
@@ -226,7 +228,10 @@ export async function guardIn(
       inRequest = true;
       headerPreScreened = /\bscreened="true"/.test(l) && !/\bscreened="false"/.test(l);
     } else if (l === "</request>") inRequest = false;
-    else if (l.startsWith("{")) {
+    else if (!inRequest && l.startsWith("[matrix] ")) {
+      const hm = /^\[matrix\]\s+room=\S+\s+thread=\S+\s+user=.+\s+\((trusted|public)\)(?:\s+addressed="(?:true|false)")?$/.exec(l);
+      if (hm) headerTier = hm[1] as Tier;
+    } else if (l.startsWith("{")) {
       const { sender, tier, text } = JSON.parse(l);
       if (typeof text !== "string") throw new Error("guard-in: an envelope line without text");
       inRequest ? (content = { sender, tier, text }) : history.push({ sender, tier, text });
@@ -235,6 +240,13 @@ export async function guardIn(
   if (!content) throw new Error("guard-in: an envelope without request content");
   if (!enabled) return content.text;
   if (opts.preScreened === true || (opts.preScreened !== false && headerPreScreened)) {
+    return content.text;
+  }
+  if (
+    content.tier === "trusted" &&
+    (headerTier === undefined || headerTier === "trusted") &&
+    history.every((l) => l.tier === "trusted")
+  ) {
     return content.text;
   }
   if (!guard) throw new Error("guard-in: no verdict");

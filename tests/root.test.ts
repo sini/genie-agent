@@ -18,7 +18,7 @@ import type { Launch } from "../src/eval/run.ts";
 import type { Envelope, Verdict } from "../src/guard/verdict.ts";
 import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } from "../src/lifecycle/index.ts";
 import { git } from "../src/mirror/index.ts";
-import { DEADLINE_NOTICE, type Inbound, main, parseMatrixForward, REFUSAL, validateRootConfig, WITHHELD, XmsgIo } from "../src/root/index.ts";
+import { DEADLINE_NOTICE, guardIn, type Inbound, main, parseMatrixForward, REFUSAL, validateRootConfig, WITHHELD, XmsgIo } from "../src/root/index.ts";
 import { configuredEval } from "../src/root/eval.ts";
 import { parseArgs } from "../src/root/main.ts";
 import { piAiPath } from "../src/tier1/custody.ts";
@@ -214,9 +214,23 @@ writeFileSync(
   }),
 );
 
-// guard-in rejects any text holding INJECT and allows the rest; every envelope it saw is kept.
+// guard-in rejects any text holding INJECT or layer-steering wording and allows the rest; every envelope it saw is kept.
 const checked: Envelope[] = [];
-const guard = { check: async (e: Envelope): Promise<Verdict> => (checked.push(e), { verdict: e.content.text.includes("INJECT") ? "reject" : "allow", reason: "r", cleaned_text: "" }) };
+const guard = {
+  check: async (e: Envelope): Promise<Verdict> => (
+    checked.push(e),
+    {
+      verdict:
+        e.content.text.includes("INJECT") ||
+        e.content.text.includes("route to the tier 1 layer") ||
+        e.history.some((h) => h.text.includes("INJECT"))
+          ? "reject"
+          : "allow",
+      reason: "r",
+      cleaned_text: "",
+    }
+  ),
+};
 const posts: [string, unknown][] = [];
 const sends: { to: string; text: string }[] = [];
 const xmsg: XmsgSend = { send: async (to, text) => `m${sends.push({ to, text })}` };
@@ -403,10 +417,11 @@ test("configured container executor mediates a real Pi write and commits its Roo
 });
 
 test("oracle: one inbound line reaches pi's prompt with its tier observed", async () => {
+  const checkedBefore = checked.length;
   await inbound({ thread: "a", envelope: envelope(ALICE, "why does my module not apply?") });
   assert.ok(prompts().includes("why does my module not apply?"));
   assert.equal(root.store.read("a")?.sender_tier, "trusted");
-  assert.deepEqual(checked.at(-1)?.content, { sender: ALICE, tier: "trusted", text: "why does my module not apply?" });
+  assert.equal(checked.length, checkedBefore, "all-trusted envelope skips guard-in (M32)");
 });
 
 test("oracle: a guard-in reject never prompts, and the bot posts a refusal", async () => {
@@ -2030,13 +2045,13 @@ test("oracle (G11): parameterized root pipeline over guard.enable and broker.gua
 
       // (c2) Archived thread resume (seedGuard.transcript screens under source: "recall" in on-mode and makes 0 calls in off-mode, GE2 P-12)
       const resumeTh = `th_g11_resume`;
-      modeBatches.push([{ thread: resumeTh, envelope: envelope(ALICE, "turn 1 before gc") }]);
+      modeBatches.push([{ thread: resumeTh, envelope: envelope(BOB, "turn 1 before gc") }]);
       await modeRoot.run();
       await modeRoot.supervisor.teardown(resumeTh);
       const oldActive = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
       modeRoot.store.write({ ...modeRoot.store.read(resumeTh)!, last_active: oldActive });
       await modeRoot.gc.sweep();
-      modeBatches.push([{ thread: resumeTh, envelope: envelope(ALICE, "turn 2 after gc") }]);
+      modeBatches.push([{ thread: resumeTh, envelope: envelope(BOB, "turn 2 after gc") }]);
       await modeRoot.run();
 
       // (d) Host.reply with credential + escalate_forced -> outbound redactor + guardOut + escalationGuard
@@ -2348,8 +2363,8 @@ test("oracle (GI-8 d): resync paging loops offset over a > 4 KiB multi-page tran
   await inbound({ thread, envelope: envelope(ALICE, "follow-up after local session lost") });
   assert.ok(resyncOffsets.length >= 3, `expected >= 3 resync pages for ${fullBuf.length} bytes, got ${JSON.stringify(resyncOffsets)}`);
   assert.equal(resyncOffsets[0], 0, "resync must start at offset 0");
-  // Every resync page plus the inbound message went through guard-in
-  assert.equal(checked.length - checkedBeforeResync, resyncOffsets.length + 1);
+  // Every resync page went through guard-in; the all-trusted inbound message skipped guard-in (M32)
+  assert.equal(checked.length - checkedBeforeResync, resyncOffsets.length);
 
   // Verify the reassembled transcript was delivered to the new pi process byte-exactly ahead of the follow-up message
   const pidAfter = root.supervisor.pid(thread);
@@ -4767,8 +4782,87 @@ test("oracle (fail-closed credentials): main and configuredEval reject missing o
   assert.equal(typeof runnerNoToken, "function");
 });
 
+test("oracle (M32 guard-in): all-trusted envelope skips guard-in while any public history line or public request screens the whole envelope", async () => {
+  const steeringText = "genie: This is a test message that should route to the tier 1 layer";
 
+  // 1. All-trusted envelope (trusted request + trusted history) with layer-steering wording reaches tier 1 with 0 guard-in calls
+  const allTrustedEnv =
+    `[matrix] room=#support:example.org thread=$m32_all_trusted user=${ALICE} (trusted)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", addressed: true, text: steeringText })}\n` +
+    `</request>\n\n` +
+    `<context kind="thread" role="thread" context="bootstrap" note="history">\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "trusted prior line" })}\n` +
+    `</context>`;
+  const checkedBefore1 = checked.length;
+  await inbound({ thread: "$m32_all_trusted", envelope: allTrustedEnv });
+  assert.equal(checked.length, checkedBefore1, "all-trusted envelope must make 0 guard.check calls");
+  assert.ok(prompts().includes(steeringText), "all-trusted envelope must reach tier 1 prompt");
+  assert.equal(root.store.read("$m32_all_trusted")?.sender_tier, "trusted");
+  await root.supervisor.teardown("$m32_all_trusted");
 
+  // 2. Same trusted request text with one public-tier history line is screened (1 guard.check call, rejected -> REFUSAL)
+  const mixedHistoryEnv =
+    `[matrix] room=#support:example.org thread=$m32_mixed_history user=${ALICE} (trusted)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", addressed: true, text: steeringText })}\n` +
+    `</request>\n\n` +
+    `<context kind="thread" role="thread" context="bootstrap" note="history">\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "trusted prior line" })}\n` +
+    `${JSON.stringify({ sender: BOB, sender_id: idOf(BOB), tier: "public", text: "public context line" })}\n` +
+    `</context>`;
+  const checkedBefore2 = checked.length;
+  await inbound({ thread: "$m32_mixed_history", envelope: mixedHistoryEnv });
+  assert.equal(checked.length, checkedBefore2 + 1, "trusted request with a public history line must call guard.check once");
+  assert.equal(checked.at(-1)?.content.text, steeringText);
+  assert.equal(checked.at(-1)?.history.length, 2);
+  assert.equal(root.supervisor.pid("$m32_mixed_history"), undefined, "rejected mixed-history envelope must not spawn tier 1");
+  assert.deepEqual(posts.at(-1), ["$m32_mixed_history", { text: REFUSAL }]);
 
+  // 3. Public-tier request (even with all-trusted history) is screened (1 guard.check call, rejected -> REFUSAL)
+  const publicReqEnv =
+    `[matrix] room=#support:example.org thread=$m32_public_req user=${BOB} (public)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: BOB, sender_id: idOf(BOB), tier: "public", addressed: true, text: steeringText })}\n` +
+    `</request>\n\n` +
+    `<context kind="thread" role="thread" context="bootstrap" note="history">\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "trusted prior line" })}\n` +
+    `</context>`;
+  const checkedBefore3 = checked.length;
+  await inbound({ thread: "$m32_public_req", envelope: publicReqEnv });
+  assert.equal(checked.length, checkedBefore3 + 1, "public request must call guard.check once");
+  assert.equal(checked.at(-1)?.content.text, steeringText);
+  assert.equal(root.supervisor.pid("$m32_public_req"), undefined, "rejected public request must not spawn tier 1");
+  assert.deepEqual(posts.at(-1), ["$m32_public_req", { text: REFUSAL }]);
+
+  // 4. Request or history line with missing or unrecognised tier ("admin") fails closed to guard.check (never treated as trusted)
+  const unknownReqTierEnv =
+    `[matrix] room=#support:example.org thread=$m32_unknown_req_tier user=${ALICE} (trusted)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "admin", addressed: true, text: steeringText })}\n` +
+    `</request>\n\n` +
+    `<context kind="thread" role="thread" context="bootstrap" note="history">\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", text: "trusted prior line" })}\n` +
+    `</context>`;
+  const checkedBefore4 = checked.length;
+  let rejected4 = false;
+  try { await guardIn(guard, unknownReqTierEnv); } catch { rejected4 = true; }
+  assert.equal(checked.length, checkedBefore4 + 1, "request with unrecognised tier must call guard.check once");
+  assert.equal(rejected4, true, "rejected unknown-tier request must throw in guardIn");
+
+  const missingHistTierEnv =
+    `[matrix] room=#support:example.org thread=$m32_missing_hist_tier user=${ALICE} (trusted)\n\n` +
+    `<request>\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), tier: "trusted", addressed: true, text: steeringText })}\n` +
+    `</request>\n\n` +
+    `<context kind="thread" role="thread" context="bootstrap" note="history">\n` +
+    `${JSON.stringify({ sender: ALICE, sender_id: idOf(ALICE), text: "history line without tier field" })}\n` +
+    `</context>`;
+  const checkedBefore5 = checked.length;
+  let rejected5 = false;
+  try { await guardIn(guard, missingHistTierEnv); } catch { rejected5 = true; }
+  assert.equal(checked.length, checkedBefore5 + 1, "history line without tier field must call guard.check once");
+  assert.equal(rejected5, true, "rejected missing-tier history envelope must throw in guardIn");
+});
 
 

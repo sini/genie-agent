@@ -144,7 +144,8 @@
     "root startup: shutdown handlers precede intake while startup readiness is delayed"
   ],
   "tests/root.test.ts": [
-    "oracle: one inbound line reaches pi's prompt with its tier observed"
+    "oracle: one inbound line reaches pi's prompt with its tier observed",
+    "oracle (M32 guard-in): all-trusted envelope skips guard-in while any public history line or public request screens the whole envelope"
   ],
   "tests/state.test.ts": [
     "oracle: restart, then resume \u21d2 the same transcript, tier and cache"
