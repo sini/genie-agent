@@ -4889,7 +4889,6 @@ pkgs.testers.runNixOSTest {
           import contextlib
           import io
           import json
-          import subprocess
           from types import SimpleNamespace
           from unittest.mock import patch
 
