@@ -14,12 +14,16 @@
     "broker bridge: bare proposal is refused and unavailable intake never permits ACK",
     "broker bridge: recovery stages retained records within the configured queue cap",
     "broker bridge: a lower replay budget holds the immutable completed wire result",
-    "broker bridge: contract changes durably refuse new custody without blocking replies and hold queued Acts"
+    "broker bridge: contract changes durably refuse new custody without blocking replies and hold queued Acts",
+    "broker bridge: legal short writes never acknowledge a truncated durable request",
+    "broker bridge: stalled reply attempts cannot pin the worker or close and keep immutable results"
   ],
   "tests/broker-transport.test.ts": [
     "broker transport: retains registration limits and sends keyed replies on existing service frame",
     "broker transport: durable accept precedes ACK and acknowledgement confirmation follows ACK",
-    "broker transport: bounded queue backpressure times out guard safely and resumes FIFO custody"
+    "broker transport: bounded queue backpressure times out guard safely and resumes FIFO custody",
+    "broker transport: never-resolving guard send obeys whole deadline and releases worker capacity",
+    "broker transport: timed-out send cannot act late and bridge worker continues then closes"
   ],
   "tests/broker.test.ts": [
     "oracle: a proposal that fails guard-out is not acted on",

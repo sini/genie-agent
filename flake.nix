@@ -1333,7 +1333,14 @@
                 }
                 bridge_mutant bridge-allowlist src/broker/bridge.ts '!this.c.allowlist.some(' 'false && !this.c.allowlist.some(' 'broker bridge: attested allowlist, single proposal and body label cannot confer authority' tests/broker-bridge.test.ts
                 bridge_mutant bridge-dedup src/broker/bridge.ts 'if (old) {' 'if (false && old) {' 'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' tests/broker-bridge.test.ts
-                bridge_mutant bridge-size src/broker/bridge.ts 'new TextEncoder().encode(s).byteLength > this.c.maxBodyBytes' 'false' 'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' tests/broker-bridge.test.ts
+                bridge_mutant bridge-size src/broker/bridge.ts '> this.c.maxBodyBytes' '> 1_048_576' 'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' tests/broker-bridge.test.ts
+                for cell in \
+                  'broker bridge: legal short writes never acknowledge a truncated durable request' \
+                  'broker bridge: stalled reply attempts cannot pin the worker or close and keep immutable results'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || exit 1
+                done
+                bridge_mutant bridge-short-write src/broker/bridge.ts 'offset += written;' 'offset = bytes.length;' 'broker bridge: legal short writes never acknowledge a truncated durable request' tests/broker-bridge.test.ts
+                bridge_mutant bridge-reply-deadline src/broker/bridge.ts 'await this.attemptReply(r);' 'await this.c.reply(r.id, r.result!, "broker-" + r.key);' 'broker bridge: stalled reply attempts cannot pin the worker or close and keep immutable results' tests/broker-bridge.test.ts
                 cp -r . $TMPDIR/mut-wt-git
                 chmod -R u+w $TMPDIR/mut-wt-git
                 substituteInPlace $TMPDIR/mut-wt-git/src/mirror/index.ts \
@@ -1692,6 +1699,14 @@
                 }
                 bridge_mutant bridge-guard-output src/root/index.ts 'readScreen: screen,' 'readScreen: async (text) => text,' 'broker bridge root: attested anonymous read uses live guard reply pump, screened transcript and duplicate custody' tests/root-broker-bridge.test.ts
                 for cell in \
+                  'broker transport: never-resolving guard send obeys whole deadline and releases worker capacity' \
+                  'broker transport: timed-out send cannot act late and bridge worker continues then closes'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || exit 1
+                done
+                bridge_mutant guard-send-deadline src/root/io.ts 'msgId = await Promise.race([' 'msgId = await this.x.send(this.target, JSON.stringify(e), key); if (false) msgId = await Promise.race([' 'broker transport: never-resolving guard send obeys whole deadline and releases worker capacity' tests/broker-transport.test.ts
+                bridge_mutant bridge-service-reply-key src/dispatcher/xmsg.ts '{ idempotencyKey: key }' '{ idempotency_key: key }' 'broker transport: retains registration limits and sends keyed replies on existing service frame' tests/broker-transport.test.ts
+                bridge_mutant bridge-contract-latch src/root/index.ts 'contractChanged ||=' 'contractChanged =' 'broker bridge root: unchanged reconnect retains operation and changed limits pause Acts' tests/root-broker-bridge.test.ts
+                for cell in \
                   "one inbound line reaches pi's prompt with its tier observed" \
                   'a guard-in reject never prompts, and the bot posts a refusal' \
                   "eval runs at the thread's tier from P2's state, never the request's" \
@@ -1825,7 +1840,8 @@
                 chmod -R u+w $TMPDIR/mut-ge2-fc-timeout
                 substituteInPlace $TMPDIR/mut-ge2-fc-timeout/src/root/io.ts \
                   --replace-fail 'const remainingMs = deadline - Date.now();' 'const remainingMs = this.timeoutMs;' \
-                  --replace-fail 'const waitMs = deadline - Date.now();' 'const waitMs = 600_000;'
+                  --replace-fail 'const waitMs = deadline - Date.now();' 'const waitMs = 600_000;' \
+                  --replace-fail 'return await this.sendAndAwait(e, deadline);' 'return await this.sendAndAwait(e, Date.now() + this.timeoutMs);'
                 if (cd $TMPDIR/mut-ge2-fc-timeout && node --test --test-force-exit --test-name-pattern='oracle O-GE2-FC-queue-timeout' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-GE2-FC-timeout-at-acquire survived in root" >&2
                   exit 1

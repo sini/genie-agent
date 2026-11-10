@@ -403,3 +403,108 @@ test("broker bridge: contract changes durably refuse new custody without blockin
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test("broker bridge: legal short writes never acknowledge a truncated durable request", async () => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const dir = mkdtempSync(join(tmpdir(), "bridge-"));
+  const native = fs.writeSync;
+  let shortWrites = 0;
+  const b = new BrokerBridge({
+    stateRoot: dir,
+    allowlist: [principal],
+    maxBodyBytes: 65536,
+    propose: async () => ({
+      thread: "safe",
+      acted: true,
+      reason: "read",
+      redactions: [],
+    }),
+    reply: async () => {},
+  });
+  try {
+    await b.start();
+    fs.writeSync = ((
+      fd: number,
+      data: string | Uint8Array,
+      offset = 0,
+      length?: number,
+    ) => {
+      const bytes = typeof data === "string" ? Buffer.from(data) : data;
+      const available = length ?? bytes.length;
+      const count = Math.max(1, Math.floor(available / 2));
+      shortWrites++;
+      return native(fd, bytes, offset, count);
+    }) as typeof fs.writeSync;
+    syncBuiltinESMExports();
+    assert.equal(
+      await b.accept({
+        id: "unicode",
+        origin: principal,
+        text: text({ kind: "gist_comment", id: "abc", body: "😀€ Ελληνικά" }),
+      }),
+      true,
+    );
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    assert.equal(files.length, 1);
+    const row = JSON.parse(fs.readFileSync(join(dir, files[0]), "utf8"));
+    assert.equal(row.id, "unicode");
+    assert.equal(row.proposal.body, "😀€ Ελληνικά");
+    assert.ok(shortWrites > 1);
+    await b.close();
+  } finally {
+    fs.writeSync = native;
+    syncBuiltinESMExports();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("broker bridge: stalled reply attempts cannot pin the worker or close and keep immutable results", async () => {
+  const fs = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "bridge-"));
+  let acts = 0;
+  const attempts: { id: string; text: string; key: string }[] = [];
+  const b = new BrokerBridge({
+    stateRoot: dir,
+    allowlist: [principal],
+    maxBodyBytes: 65536,
+    replyTimeoutMs: 10,
+    propose: async () => {
+      acts++;
+      return { thread: "safe", acted: true, reason: "read", redactions: [] };
+    },
+    reply: async (id, text, key) => {
+      attempts.push({ id, text, key });
+      if (id === "one") await new Promise(() => {});
+    },
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await b.start();
+    await b.accept({ id: "one", origin: principal, text: text(read) });
+    await b.accept({ id: "two", origin: principal, text: text(read) });
+    await Promise.race([
+      b.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("worker pinned by stalled reply")),
+          250,
+        );
+      }),
+    ]);
+    assert.equal(acts, 2);
+    assert.deepEqual(
+      attempts.map((v) => v.id),
+      ["one", "two"],
+    );
+    const records = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => JSON.parse(fs.readFileSync(join(dir, f), "utf8")));
+    const original = records.find((v) => v.id === "one");
+    assert.equal(original.state, "completed");
+    assert.equal(original.result, attempts[0].text);
+    assert.equal("broker-" + original.key, attempts[0].key);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { SocketXmsg } from "../src/dispatcher/xmsg.ts";
-import { XmsgIo } from "../src/root/io.ts";
+import { XmsgGuardClient, XmsgIo } from "../src/root/io.ts";
 
 test("broker transport: retains registration limits and sends keyed replies on existing service frame", async () => {
   const directory = mkdtempSync(`${tmpdir()}/genie-bridge-wire-`); const frames: any[] = [];
@@ -24,8 +24,8 @@ test("broker transport: retains registration limits and sends keyed replies on e
     await client.register();
     assert.deepEqual(client.registrationLimits, { max_body_bytes: 4096, reply_ttl_secs: 45, idempotency_ttl_secs: 90 });
     await client.reply("original", "{}", "stable-key");
-    assert.deepEqual(frames[1], { action: "reply", messageId: "original", text: "{}", idempotency_key: "stable-key" });
-    await client.reply("legacy", "{}"); assert.equal(Object.hasOwn(frames[2], "idempotency_key"), false);
+    assert.deepEqual(frames[1], { action: "reply", messageId: "original", text: "{}", idempotencyKey: "stable-key" });
+    await client.reply("legacy", "{}"); assert.equal(Object.hasOwn(frames[2], "idempotencyKey"), false);
   } finally { client.close(); await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -54,21 +54,20 @@ test("broker transport: bounded queue backpressure times out guard safely and re
   const inbox: any[] = []; let active: any = null;
   const acknowledged: string[] = []; const results: any[] = []; const acted: string[] = [];
   let sends = 0; let deferred = 0;
-  let releaseFirstSend!: () => void;
-  const capacityForced = new Promise<void>((resolve) => { releaseFirstSend = resolve; });
+
   const client = {
     register: async () => ({}), close: () => {}, list: async () => [], replies: async () => [],
-    poll: async () => { await new Promise((resolve) => setTimeout(resolve, 1)); active ??= inbox.shift() ?? null; return active; },
+    poll: async () => { if (!active && inbox.length === 0) await new Promise((resolve) => setTimeout(resolve, 1)); active ??= inbox.shift() ?? null; return active; },
     ack: async (id: string) => { acknowledged.push(id); if (active?.id === id) active = null; },
     reply: async (_id: string, text: string) => { results.push(JSON.parse(text)); return "reply"; },
     send: async () => {
       const id = `guard-${++sends}`;
-      if (sends === 1) await capacityForced;
+      if (sends === 1) { put("second"); put("third"); inbox.push({ id: "late-first-verdict", inReplyTo: "guard-1", text: JSON.stringify({ verdict: "allow", reason: "late review", cleaned_text: "reviewed" }) }); }
       if (sends > 1) inbox.push({ id: `verdict-${sends}`, inReplyTo: id, text: JSON.stringify({ verdict: "allow", reason: "reviewed", cleaned_text: "reviewed" }) });
       return id;
     },
   };
-  const io = new XmsgIo({ guard: { target: "guard", timeoutMs: 100 }, guardEnable: true, log: () => { deferred++; releaseFirstSend(); } }, client);
+  const io = new XmsgIo({ guard: { target: "guard", timeoutMs: 100 }, guardEnable: true, log: () => { deferred++; } }, client);
   const bridge = new BrokerBridge({ stateRoot: directory, allowlist: [principal], maxBodyBytes: 4096, maxQueued: 1, maxRecords: 10,
     propose: async (_principal, proposal) => {
       const reviewed = await io.guard!.check({ source: "web", content: { text: proposal.body ?? "" } } as any);
@@ -80,12 +79,53 @@ test("broker transport: bounded queue backpressure times out guard safely and re
   const until = async (predicate: () => boolean) => { const deadline = Date.now() + 2000; while (!predicate()) { if (Date.now() > deadline) throw new Error("queue recovery timed out"); await new Promise((resolve) => setTimeout(resolve, 2)); } };
   try {
     await bridge.start(); await io.register(); put("first"); await until(() => sends === 1);
-    put("second"); put("third");
-    inbox.push({ id: "late-first-verdict", inReplyTo: "guard-1", text: JSON.stringify({ verdict: "allow", reason: "late review", cleaned_text: "reviewed" }) });
     await until(() => results.length === 3);
     assert.ok(deferred > 0, "control did not force queue saturation");
     assert.equal(results.filter((result) => result.acted === false).length, 1);
     assert.deepEqual(acted, ["second", "third"], "timed-out review permitted an Act");
     assert.ok(acknowledged.includes("third")); assert.ok(acknowledged.includes("late-first-verdict"));
   } finally { await bridge.close(); io.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("broker transport: never-resolving guard send obeys whole deadline and releases worker capacity", async () => {
+  const guard = new XmsgGuardClient({ send: async () => new Promise<string>(() => {}) } as any, { target: "guard", timeoutMs: 50, maxConcurrency: 1 });
+  const began = Date.now();
+  const bounded = await Promise.race([guard.check({ source: "web", content: { text: "request" } } as any), new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 200))]);
+  assert.notEqual(bounded, "hung", "guard send exceeded whole 200ms control budget");
+  assert.ok(typeof bounded === "object" && "unavailable" in bounded);
+  assert.ok(Date.now() - began < 200);
+  assert.equal(guard.inFlight, 0, "deadline left guard capacity occupied");
+  guard.close();
+});
+
+test("broker transport: timed-out send cannot act late and bridge worker continues then closes", async () => {
+  const { BrokerBridge } = await import("../src/broker/bridge.ts");
+  const directory = mkdtempSync(`${tmpdir()}/genie-bridge-send-deadline-`);
+  let sends = 0; let releaseLate!: (id: string) => void;
+  const guard = new XmsgGuardClient({ send: async () => {
+    if (++sends === 1) return new Promise<string>((resolve) => { releaseLate = resolve; });
+    queueMicrotask(() => guard.routeReply("reviewed", JSON.stringify({ verdict: "allow", reason: "reviewed", cleaned_text: "safe" })));
+    return "reviewed";
+  } }, { target: "guard", timeoutMs: 50, maxConcurrency: 1 });
+  const results: any[] = []; const acts: string[] = [];
+  const principal = { service: "gateway", node: "edge" };
+  const bridge = new BrokerBridge({ stateRoot: directory, allowlist: [principal], maxBodyBytes: 4096,
+    propose: async (_principal, proposal) => {
+      const review = await guard.check({ source: "web", content: { text: proposal.body } } as any);
+      if ("unavailable" in review) return { thread: "fixture", acted: false, reason: review.unavailable, redactions: [] };
+      acts.push(proposal.body!); return { thread: "fixture", acted: true, reason: "reviewed", redactions: [] };
+    }, reply: async (_id, text) => { results.push(JSON.parse(text)); } });
+  try {
+    await bridge.start();
+    for (const id of ["first", "second"]) await bridge.accept({ id, origin: principal, text: `[External message via gateway@edge; gateway correlation gw-${"a".repeat(64)}]\n${JSON.stringify({ kind: "gist_comment", id: "abc", body: id })}` });
+    const deadline = Date.now() + 200;
+    while (results.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.equal(results.length, 2, "never-resolving send pinned bridge worker");
+    assert.deepEqual(acts, ["second"]); assert.equal(results[0].acted, false); assert.equal(results[1].acted, true);
+    releaseLate("late"); guard.routeReply("late", JSON.stringify({ verdict: "allow", reason: "too late", cleaned_text: "unsafe" }));
+    await Promise.resolve(); assert.deepEqual(acts, ["second"], "late send/reply revived timed-out Act");
+    assert.equal(guard.inFlight, 0);
+    await Promise.race([bridge.close(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("bridge close pinned")), 200))]);
+  } finally { guard.close(); rmSync(directory, { recursive: true, force: true }); }
 });

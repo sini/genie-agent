@@ -56,7 +56,8 @@ async function fixture(options: { budget?: number; quota?: number; large?: boole
   return { directory, root, calls, screens, acks, replies, request, mode: (next: typeof mode) => { mode = next; },
     context: () => { const t = `broker-${createHash("sha256").update(JSON.stringify([principal.service, principal.node])).digest("hex")}`; return JSON.parse(readFileSync(`${root.store.dir(t)}/context.json`, "utf8")); },
     queueGuardReply: () => inbox.push({ id: "behind-paused-request", inReplyTo: "unknown-guard", text: JSON.stringify({ verdict: "allow", reason: "fixture", cleaned_text: "" }) }),
-    reconnect: async (changed = false) => { if (changed) client.registrationLimits.max_body_bytes = 4096; const before = registrations; reconnecting = true; await until(() => registrations > before); },
+    restoreLimits: () => { client.registrationLimits.max_body_bytes = options.budget ?? 65536; },
+    reconnect: async (changed = false) => { if (changed) client.registrationLimits.max_body_bytes = 512; const before = registrations; reconnecting = true; await until(() => registrations > before); },
     close: async () => { await root.stop(); io.close(); api.closeAllConnections(); await new Promise<void>((resolve) => api.close(() => resolve())); rmSync(directory, { recursive: true, force: true }); } };
 }
 
@@ -112,7 +113,7 @@ test("broker bridge root: complete Action obeys negotiated result byte budget", 
 
 
 test("broker bridge root: unchanged reconnect retains operation and changed limits pause Acts", async () => {
-  const f = await fixture();
+  const f = await fixture({ budget: 4096 });
   try {
     await f.reconnect(); f.request("after-same"); await until(() => f.replies.length === 1);
     assert.equal(JSON.parse(f.replies[0].text).acted, true); assert.equal(f.calls.length, 1);
@@ -122,5 +123,10 @@ test("broker bridge root: unchanged reconnect retains operation and changed limi
     assert.match(JSON.parse(f.replies[1].text).reason, /bus limits changed|contract|restart/);
     assert.equal(f.calls.length, 1, "changed bus contract still invoked GitHub");
     assert.ok(f.acks.includes("after-changed"), "durable contract refusal did not ACK");
+    f.restoreLimits(); await f.reconnect(); f.request("after-restored");
+    await until(() => f.replies.length === 3);
+    assert.equal(JSON.parse(f.replies[2].text).acted, false, "restored limits silently cleared restart requirement");
+    assert.match(JSON.parse(f.replies[2].text).reason, /bus limits changed|contract|restart/);
+    assert.equal(f.calls.length, 1, "restored contract resumed Acts without restart");
   } finally { await f.close(); }
 });

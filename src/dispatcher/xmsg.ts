@@ -151,7 +151,7 @@ export class SocketXmsg implements XmsgClient {
   }
 
   async reply(id: string, text: string, key?: string): Promise<string | void> {
-    const r = await this.registered({ action: "reply", messageId: id, text, ...(key === undefined ? {} : { idempotency_key: key }) });
+    const r = await this.registered({ action: "reply", messageId: id, text, ...(key === undefined ? {} : { idempotencyKey: key }) });
     return typeof r?.messageId === "string" ? r.messageId : undefined;
   }
 

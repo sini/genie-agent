@@ -111,7 +111,7 @@ export class XmsgGuardClient implements GuardClient {
       if (remainingMs <= 0) {
         return { unavailable: `guard check timed out after ${this.timeoutMs}ms` };
       }
-      return await this.sendAndAwait(e, remainingMs);
+      return await this.sendAndAwait(e, deadline);
     } finally {
       this.release();
     }
@@ -162,25 +162,37 @@ export class XmsgGuardClient implements GuardClient {
     if (next) next.wake();
   }
 
-  private async sendAndAwait(e: Envelope, remainingMs: number): Promise<Verdict | Unavailable> {
-    const sendStart = Date.now();
+  private async sendAndAwait(e: Envelope, deadline: number): Promise<Verdict | Unavailable> {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return { unavailable: `guard check timed out after ${this.timeoutMs}ms (send)` };
     const key = `guard:${++this.seq}:${randomUUID()}`;
     let msgId: string;
+    let sendTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      msgId = await this.x.send(this.target, JSON.stringify(e), key);
+      msgId = await Promise.race([
+        Promise.resolve().then(() => {
+          if (Date.now() >= deadline) throw new Error(`guard check timed out after ${this.timeoutMs}ms (send)`);
+          return this.x.send(this.target, JSON.stringify(e), key);
+        }),
+        new Promise<never>((_, reject) => {
+          sendTimer = setTimeout(() => reject(new Error(`guard check timed out after ${this.timeoutMs}ms (send)`)), remainingMs);
+        }),
+      ]);
     } catch (err) {
       return { unavailable: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (sendTimer !== undefined) clearTimeout(sendTimer);
+    }
+
+    const waitMs = Math.max(0, deadline - Date.now());
+    if (waitMs <= 0) {
+      return { unavailable: `guard check timed out after ${this.timeoutMs}ms (${msgId})` };
     }
 
     const early = this.earlyReplies.get(msgId);
     if (early !== undefined) {
       this.earlyReplies.delete(msgId);
       return parseGuardVerdictReply(early);
-    }
-
-    const waitMs = Math.max(0, remainingMs - (Date.now() - sendStart));
-    if (waitMs <= 0) {
-      return { unavailable: `guard check timed out after ${this.timeoutMs}ms (${msgId})` };
     }
 
     return new Promise<Verdict | Unavailable>((resolve) => {
@@ -190,7 +202,7 @@ export class XmsgGuardClient implements GuardClient {
         settled = true;
         this.pending.delete(msgId);
         clearTimeout(timer);
-        resolve(res);
+        resolve(Date.now() >= deadline ? { unavailable: `guard check timed out after ${this.timeoutMs}ms (${msgId})` } : res);
       };
 
       const timer = setTimeout(() => {

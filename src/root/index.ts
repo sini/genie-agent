@@ -988,9 +988,11 @@ export function main(
       throw new Error("broker.bridge requires negotiated xmsg body and replay limits");
     }
     const negotiatedContract = JSON.stringify([limits.max_body_bytes, limits.reply_ttl_secs, limits.idempotency_ttl_secs]);
+    let contractChanged = false;
     const checkContract = () => {
       const current = io.registrationLimits;
-      if (JSON.stringify([current?.max_body_bytes, current?.reply_ttl_secs, current?.idempotency_ttl_secs]) !== negotiatedContract) {
+      contractChanged ||= JSON.stringify([current?.max_body_bytes, current?.reply_ttl_secs, current?.idempotency_ttl_secs]) !== negotiatedContract;
+      if (contractChanged) {
         throw new Error("broker bus limits changed; restart root to renegotiate");
       }
     };

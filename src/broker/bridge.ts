@@ -13,6 +13,14 @@ import {
 import { join } from "node:path";
 import { type Proposal, type Action, validateProposalFields } from "./index.ts";
 import { errors, load } from "../tier1/schema.ts";
+declare module "node:fs" {
+  export function writeSync(
+    fd: number,
+    data: Uint8Array,
+    offset: number,
+    length: number,
+  ): number;
+}
 export interface BridgePrincipal {
   service: string;
   node: string;
@@ -29,6 +37,7 @@ export interface BrokerBridgeConfig {
   maxRecords?: number;
   maxQueued?: number;
   retentionMs?: number;
+  replyTimeoutMs?: number;
   checkContract?: () => void;
   propose: (principal: BridgePrincipal, proposal: Proposal) => Promise<Action>;
   reply: (originalID: string, text: string, key: string) => Promise<unknown>;
@@ -75,24 +84,28 @@ export class BrokerBridge {
   private maxRecords: number;
   private maxQueued: number;
   private retention: number;
+  private replyTimeout: number;
   private c: BrokerBridgeConfig;
   constructor(c: BrokerBridgeConfig) {
     this.c = c;
     this.maxRecords = c.maxRecords ?? 1000;
     this.maxQueued = c.maxQueued ?? 100;
     this.retention = c.retentionMs ?? 604800000;
+    this.replyTimeout = c.replyTimeoutMs ?? 5000;
     for (const n of [
       c.maxBodyBytes,
       this.maxRecords,
       this.maxQueued,
       this.retention,
+      this.replyTimeout,
     ])
       if (!Number.isSafeInteger(n) || n <= 0)
         throw new Error("invalid broker bridge budget");
     if (
       c.maxBodyBytes < 512 ||
       c.maxBodyBytes > 65536 ||
-      this.maxQueued > this.maxRecords
+      this.maxQueued > this.maxRecords ||
+      this.replyTimeout > 60000
     )
       throw new Error("invalid broker bridge budget");
     for (const p of c.allowlist)
@@ -103,7 +116,17 @@ export class BrokerBridge {
     const tmp = file + ".tmp";
     const fd = openSync(tmp, "w", 0o600);
     try {
-      writeSync(fd, JSON.stringify(r));
+      const bytes = new TextEncoder().encode(JSON.stringify(r));
+      for (let offset = 0; offset < bytes.length;) {
+        const written = writeSync(fd, bytes, offset, bytes.length - offset);
+        if (
+          !Number.isInteger(written) ||
+          written <= 0 ||
+          written > bytes.length - offset
+        )
+          throw new Error("broker ledger write incomplete");
+        offset += written;
+      }
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -292,6 +315,19 @@ export class BrokerBridge {
     this.enqueue(key);
     return true;
   }
+  private async attemptReply(r: RecordEntry): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.c.reply(r.id, r.result!, `broker-${r.key}`),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, this.replyTimeout);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
   private async work() {
     while (this.queue.length) {
       const key = this.queue.shift()!;
@@ -345,7 +381,7 @@ export class BrokerBridge {
         continue;
       }
       try {
-        await this.c.reply(r.id, r.result!, `broker-${r.key}`);
+        await this.attemptReply(r);
       } catch {
         /* Durable result is replayed after redelivery or restart. */
       }

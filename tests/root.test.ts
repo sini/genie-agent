@@ -3395,16 +3395,39 @@ test("oracle O-GE2-FA-settled: a refused escalation after WITHHELD on agent_sett
   const faBatches: Inbound[][] = [];
   const faPosts: [string, unknown][] = [];
   const faSends: { to: string; text: string }[] = [];
+  let postEntered!: () => void;
+  let releasePost!: () => void;
+  const enteredPost = new Promise<void>((resolve) => { postEntered = resolve; });
+  const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
+  const bounded = async <T>(producer: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([producer, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("settled producer did not complete")), 5000); })]);
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  };
   const faRoot = main(
     cfg,
     {
       intake: { next: async () => faBatches.shift() ?? null },
-      post: { post: async (t, m) => (faPosts.push([t, m]), `$ev_${faPosts.length}`) },
+      post: { post: async (t, m) => {
+        if (t === "t1") { postEntered(); await postGate; }
+        return (faPosts.push([t, m]), `$ev_${faPosts.length}`);
+      } },
       guard,
       xmsg: { send: async (to, text) => `m${faSends.push({ to, text })}` },
     },
     async () => ({ exit: 0, stdout_tail: "INJECT: poisoned eval stdout", stderr_tail: "", limit_hit: "none" }),
   );
+  let producerCompleted!: () => void;
+  let producerFailed!: (error: unknown) => void;
+  const completed = new Promise<void>((resolve, reject) => { producerCompleted = resolve; producerFailed = reject; });
+  const event = faRoot.lifecycle.event.bind(faRoot.lifecycle);
+  faRoot.lifecycle.event = async (thread, record) => {
+    try {
+      await event(thread, record);
+      if (thread === "t1" && record.type === "agent_settled") producerCompleted();
+    } catch (error) { producerFailed(error); throw error; }
+  };
   const faHost = async (thread: string, method: string, arg: unknown) =>
     JSON.parse(
       (
@@ -3438,9 +3461,10 @@ test("oracle O-GE2-FA-settled: a refused escalation after WITHHELD on agent_sett
     // Settle t1: posts WITHHELD, attempts escalation.reply (which guard refuses because of INJECT in eval_transcript),
     // and MUST still run lifecycle.event("t1", r) to clear pending("t1") and release the turn slot to t2.
     await faRoot.supervisor.command("t1", { type: "settle" });
-    for (let i = 0; i < 40 && faRoot.store.pending("t1").length > 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await bounded(enteredPost);
+    assert.deepEqual(faRoot.store.pending("t1"), ["question on t1"], "control failed to hold the asynchronous producer");
+    releasePost();
+    await bounded(completed);
 
     assert.deepEqual(faPosts.filter(([t]) => t === "t1"), [["t1", { text: WITHHELD }]]);
     assert.equal(faSends.length, 0);
@@ -3449,6 +3473,7 @@ test("oracle O-GE2-FA-settled: a refused escalation after WITHHELD on agent_sett
     assert.deepEqual(faRoot.lifecycle.activeTurns(), ["t2"], "t1's turn slot must be released and acquired by queued thread t2");
     assert.ok(faRoot.supervisor.pid("t2") !== undefined, "t2 must be launched after t1 settles");
   } finally {
+    releasePost();
     await faRoot.stop();
   }
 });
@@ -3799,52 +3824,69 @@ test("oracle O-GE2-C6-recall-unscreened: Host.recall makes 0 guard calls when gu
 
 test("oracle O-GE2-FC-queue-timeout: XmsgGuardClient bounds total check(e) wall time across FIFO queue wait + sendAndAwait and wakes/times out idempotently (F-C, C-7)", async () => {
   const { XmsgGuardClient } = await import("../src/root/io.ts");
-  const sentKeys: string[] = [];
+  const sent: { key: string; id: string; text: string; at: number }[] = [];
+  const waitForSend = async (count: number) => {
+    const deadline = Date.now() + 80;
+    while (sent.length < count) {
+      if (Date.now() >= deadline) throw new Error("guard fixture send did not arrive");
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    return sent[count - 1];
+  };
   const fakeXmsg = {
     send: async (_to: string, text: string, key: string): Promise<string> => {
-      sentKeys.push(key);
+      const id = `msg_${sent.length + 1}`;
+      sent.push({ key, id, text, at: Date.now() });
       if (text.includes("req1-slow")) {
         await new Promise((r) => setTimeout(r, 120));
       }
-      return `msg_${sentKeys.length}`;
+      return id;
     },
   };
 
-  // (1) Request 1 holds the single concurrency slot (with a 120ms send delay) and times out; Request 2 is queued behind it
-  //     and must time out while queued at ~80ms with "(queued)" without ever calling x.send().
+  // (1) Both requests have their own total deadline. Request 2 may expire in the
+  // queue or acquire the slot just before its deadline; neither phase grants extra time.
   const client = new XmsgGuardClient(fakeXmsg, { maxConcurrency: 1, timeoutMs: 80 });
   const env1Slow: Envelope = { source: "eval_stdout", history: [], content: { text: "req1-slow" } };
   const env1: Envelope = { source: "eval_stdout", history: [], content: { text: "req1" } };
   const env2: Envelope = { source: "eval_stdout", history: [], content: { text: "req2" } };
   const t0 = Date.now();
   const p1 = client.check(env1Slow);
+  const t2 = Date.now();
   const p2 = client.check(env2);
   const res2 = await p2;
-  const elapsed2 = Date.now() - t0;
+  const elapsed2 = Date.now() - t2;
   const res1 = await p1;
 
+  assert.ok(Date.now() - t0 < 115, "slow send exceeded its original total deadline (<115ms)");
   assert.ok("unavailable" in res1 && res1.unavailable.includes("timed out"), `expected timeout for res1, got ${JSON.stringify(res1)}`);
-  assert.ok("unavailable" in res2 && res2.unavailable.includes("(queued)"), `expected queued timeout for res2, got ${JSON.stringify(res2)}`);
-  assert.equal(sentKeys.length, 1, "Request 2 must time out in the queue without calling x.send()");
-  assert.ok(elapsed2 < 115, `expected queued Request 2 to settle within ~80ms (<115ms), took ${elapsed2}ms`);
+  assert.ok("unavailable" in res2 && res2.unavailable.includes("timed out"), `expected total timeout for res2, got ${JSON.stringify(res2)}`);
+  assert.ok(sent.length === 1 || sent.length === 2);
+  for (const call of sent) {
+    const began = call.text.includes("req1-slow") ? t0 : t2;
+    assert.ok(call.at < began + 80, "guard send started outside its original check deadline");
+  }
+  assert.ok(elapsed2 < 115, `expected Request 2 to settle within ~80ms (<115ms), took ${elapsed2}ms`);
   assert.equal(client.inFlight, 0, "active slot count must return to 0 without going negative");
 
   // (2) Subsequent request after queue timeout still acquires slot 1 cleanly and resolves allow when replied
+  const before3 = sent.length;
   const p3 = client.check({ source: "eval_stdout", history: [], content: { text: "req3" } });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(sentKeys.length, 2);
-  client.routeReply("msg_2", JSON.stringify({ verdict: "allow", reason: "ok", cleaned_text: "" }));
+  const third = await waitForSend(before3 + 1);
+  client.routeReply(third.id, JSON.stringify({ verdict: "allow", reason: "ok", cleaned_text: "" }));
   const res3 = await p3;
   assert.deepEqual(res3, { verdict: "allow", reason: "ok", cleaned_text: "" });
   assert.equal(client.inFlight, 0);
 
   // (3) When Request A finishes at 45ms of an 80ms timeout, Request B acquires the slot with ~35ms remaining
   //     and times out after ~35ms (total ~80ms from B's check() call, not 45 + 80 = 125ms).
+  const beforeA = sent.length;
   const tB0 = Date.now();
   const pA = client.check(env1);
   const pB = client.check(env2);
-  await new Promise((r) => setTimeout(r, 45));
-  client.routeReply("msg_3", JSON.stringify({ verdict: "allow", reason: "ok", cleaned_text: "" }));
+  const requestA = await waitForSend(beforeA + 1);
+  await new Promise((r) => setTimeout(r, Math.max(0, tB0 + 45 - Date.now())));
+  client.routeReply(requestA.id, JSON.stringify({ verdict: "allow", reason: "ok", cleaned_text: "" }));
   const [resA, resB] = await Promise.all([pA, pB]);
   const elapsedB = Date.now() - tB0;
   assert.deepEqual(resA, { verdict: "allow", reason: "ok", cleaned_text: "" });

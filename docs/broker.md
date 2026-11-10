@@ -143,7 +143,7 @@ read limit can still produce an oversized Action wrapper: that request receives
 an explicit result-too-large refusal rather than truncated JSON or files.
 
 A gateway sends the existing strict Proposal JSON following its external-message
-preamble. Root recognizes that framing and also direct typed gist proposals;
+preamble. Root recognizes bare typed proposals only to refuse them as malformed;
 the preamble is data, not authority. PR proposals are outside this bridge.
 Results use the existing Action JSON and a correlated reply to the original xmsg
 message ID, with a stable reply idempotency key. Unknown or malformed callers
@@ -170,3 +170,5 @@ fixtures exercise this path without a GitHub account or live service:
 ```sh
 node --test tests/root-broker-bridge.test.ts tests/broker-transport.test.ts
 ```
+
+Reply attempts have a five-second deadline. A stalled attempt leaves the completed result durable and does not pin later work; replay uses the same body and key. The underlying bus operation is not claimed to be cancelled. Guard checks use one absolute deadline covering both enqueue and reply; a late send or verdict cannot authorize an Act.
