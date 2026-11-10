@@ -4471,8 +4471,9 @@ let
                     shutil.rmtree(p, ignore_errors=True)
                 elif os.path.exists(p):
                     os.unlink(p)
-            subprocess.run(["systemctl", "reset-failed", "genie-agent.service"], check=False)
-            subprocess.run(["systemctl", "restart", "genie-agent.service"], check=False)
+            # The next cell stops this restored PID 1; wait until shutdown is installed.
+            if not restart_and_wait_genie_agent():
+                raise RuntimeError("GV2 cleanup root did not become ready after baseline restore")
 
     cell("GV2", *eval_gv2())
 

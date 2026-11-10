@@ -1650,6 +1650,7 @@
                     ./tests/root.test.ts
                     ./tests/root-gist.test.ts
                     ./tests/root-broker-bridge.test.ts
+                    ./tests/root-startup.test.ts
                     ./tests/broker-transport.test.ts
                     ./tests/gist-model.test.ts
                     ./tests/fixtures/supervisor
@@ -1660,7 +1661,7 @@
                 cd $src
                 export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/root.test.ts tests/root-gist.test.ts tests/gist-model.test.ts tests/root-broker-bridge.test.ts tests/broker-transport.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/root.test.ts tests/root-gist.test.ts tests/gist-model.test.ts tests/root-broker-bridge.test.ts tests/broker-transport.test.ts tests/root-startup.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 for cell in \
                   'broker bridge root: attested anonymous read uses live guard reply pump, screened transcript and duplicate custody' \
@@ -1706,6 +1707,8 @@
                 bridge_mutant guard-send-deadline src/root/io.ts 'msgId = await Promise.race([' 'msgId = await this.x.send(this.target, JSON.stringify(e), key); if (false) msgId = await Promise.race([' 'broker transport: never-resolving guard send obeys whole deadline and releases worker capacity' tests/broker-transport.test.ts
                 bridge_mutant bridge-service-reply-key src/dispatcher/xmsg.ts '{ idempotencyKey: key }' '{ idempotency_key: key }' 'broker transport: retains registration limits and sends keyed replies on existing service frame' tests/broker-transport.test.ts
                 bridge_mutant bridge-contract-latch src/root/index.ts 'contractChanged ||=' 'contractChanged =' 'broker bridge root: unchanged reconnect retains operation and changed limits pause Acts' tests/root-broker-bridge.test.ts
+                grep -q '^ok [0-9]* - root startup: shutdown handlers precede intake while startup readiness is delayed$' $TMPDIR/tap || exit 1
+                bridge_mutant root-startup-signal src/root/main.ts 'process.once("SIGTERM", shutdown);' 'queueMicrotask(() => process.once("SIGTERM", shutdown));' 'root startup: shutdown handlers precede intake while startup readiness is delayed' tests/root-startup.test.ts
                 for cell in \
                   "one inbound line reaches pi's prompt with its tier observed" \
                   'a guard-in reject never prompts, and the bot posts a refusal' \

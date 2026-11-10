@@ -140,6 +140,9 @@
     "gist root: public yes no and omission reach the fake API without changing write guards",
     "gist root: new read transcript provenance passes escalation schema without broadening legacy requests"
   ],
+  "tests/root-startup.test.ts": [
+    "root startup: shutdown handlers precede intake while startup readiness is delayed"
+  ],
   "tests/root.test.ts": [
     "oracle: one inbound line reaches pi's prompt with its tier observed"
   ],

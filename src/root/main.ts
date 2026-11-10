@@ -48,13 +48,13 @@ async function run(opts: CliOptions): Promise<void> {
   });
   await io.register(false);
   const root = main(opts.configPath, io);
-  io.resume();
-  await root.start();
   const shutdown = () => {
     io.close();
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
+  io.resume();
+  await root.start();
   try {
     await root.run();
   } finally {
