@@ -5,6 +5,22 @@
   "tests/bank.test.ts": [
     "HindsightWriteClient: recall and retain serialization over HTTP and fail-closed token enforcement"
   ],
+  "tests/broker-bridge.test.ts": [
+    "broker bridge: attested allowlist, single proposal and body label cannot confer authority",
+    "broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded",
+    "broker bridge: startup never repeats uncertain writes and safely retries pending reads",
+    "broker bridge: unsafe history is retained and capacity refuses before custody ACK",
+    "broker bridge: write marker precedes delegated Act and result precedes keyed reply",
+    "broker bridge: bare proposal is refused and unavailable intake never permits ACK",
+    "broker bridge: recovery stages retained records within the configured queue cap",
+    "broker bridge: a lower replay budget holds the immutable completed wire result",
+    "broker bridge: contract changes durably refuse new custody without blocking replies and hold queued Acts"
+  ],
+  "tests/broker-transport.test.ts": [
+    "broker transport: retains registration limits and sends keyed replies on existing service frame",
+    "broker transport: durable accept precedes ACK and acknowledgement confirmation follows ACK",
+    "broker transport: bounded queue backpressure times out guard safely and resumes FIFO custody"
+  ],
   "tests/broker.test.ts": [
     "oracle: a proposal that fails guard-out is not acted on",
     "gist operations: kinds have independent strict arguments and public survives model conversion",
@@ -105,6 +121,13 @@
   ],
   "tests/redactor.test.ts": [
     "redacts a truncated key block to the end of the text"
+  ],
+  "tests/root-broker-bridge.test.ts": [
+    "broker bridge root: attested anonymous read uses live guard reply pump, screened transcript and duplicate custody",
+    "broker bridge root: unknown, wrong node, missing identity and body impersonation refuse before guards or API",
+    "broker bridge root: guard rejection withholds fetched result and transcript",
+    "broker bridge root: complete Action obeys negotiated result byte budget",
+    "broker bridge root: unchanged reconnect retains operation and changed limits pause Acts"
   ],
   "tests/root-gist.test.ts": [
     "gist root: anonymous reads use guard-in despite legacy screening default and retain quota",

@@ -1295,15 +1295,45 @@
                     ./src/isolation-node.d.ts
                     ./schemas
                     ./tests/broker.test.ts
+                    ./tests/broker-bridge.test.ts
                   ];
                 };
               }
               ''
                 cd $src
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/broker.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/broker.test.ts tests/broker-bridge.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 / F2), subdirectory computeWorktreeDiff (C-N4), confineWrite + write-delta quota (F5 / F9), genie-bot identity & fork enforcement (F6 / Q1), and all four mutants go RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'broker bridge: attested allowlist, single proposal and body label cannot confer authority' \
+                  'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' \
+                  'broker bridge: startup never repeats uncertain writes and safely retries pending reads' \
+                  'broker bridge: unsafe history is retained and capacity refuses before custody ACK' \
+                  'broker bridge: write marker precedes delegated Act and result precedes keyed reply' \
+                  'broker bridge: bare proposal is refused and unavailable intake never permits ACK' \
+                  'broker bridge: recovery stages retained records within the configured queue cap' \
+                  'broker bridge: a lower replay budget holds the immutable completed wire result' \
+                  'broker bridge: contract changes durably refuse new custody without blocking replies and hold queued Acts'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || { echo "missing bridge cell: $cell"; exit 1; }
+                done
+                bridge_mutant() {
+                  bridge_name="$1"; bridge_src="$2"; bridge_needle="$3"; bridge_replacement="$4"; bridge_cell="$5"; bridge_test="$6"
+                  bridge_dir="$TMPDIR/mut-$bridge_name"
+                  bridge_log="$TMPDIR/$bridge_name.tap"
+                  cp -r . "$bridge_dir"
+                  chmod -R u+w "$bridge_dir"
+                  substituteInPlace "$bridge_dir/$bridge_src" --replace-fail "$bridge_needle" "$bridge_replacement"
+                  if (cd "$bridge_dir" && node --test --test-force-exit --test-reporter=tap --test-name-pattern="$bridge_cell" "$bridge_test" >"$bridge_log" 2>&1); then
+                    echo "bridge mutant survived: $bridge_name" >&2
+                    exit 1
+                  fi
+                  grep -F " - $bridge_cell" "$bridge_log" | grep -q '^not ok ' || { cat "$bridge_log"; exit 1; }
+                  echo "expected RED: $bridge_name"
+                }
+                bridge_mutant bridge-allowlist src/broker/bridge.ts '!this.c.allowlist.some(' 'false && !this.c.allowlist.some(' 'broker bridge: attested allowlist, single proposal and body label cannot confer authority' tests/broker-bridge.test.ts
+                bridge_mutant bridge-dedup src/broker/bridge.ts 'if (old) {' 'if (false && old) {' 'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' tests/broker-bridge.test.ts
+                bridge_mutant bridge-size src/broker/bridge.ts 'new TextEncoder().encode(s).byteLength > this.c.maxBodyBytes' 'false' 'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' tests/broker-bridge.test.ts
                 cp -r . $TMPDIR/mut-wt-git
                 chmod -R u+w $TMPDIR/mut-wt-git
                 substituteInPlace $TMPDIR/mut-wt-git/src/mirror/index.ts \
@@ -1612,6 +1642,8 @@
                     ./prompts
                     ./tests/root.test.ts
                     ./tests/root-gist.test.ts
+                    ./tests/root-broker-bridge.test.ts
+                    ./tests/broker-transport.test.ts
                     ./tests/gist-model.test.ts
                     ./tests/fixtures/supervisor
                   ];
@@ -1621,8 +1653,19 @@
                 cd $src
                 export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/root.test.ts tests/root-gist.test.ts tests/gist-model.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/root.test.ts tests/root-gist.test.ts tests/gist-model.test.ts tests/root-broker-bridge.test.ts tests/broker-transport.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
+                for cell in \
+                  'broker bridge root: attested anonymous read uses live guard reply pump, screened transcript and duplicate custody' \
+                  'broker bridge root: unknown, wrong node, missing identity and body impersonation refuse before guards or API' \
+                  'broker bridge root: guard rejection withholds fetched result and transcript' \
+                  'broker bridge root: complete Action obeys negotiated result byte budget' \
+                  'broker bridge root: unchanged reconnect retains operation and changed limits pause Acts' \
+                  'broker transport: retains registration limits and sends keyed replies on existing service frame' \
+                  'broker transport: durable accept precedes ACK and acknowledgement confirmation follows ACK' \
+                  'broker transport: bounded queue backpressure times out guard safely and resumes FIFO custody'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || { echo "missing bridge cell: $cell"; exit 1; }
+                done
                 [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 for cell in \
                   'gist root: anonymous reads use guard-in despite legacy screening default and retain quota' \
@@ -1633,6 +1676,21 @@
                   'gist model: existing propose advertises typed gist operations and converts explicit public yes no'; do
                   grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                bridge_mutant() {
+                  bridge_name="$1"; bridge_src="$2"; bridge_needle="$3"; bridge_replacement="$4"; bridge_cell="$5"; bridge_test="$6"
+                  bridge_dir="$TMPDIR/mut-$bridge_name"
+                  bridge_log="$TMPDIR/$bridge_name.tap"
+                  cp -r . "$bridge_dir"
+                  chmod -R u+w "$bridge_dir"
+                  substituteInPlace "$bridge_dir/$bridge_src" --replace-fail "$bridge_needle" "$bridge_replacement"
+                  if (cd "$bridge_dir" && node --test --test-force-exit --test-reporter=tap --test-name-pattern="$bridge_cell" "$bridge_test" >"$bridge_log" 2>&1); then
+                    echo "bridge mutant survived: $bridge_name" >&2
+                    exit 1
+                  fi
+                  grep -F " - $bridge_cell" "$bridge_log" | grep -q '^not ok ' || { cat "$bridge_log"; exit 1; }
+                  echo "expected RED: $bridge_name"
+                }
+                bridge_mutant bridge-guard-output src/root/index.ts 'readScreen: screen,' 'readScreen: async (text) => text,' 'broker bridge root: attested anonymous read uses live guard reply pump, screened transcript and duplicate custody' tests/root-broker-bridge.test.ts
                 for cell in \
                   "one inbound line reaches pi's prompt with its tier observed" \
                   'a guard-in reject never prompts, and the bot posts a refusal' \

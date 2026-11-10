@@ -319,6 +319,40 @@ rec {
         description = "Proposal broker (A1-A3) and guard-out settings.";
         type = lib.types.submodule {
           options = {
+            bridge = lib.mkOption {
+              default = null;
+              description = "Optional attested xmsg gist broker bridge. Granting a gateway principal send to the broker service grants it the broker’s gist operations.";
+              type = lib.types.nullOr (
+                lib.types.submodule {
+                  options = {
+                    allowlist = lib.mkOption {
+                      default = [ ];
+                      type = lib.types.listOf (
+                        lib.types.submodule {
+                          options = {
+                            service = lib.mkOption {
+                              type = lib.types.str;
+                              description = "Exact attested gateway service name.";
+                            };
+                            node = lib.mkOption {
+                              type = lib.types.str;
+                              description = "Exact attesting gateway node.";
+                            };
+                          };
+                        }
+                      );
+                      description = "Allowed gateway service/node principals; empty denies every caller.";
+                    };
+                    maxBodyBytes = lib.mkOption {
+                      type = lib.types.ints.between 512 65536;
+                      default = 65536;
+                      description = "Complete serialized reply budget in bytes, further bounded by the registered bus limit.";
+                    };
+                  };
+                }
+              );
+            };
+
             tokenFile = lib.mkOption {
               type = lib.types.nullOr secretPath;
               default = null;
@@ -698,6 +732,9 @@ rec {
         botLogin = cfg.broker.botLogin;
         allowedRepos = cfg.broker.allowedRepos;
         guardOut = guardOutAttrs;
+      }
+      // lib.optionalAttrs (cfg.broker.bridge != null) {
+        bridge = cfg.broker.bridge;
       }
       // lib.optionalAttrs (cfg.broker.forbiddenLogins != [ ]) {
         forbiddenLogins = cfg.broker.forbiddenLogins;

@@ -46,9 +46,10 @@ async function run(opts: CliOptions): Promise<void> {
     guard: guardEnable ? raw.xmsg?.guard : null,
     guardEnable,
   });
-  await io.register();
+  await io.register(false);
   const root = main(opts.configPath, io);
-  root.start();
+  io.resume();
+  await root.start();
   const shutdown = () => {
     io.close();
   };

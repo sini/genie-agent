@@ -505,12 +505,23 @@ export class XmsgIo implements Io {
     };
   }
 
-  async register(): Promise<void> {
+  private brokerAcknowledged?: (message: RawXmsgInbound) => Promise<void>;
+  private brokerHandler?: (message: RawXmsgInbound) => Promise<boolean>;
+
+  get registrationLimits() {
+    return (this.client as typeof this.client & { registrationLimits?: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number } }).registrationLimits;
+  }
+
+  setBrokerHandler(handler: (message: RawXmsgInbound) => Promise<boolean>, acknowledged?: (message: RawXmsgInbound) => Promise<void>): void { this.brokerHandler = handler; this.brokerAcknowledged = acknowledged; }
+  brokerReply = (id: string, text: string, key: string) => this.client.reply(id, text, key);
+  resume(): void { this.startPump(); }
+
+  async register(startPump = true): Promise<void> {
     await awaitRegister(this.client, this.wait, this.log, this.closeAbort.signal, {
       service: this.service,
       startMs: this.reconnectStartMs,
     });
-    this.startPump();
+    if (startPump) this.startPump();
   }
 
   bindSolicitedRequest(requestMessageId: string, thread: string): void {
@@ -600,9 +611,16 @@ export class XmsgIo implements Io {
         continue;
       }
       if (!msg) continue;
-      await this.handleRaw(msg);
+      try {
+        await this.handleRaw(msg);
+      } catch {
+        this.log(`${this.service}: incoming delivery deferred; no ACK`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        continue;
+      }
       try {
         await this.client.ack(msg.id);
+        await this.brokerAcknowledged?.(msg);
       } catch (e) {
         if (this.closed) break;
         if (isConnectionError(e)) {
@@ -618,6 +636,7 @@ export class XmsgIo implements Io {
   }
 
   private async handleRaw(m: RawXmsgInbound): Promise<void> {
+    if (await this.brokerHandler?.(m)) return;
     if (m.inReplyTo) {
       // 1. Pushed guard verdict reply
       if (this.guard?.routeReply(m.inReplyTo, m.text)) {

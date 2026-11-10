@@ -24,6 +24,8 @@ import {
   validateProposalFields,
 } from "../broker/index.ts";
 import { pr } from "../broker/pr.ts";
+import { BrokerBridge, type BridgePrincipal } from "../broker/bridge.ts";
+import { createHash } from "node:crypto";
 import { parseExpertReply, type ExpertReply } from "../dispatcher/reply.ts";
 import { escalationGuard } from "../escalation/guard.ts";
 import {
@@ -117,6 +119,9 @@ export interface Io {
   request?: (thread: string, payload: unknown) => Promise<string>;
   git?: GitRunner;
   onHandlerError?: HandlerErrorSink;
+  registrationLimits?: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number };
+  setBrokerHandler?: (handler: (message: { id: string; text: string; origin?: unknown }) => Promise<boolean>, acknowledged?: (message: { id: string; text: string; origin?: unknown }) => Promise<void>) => void;
+  brokerReply?: (id: string, text: string, key: string) => Promise<unknown>;
 }
 
 // Every secret is a file path, read at start or at use, never argv or the environment.
@@ -142,6 +147,7 @@ export interface Config {
   s3?: S3Config | null;
   // threadLink: the thread's public URL with `{thread}` where the thread id goes; a PR needs it.
   broker: {
+    bridge?: { allowlist: BridgePrincipal[]; maxBodyBytes?: number };
     tokenFile?: string | null;
     botLogin?: string;
     forbiddenLogins?: string[];
@@ -239,6 +245,11 @@ export function validateRootConfig(c: Config): { guardEnable: boolean; guardOutE
     const command = (value: unknown): value is { command: string; args: string[] } => Boolean(value && typeof value === "object" && typeof (value as any).command === "string" && (value as any).command.length && Array.isArray((value as any).args) && (value as any).args.every((arg: unknown) => typeof arg === "string"));
     if (!command(executor) || !command(executor.stop) || typeof executor.socketPath !== "string" || !executor.socketPath.startsWith("/")) throw new Error("tier1.executor requires command, args, stop and absolute socketPath");
     if (c.tier1.sandbox?.bwrap) throw new Error("tier1.sandbox.bwrap belongs to the local executor");
+  }
+  if (c.broker?.bridge) {
+    const b = c.broker.bridge;
+    if (!Array.isArray(b.allowlist) || b.allowlist.some((p) => !p || typeof p.service !== "string" || !p.service || typeof p.node !== "string" || !p.node || /[\s@\x00-\x1f]/u.test(p.service + p.node))
+        || (b.maxBodyBytes !== undefined && (!Number.isInteger(b.maxBodyBytes) || b.maxBodyBytes < 512 || b.maxBodyBytes > 65_536))) throw new Error("invalid broker.bridge allowlist or maxBodyBytes");
   }
   const guardEnable = c.guard?.enable ?? true;
   const guardOutEnable = c.broker?.guardOut?.enable ?? true;
@@ -437,6 +448,56 @@ export function main(
     return { ...tier1Config, root };
   };
   const fileServices = new Map<string, RootFileService>();
+  const propose = async (t: string, p: unknown) => {
+    const bad = errors(proposalSchema, p);
+    if (bad.length) {
+      return { thread: t, acted: false, reason: `not a proposal: ${bad.join("; ")}`, redactions: [] };
+    }
+    const prop = p as Proposal;
+    const fieldErr = validateProposalFields(prop);
+    if (fieldErr !== null) {
+      return { thread: t, acted: false, reason: `not a proposal: ${fieldErr}`, redactions: [] };
+    }
+    if (!c.broker.tokenFile && prop.kind !== "gist_read") {
+      return { thread: t, acted: false, reason: "the proposal broker is not configured on this deployment", redactions: [] };
+    }
+    if (
+      typeof c.broker.maxProposalsPerThreadPerDay === "number" &&
+      store.proposalCount(t) >= c.broker.maxProposalsPerThreadPerDay
+    ) {
+      return {
+        thread: t,
+        acted: false,
+        reason: `refused: thread exceeded maxProposalsPerThreadPerDay (${c.broker.maxProposalsPerThreadPerDay})`,
+        redactions: [],
+      };
+    }
+    const res = await broker(t, JSON.stringify(p), {
+      tokenFile: c.broker.tokenFile ?? null,
+      readScreen: screen,
+      botLogin,
+      forbiddenLogins,
+      githubApi,
+      mirrorRoot: c.mirror.mirrorRoot,
+      worktreeRoot: c.mirror.worktreeRoot,
+      repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
+      guard: guardOut,
+      act,
+    });
+    if (res.acted) {
+      if (res.gist) {
+        setContext(t, {
+          gh_transcript: [
+            ...context(t).gh_transcript,
+            { request: { kind: "gist_read", id: res.gist.id }, output: JSON.stringify(res.gist), screened: guardEnable },
+          ],
+        });
+      }
+      store.recordProposal(t);
+    }
+    return res;
+  };
+
   let hostForThread: (thread: string) => Host;
   const custody = new Custody({
     model: { baseUrl, api, id, apiKey: secret(keyFile) },
@@ -668,55 +729,7 @@ export function main(
         await postEnvelope(t, out.value);
         return { posted: true, ...(await escalateAfterPost(t, out.value)) };
       },
-      propose: async (p) => {
-        const bad = errors(proposalSchema, p);
-        if (bad.length) {
-          return { thread: t, acted: false, reason: `not a proposal: ${bad.join("; ")}`, redactions: [] };
-        }
-        const prop = p as Proposal;
-        const fieldErr = validateProposalFields(prop);
-        if (fieldErr !== null) {
-          return { thread: t, acted: false, reason: `not a proposal: ${fieldErr}`, redactions: [] };
-        }
-        if (!c.broker.tokenFile && prop.kind !== "gist_read") {
-          return { thread: t, acted: false, reason: "the proposal broker is not configured on this deployment", redactions: [] };
-        }
-        if (
-          typeof c.broker.maxProposalsPerThreadPerDay === "number" &&
-          store.proposalCount(t) >= c.broker.maxProposalsPerThreadPerDay
-        ) {
-          return {
-            thread: t,
-            acted: false,
-            reason: `refused: thread exceeded maxProposalsPerThreadPerDay (${c.broker.maxProposalsPerThreadPerDay})`,
-            redactions: [],
-          };
-        }
-        const res = await broker(t, JSON.stringify(p), {
-          tokenFile: c.broker.tokenFile ?? null,
-          readScreen: screen,
-          botLogin,
-          forbiddenLogins,
-          githubApi,
-          mirrorRoot: c.mirror.mirrorRoot,
-          worktreeRoot: c.mirror.worktreeRoot,
-          repoUrlBase: c.mirror.repoUrlBase ?? (c as { repoUrlBase?: string }).repoUrlBase,
-          guard: guardOut,
-          act,
-        });
-        if (res.acted) {
-          if (res.gist) {
-            setContext(t, {
-              gh_transcript: [
-                ...context(t).gh_transcript,
-                { request: { kind: "gist_read", id: res.gist.id }, output: JSON.stringify(res.gist), screened: guardEnable },
-              ],
-            });
-          }
-          store.recordProposal(t);
-        }
-        return res;
-      },
+      propose: (p) => propose(t, p),
       clone: (url) => worktreeFor({ ...c.mirror, cluster: c.mirror.cluster ?? c.tier1.cluster }, url, t, io.git),
       git: async (request) => {
         const bad = errors(gitRequestSchema, request);
@@ -967,6 +980,37 @@ export function main(
     }
   };
 
+  let bridge: BrokerBridge | undefined;
+  if (c.broker.bridge) {
+    const limits = io.registrationLimits;
+    if (!io.setBrokerHandler || !io.brokerReply || !limits || !Number.isInteger(limits.max_body_bytes)
+        || !Number.isInteger(limits.reply_ttl_secs) || !Number.isInteger(limits.idempotency_ttl_secs)) {
+      throw new Error("broker.bridge requires negotiated xmsg body and replay limits");
+    }
+    const negotiatedContract = JSON.stringify([limits.max_body_bytes, limits.reply_ttl_secs, limits.idempotency_ttl_secs]);
+    const checkContract = () => {
+      const current = io.registrationLimits;
+      if (JSON.stringify([current?.max_body_bytes, current?.reply_ttl_secs, current?.idempotency_ttl_secs]) !== negotiatedContract) {
+        throw new Error("broker bus limits changed; restart root to renegotiate");
+      }
+    };
+    bridge = new BrokerBridge({
+      stateRoot: `${c.stateRoot}/broker-bridge`, allowlist: c.broker.bridge.allowlist,
+      maxBodyBytes: Math.min(c.broker.bridge.maxBodyBytes ?? 65_536, limits.max_body_bytes!),
+      retentionMs: Math.max(limits.reply_ttl_secs!, limits.idempotency_ttl_secs!) * 1000,
+      checkContract,
+      propose: (principal, proposal) => propose(`broker-${createHash("sha256").update(JSON.stringify([principal.service, principal.node])).digest("hex")}`, proposal),
+      reply: (id, text, key) => {
+        const currentMax = io.registrationLimits?.max_body_bytes;
+        if (!Number.isSafeInteger(currentMax) || currentMax! < new TextEncoder().encode(text).byteLength) {
+          throw new Error("broker result exceeds current bus limit");
+        }
+        return io.brokerReply!(id, text, key);
+      },
+    });
+    io.setBrokerHandler((message) => bridge!.accept({ ...message, origin: message.origin }), (message) => bridge!.acknowledge({ ...message, origin: message.origin }));
+  }
+
   return {
     store,
     supervisor,
@@ -975,7 +1019,8 @@ export function main(
     context,
     redactLastPost,
     editLastPost,
-    start() {
+    async start() {
+      await bridge?.start();
       lifecycle.start();
       gc.start();
     },
@@ -985,6 +1030,7 @@ export function main(
         for (const i of batch) await handle(i).catch((e) => console.error(`thread ${i.thread}: ${e}`));
     },
     async stop(): Promise<void> {
+      await bridge?.close();
       lifecycle.stop();
       gc.stop();
       await supervisor.shutdown();

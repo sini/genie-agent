@@ -89,8 +89,7 @@ uncertain; inspect the target before retrying a non-idempotent creation or comme
 The Nix module exposes `services.genie-agent.broker.tokenFile`, `botLogin`,
 `forbiddenLogins` and `maxProposalsPerThreadPerDay`; root JSON uses the same fields
 under `broker`. Keep the actual token in its file. The owner selects and provisions
-the machine account separately. These operations add no credential holder,
-service protocol or hosted-client bridge.
+the machine account separately. These operations add no credential holder or bus protocol.
 
 The portable tests exercise a fake GitHub API, fake guards and the actual model
 argument converter:
@@ -104,3 +103,70 @@ Use the project's Node version with TypeScript stripping support, or its develop
 shell. The tests verify anonymous reads, ownership refusal, write guard order,
 public opt-in through the model/root/API path, and screened transcript handling.
 They do not establish a live account or a deployed GitHub action.
+
+## Direct requests from a gateway service
+
+The optional `broker.bridge` accepts the four gist proposal kinds over the existing
+registered xmsg service, without starting a model conversation. Its default
+allowlist is empty. The same proposal validation, redaction, guards, bot identity,
+update ownership, daily quota and processed read transcript apply to direct requests.
+Reads use the global inbound guard setting, including its explicit off mode.
+
+**Granting a gateway principal send to the broker service grants it the broker’s gist operations.**
+The allowlist matches the transport-attested service and node exactly; sender labels,
+forwarded human names and body identity claims grant no authority. An instance or
+anonymous sender cannot substitute for an allowed service.
+
+For example, root JSON can include:
+
+```json
+{
+  "broker": {
+    "bridge": {
+      "allowlist": [{ "service": "gateway", "node": "edge.example" }],
+      "maxBodyBytes": 65536
+    }
+  }
+}
+```
+
+This fragment extends the normal root configuration. The Nix module exposes the
+same fields under `services.genie-agent.broker.bridge`; its default is `null`.
+The bridge requires a bus that advertises its effective body, reply and
+idempotency limits at registration. The complete serialized result is bounded by
+the smaller of `maxBodyBytes` and the negotiated body limit. If the negotiated body
+or replay limits change on reconnect, new requests receive durable refusals until root restarts and negotiates a fresh
+contract. Already queued Acts remain held. Recorded replies can still be delivered
+if their original immutable body fits the current bus limit; oversized results
+remain held without rewriting their body or idempotency key. A gist that fits the
+read limit can still produce an oversized Action wrapper: that request receives
+an explicit result-too-large refusal rather than truncated JSON or files.
+
+A gateway sends the existing strict Proposal JSON following its external-message
+preamble. Root recognizes that framing and also direct typed gist proposals;
+the preamble is data, not authority. PR proposals are outside this bridge.
+Results use the existing Action JSON and a correlated reply to the original xmsg
+message ID, with a stable reply idempotency key. Unknown or malformed callers
+receive bounded refusals without GitHub or model calls.
+
+Requests are persisted before their upstream ACK; a separate bounded worker
+executes them while intake continues receiving guard responses. Records bind the
+attested caller, original message ID and payload fingerprint. Duplicate deliveries
+reuse the recorded result, and conflicting payloads are refused. Completed results
+are persisted before replying. After a crash, reads can retry; a write that was
+in progress becomes explicitly uncertain and is never automatically repeated.
+The external-acceptance/crash window cannot establish exactly-once GitHub writes.
+Unacknowledged or uncertain work remains held against the bounded record capacity;
+replay lifetimes alone do not justify repeating it. When the bounded queue is full,
+the next request remains unacknowledged. That FIFO head can delay guard responses
+behind it; the existing finite guard deadline fails the affected operation closed
+and releases worker capacity so intake can resume. No unreviewed Act or
+unpersisted ACK is used to relieve backpressure.
+
+Quota and transcript attribution use a stable root-derived caller context, never
+a thread chosen by the requester. Direct traffic creates no pi session. Local
+fixtures exercise this path without a GitHub account or live service:
+
+```sh
+node --test tests/root-broker-bridge.test.ts tests/broker-transport.test.ts
+```

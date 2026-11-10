@@ -37,7 +37,7 @@ export interface XmsgClient extends XmsgSessions {
   send(session: string, text: string, key: string): Promise<string>;
   // The text of each reply to a message, waiting up to waitMs for the first.
   replies(id: string, waitMs: number): Promise<string[]>;
-  reply(id: string, text: string): Promise<string | void>;
+  reply(id: string, text: string, key?: string): Promise<string | void>;
 }
 
 const secs = (ms: number) => Math.min(60, Math.ceil(ms / 1000));
@@ -91,6 +91,7 @@ export class SocketXmsg implements XmsgClient {
   private reg: Lines | null = null;
   address?: string;
   node?: string;
+  registrationLimits: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number } = {};
 
   constructor(dir: string, name: string) {
     this.dir = dir;
@@ -104,6 +105,7 @@ export class SocketXmsg implements XmsgClient {
     const r = await this.reg.call({ harness: "svc", name: this.name });
     this.address = r.address;
     this.node = r.node;
+    this.registrationLimits = { max_body_bytes: r.max_body_bytes, reply_ttl_secs: r.reply_ttl_secs, idempotency_ttl_secs: r.idempotency_ttl_secs };
     return { address: r.address, node: r.node };
   }
 
@@ -148,8 +150,8 @@ export class SocketXmsg implements XmsgClient {
     return r.message_id;
   }
 
-  async reply(id: string, text: string): Promise<string | void> {
-    const r = await this.registered({ action: "reply", messageId: id, text });
+  async reply(id: string, text: string, key?: string): Promise<string | void> {
+    const r = await this.registered({ action: "reply", messageId: id, text, ...(key === undefined ? {} : { idempotency_key: key }) });
     return typeof r?.messageId === "string" ? r.messageId : undefined;
   }
 
