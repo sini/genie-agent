@@ -248,6 +248,75 @@ let
   fullCfg = evalFull.config.services.genie-agent;
   noGuardCfg = evalNoGuard.config.services.genie-agent;
 
+  # Evaluate evalLocal with loadCredential = false (explicit per-credential *File paths, adapter off)
+  evalLocalAdapterOff = evalLocal.extendModules {
+    modules = [ { services.genie-agent.loadCredential = false; } ];
+  };
+
+  # Evaluate loadCredential = false with credentialsDir convenience default + explicit *File overrides
+  evalCredsDirAdapterOff = nixpkgs.lib.nixosSystem {
+    system = pkgs.stdenv.hostPlatform.system;
+    modules = [
+      self.nixosModules.default
+      {
+        system.stateVersion = "25.05";
+        services.genie-agent = {
+          enable = true;
+          loadCredential = false;
+          credentialsDir = "/var/credentials/genie";
+          user = "sini";
+          xmsgSocket = "/run/user/1000/xmsg";
+          model = {
+            baseUrl = "http://10.9.2.2:18020/v1";
+            id = "qwen3.6-35b-a3b";
+          };
+          tier1 = {
+            searxngUrl = "http://10.11.0.24:8080";
+            cluster = [ "10.11.0.0/16" ];
+          };
+          hindsightUrl = "http://10.11.0.20:8888";
+          githubReadTokenFile = "/var/custom-secrets/gh-read-token";
+          s3 = {
+            endpoint = "http://10.11.0.30:3900";
+            region = "garage";
+            bucket = "genie-transcripts";
+            accessKeyId = "GK123";
+          };
+          broker = {
+            tokenFile = "/var/custom-secrets/broker-token";
+            githubApi = "https://api.github.com";
+            threadLink = "https://matrix.to/#/!room:example.org/{thread}";
+          };
+          guardRef = "genie-guard@sini.bitstream";
+          guard = {
+            enable = true;
+            scopeProducer = "matrix-xmsg@example.node";
+            ninferUrl = "http://10.9.2.2:18020/v1";
+          };
+          experts = {
+            enable = true;
+            herdrPackage = pkgs.herdr;
+            claudePackage = pkgs.writeShellScriptBin "claude" "exit 0";
+            xmsgPackage = pkgs.writeShellScriptBin "xmsg" "exit 0";
+            public = {
+              address = "genie-expert-public@sini.bitstream";
+              reposDir = "/var/lib/genie/public-repos";
+              memoryDir = "/var/lib/genie/support-memory";
+              # tokenEnvironmentFile omitted: defaults to "${credentialsDir}/expert-public-token"
+            };
+            trusted = {
+              address = "genie-expert-trusted@sini.bitstream";
+              reposDir = "/home/sini/Documents/repos/sini";
+              memoryDir = "/home/sini/.claude/memory";
+              # explicit *File override wins over credentialsDir
+              tokenEnvironmentFile = "/var/custom-secrets/trusted-token";
+            };
+          };
+        };
+      }
+    ];
+  };
+
   executorConfig = evalLocal.extendModules {
     modules = [
       {
@@ -391,6 +460,41 @@ let
         extractUnit
           evalLocal.config.systemd.services."genie-dispatcher@trusted";
     };
+    fullUnits = {
+      genie-agent = extractUnit evalFull.config.systemd.services.genie-agent;
+      genie-guard = extractUnit evalFull.config.systemd.services.genie-guard;
+    };
+    localAdapterOffUnits = {
+      genie-agent = extractUnit evalLocalAdapterOff.config.systemd.services.genie-agent;
+      genie-guard = extractUnit evalLocalAdapterOff.config.systemd.services.genie-guard;
+      "genie-herdr@public" = extractUnit evalLocalAdapterOff.config.systemd.services."genie-herdr@public";
+      "genie-herdr@trusted" =
+        extractUnit
+          evalLocalAdapterOff.config.systemd.services."genie-herdr@trusted";
+      "genie-dispatcher@public" =
+        extractUnit
+          evalLocalAdapterOff.config.systemd.services."genie-dispatcher@public";
+      "genie-dispatcher@trusted" =
+        extractUnit
+          evalLocalAdapterOff.config.systemd.services."genie-dispatcher@trusted";
+    };
+    credsDirAdapterOffUnits = {
+      genie-agent = extractUnit evalCredsDirAdapterOff.config.systemd.services.genie-agent;
+      genie-guard = extractUnit evalCredsDirAdapterOff.config.systemd.services.genie-guard;
+      "genie-herdr@public" =
+        extractUnit
+          evalCredsDirAdapterOff.config.systemd.services."genie-herdr@public";
+      "genie-herdr@trusted" =
+        extractUnit
+          evalCredsDirAdapterOff.config.systemd.services."genie-herdr@trusted";
+      "genie-dispatcher@public" =
+        extractUnit
+          evalCredsDirAdapterOff.config.systemd.services."genie-dispatcher@public";
+      "genie-dispatcher@trusted" =
+        extractUnit
+          evalCredsDirAdapterOff.config.systemd.services."genie-dispatcher@trusted";
+    };
+    credsDirFailedAssertions = failedAssertions evalCredsDirAdapterOff;
     noGuardUnits = {
       hasGenieGuard = evalNoGuard.config.systemd.services ? genie-guard;
       genieAgent = extractUnit evalNoGuard.config.systemd.services.genie-agent;
@@ -463,6 +567,8 @@ pkgs.runCommand "genie-agent-nixos-module"
       && grep -q '^ok [0-9]* - oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAttrs and src/root/index.ts Config$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false omit genie-guard unit, xmsg.guard, and guard-out-key credential; guard.enable = true with guardRef = null triggers assertion$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-write and exactly its repos and memory read-only, runs in a private PID namespace, and only herdr loads the tier token$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle (loadCredential = false): adapter-off mode sets LoadCredential = \[\] on all units, wires credentialsDir and explicit \*File paths into rootConfigJson, ExecStart, BindReadOnlyPaths, and InaccessiblePaths$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle (loadCredential = true): default adapter-on mode is deepEqual on every rendered unit and rootConfigJson to the LoadCredential baseline$' $TMPDIR/tap \
       && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
     touch $out
   ''

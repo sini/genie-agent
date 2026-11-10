@@ -481,3 +481,219 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
     "experts enabled with xmsgPackage = null must throw at evaluation (GF2)",
   );
 });
+
+test("oracle (loadCredential = false): adapter-off mode sets LoadCredential = [] on all units, wires credentialsDir and explicit *File paths into rootConfigJson, ExecStart, BindReadOnlyPaths, and InaccessiblePaths", () => {
+  assert.deepEqual(summary.credsDirFailedAssertions, []);
+
+  const unitNames = [
+    "genie-agent",
+    "genie-guard",
+    "genie-herdr@public",
+    "genie-herdr@trusted",
+    "genie-dispatcher@public",
+    "genie-dispatcher@trusted",
+  ] as const;
+
+  for (const name of unitNames) {
+    assert.deepEqual(
+      summary.localAdapterOffUnits[name].serviceConfig.LoadCredential,
+      [],
+      `localAdapterOffUnits[${name}] must have LoadCredential = []`,
+    );
+    assert.deepEqual(
+      summary.credsDirAdapterOffUnits[name].serviceConfig.LoadCredential,
+      [],
+      `credsDirAdapterOffUnits[${name}] must have LoadCredential = []`,
+    );
+  }
+
+  // 1. Verify evalLocalAdapterOff (explicit *File paths, loadCredential = false)
+  const localOffExec = summary.localAdapterOffUnits["genie-agent"].serviceConfig.ExecStart as string;
+  const localOffCfgMatch = /--config (\S+)/.exec(localOffExec);
+  assert.ok(localOffCfgMatch, `expected --config in ${localOffExec}`);
+  const localOffRootCfg = JSON.parse(readFileSync(localOffCfgMatch[1], "utf8"));
+  assert.equal(localOffRootCfg.model.keyFile, "/home/sini/.config/hyperqwen/api-key");
+  assert.equal(localOffRootCfg.broker.guardOut.keyFile, "/home/sini/.config/hyperqwen/api-key");
+  assert.ok(
+    summary.localAdapterOffUnits["genie-agent"].serviceConfig.BindReadOnlyPaths.includes(
+      "/home/sini/.config/hyperqwen/api-key",
+    ),
+  );
+  assert.match(
+    summary.localAdapterOffUnits["genie-guard"].serviceConfig.ExecStart,
+    /--api-key-file \/home\/sini\/\.config\/hyperqwen\/api-key/,
+  );
+  assert.deepEqual(summary.localAdapterOffUnits["genie-guard"].serviceConfig.BindReadOnlyPaths, [
+    "/home/sini/.config/hyperqwen/api-key",
+  ]);
+  for (const tier of ["public", "trusted"] as const) {
+    const other = tier === "public" ? "trusted" : "public";
+    const dispSc = summary.localAdapterOffUnits[`genie-dispatcher@${tier}`].serviceConfig;
+    assert.match(
+      dispSc.ExecStart,
+      new RegExp(`--token-credential-file /run/agenix/genie-expert-${tier}-token`),
+    );
+    assert.ok(dispSc.BindReadOnlyPaths.includes(`/run/agenix/genie-expert-${tier}-token`));
+    assert.ok(!dispSc.InaccessiblePaths.includes("-/run/agenix"), "must not mask parent directory of configured tokenEnvironmentFile");
+    assert.ok(dispSc.InaccessiblePaths.includes(`-/run/agenix/genie-expert-${other}-token`));
+    assert.ok(dispSc.InaccessiblePaths.includes("-/home/sini/.config/hyperqwen/api-key"));
+  }
+
+  // 2. Verify evalCredsDirAdapterOff (credentialsDir defaults + explicit *File overrides)
+  const credsDirExec = summary.credsDirAdapterOffUnits["genie-agent"].serviceConfig.ExecStart as string;
+  const credsDirCfgMatch = /--config (\S+)/.exec(credsDirExec);
+  assert.ok(credsDirCfgMatch, `expected --config in ${credsDirExec}`);
+  const credsDirRootCfg = JSON.parse(readFileSync(credsDirCfgMatch[1], "utf8"));
+  assert.equal(credsDirRootCfg.model.keyFile, "/var/credentials/genie/model-key");
+  assert.equal(credsDirRootCfg.broker.guardOut.keyFile, "/var/credentials/genie/model-key");
+  assert.equal(credsDirRootCfg.s3.secretKeyFile, "/var/credentials/genie/s3-secret-key");
+  assert.equal(credsDirRootCfg.broker.tokenFile, "/var/custom-secrets/broker-token");
+  assert.equal(credsDirRootCfg.githubReadTokenFile, "/var/custom-secrets/gh-read-token");
+
+  const rootRoBinds = summary.credsDirAdapterOffUnits["genie-agent"].serviceConfig.BindReadOnlyPaths as string[];
+  for (const expectedBind of [
+    "/var/credentials/genie/model-key",
+    "/var/credentials/genie/s3-secret-key",
+    "/var/custom-secrets/broker-token",
+    "/var/custom-secrets/gh-read-token",
+  ]) {
+    assert.ok(rootRoBinds.includes(expectedBind), `expected ${expectedBind} in genie-agent BindReadOnlyPaths`);
+  }
+
+  const guardOffSc = summary.credsDirAdapterOffUnits["genie-guard"].serviceConfig;
+  assert.match(guardOffSc.ExecStart, /--api-key-file \/var\/credentials\/genie\/model-key/);
+  assert.doesNotMatch(guardOffSc.ExecStart, /\/run\/credentials\//);
+  assert.deepEqual(guardOffSc.BindReadOnlyPaths, ["/var/credentials/genie/model-key"]);
+
+  // Public dispatcher uses credentialsDir default; trusted dispatcher uses explicit tokenEnvironmentFile override
+  const pubDispSc = summary.credsDirAdapterOffUnits["genie-dispatcher@public"].serviceConfig;
+  assert.match(pubDispSc.ExecStart, /--token-credential-file \/var\/credentials\/genie\/expert-public-token/);
+  assert.ok(pubDispSc.BindReadOnlyPaths.includes("/var/credentials/genie/expert-public-token"));
+  assert.ok(pubDispSc.InaccessiblePaths.includes("-/var/custom-secrets/trusted-token"));
+  assert.ok(pubDispSc.InaccessiblePaths.includes("-/var/credentials/genie/model-key"));
+  assert.ok(pubDispSc.InaccessiblePaths.includes("-/var/credentials/genie/s3-secret-key"));
+  assert.ok(pubDispSc.InaccessiblePaths.includes("-/var/custom-secrets/broker-token"));
+  assert.ok(pubDispSc.InaccessiblePaths.includes("-/var/custom-secrets/gh-read-token"));
+
+  const trustedDispSc = summary.credsDirAdapterOffUnits["genie-dispatcher@trusted"].serviceConfig;
+  assert.match(trustedDispSc.ExecStart, /--token-credential-file \/var\/custom-secrets\/trusted-token/);
+  assert.ok(trustedDispSc.BindReadOnlyPaths.includes("/var/custom-secrets/trusted-token"));
+  assert.ok(trustedDispSc.InaccessiblePaths.includes("-/var/credentials/genie/expert-public-token"));
+  assert.ok(trustedDispSc.InaccessiblePaths.includes("-/var/credentials/genie/model-key"));
+  assert.ok(trustedDispSc.InaccessiblePaths.includes("-/var/credentials/genie/s3-secret-key"));
+  assert.ok(trustedDispSc.InaccessiblePaths.includes("-/var/custom-secrets/broker-token"));
+  assert.ok(trustedDispSc.InaccessiblePaths.includes("-/var/custom-secrets/gh-read-token"));
+
+  // Both herdr units mask credentialsDir and every configured credential path
+  for (const tier of ["public", "trusted"] as const) {
+    const herdrInacc = summary.credsDirAdapterOffUnits[`genie-herdr@${tier}`].serviceConfig.InaccessiblePaths as string[];
+    for (const masked of [
+      "-/var/credentials/genie",
+      "-/var/credentials/genie/model-key",
+      "-/var/credentials/genie/s3-secret-key",
+      "-/var/custom-secrets/broker-token",
+      "-/var/custom-secrets/gh-read-token",
+      "-/var/credentials/genie/expert-public-token",
+      "-/var/custom-secrets/trusted-token",
+    ]) {
+      assert.ok(herdrInacc.includes(masked), `expected ${masked} in genie-herdr@${tier}.InaccessiblePaths`);
+    }
+  }
+});
+
+test("oracle (loadCredential = true): default adapter-on mode is deepEqual on every rendered unit and rootConfigJson to the LoadCredential baseline", () => {
+  const localExec = summary.units["genie-agent"].serviceConfig.ExecStart as string;
+  const localCfgMatch = /--config (\S+)/.exec(localExec);
+  assert.ok(localCfgMatch);
+  assert.equal(localCfgMatch[1], process.env.GENIE_LOCAL_ROOT_CONFIG);
+  assert.deepEqual(JSON.parse(readFileSync(localCfgMatch[1], "utf8")), summary.localRootAttrs);
+
+  const fullExec = summary.fullUnits["genie-agent"].serviceConfig.ExecStart as string;
+  const fullCfgMatch = /--config (\S+)/.exec(fullExec);
+  assert.ok(fullCfgMatch);
+  assert.equal(fullCfgMatch[1], process.env.GENIE_FULL_ROOT_CONFIG);
+  assert.deepEqual(JSON.parse(readFileSync(fullCfgMatch[1], "utf8")), summary.fullRootAttrs);
+
+  // Verify exact deepEqual of all 6 rendered units when loadCredential = true against the baseline
+  const expectedGenieAgent = {
+    ...summary.localAdapterOffUnits["genie-agent"],
+    serviceConfig: {
+      ...summary.localAdapterOffUnits["genie-agent"].serviceConfig,
+      ExecStart: summary.localAdapterOffUnits["genie-agent"].serviceConfig.ExecStart.replace(
+        /--config \S+/,
+        `--config ${process.env.GENIE_LOCAL_ROOT_CONFIG}`,
+      ),
+      LoadCredential: [
+        "model-key:/home/sini/.config/hyperqwen/api-key",
+        "guard-out-key:/home/sini/.config/hyperqwen/api-key",
+      ],
+      BindReadOnlyPaths: summary.localAdapterOffUnits["genie-agent"].serviceConfig.BindReadOnlyPaths.filter(
+        (p: string) => p.endsWith(":/memory"),
+      ),
+    },
+  };
+  assert.deepEqual(summary.units["genie-agent"], expectedGenieAgent);
+
+  const expectedGenieGuard = {
+    ...summary.localAdapterOffUnits["genie-guard"],
+    serviceConfig: {
+      ...summary.localAdapterOffUnits["genie-guard"].serviceConfig,
+      ExecStart: summary.localAdapterOffUnits["genie-guard"].serviceConfig.ExecStart.replace(
+        /--api-key-file \S+/,
+        "--api-key-file /run/credentials/genie-guard.service/api-key",
+      ),
+      LoadCredential: ["api-key:/home/sini/.config/hyperqwen/api-key"],
+      BindReadOnlyPaths: [],
+    },
+  };
+  assert.deepEqual(summary.units["genie-guard"], expectedGenieGuard);
+
+  for (const tier of ["public", "trusted"] as const) {
+    const other = tier === "public" ? "trusted" : "public";
+    const expectedHerdr = {
+      ...summary.localAdapterOffUnits[`genie-herdr@${tier}`],
+      serviceConfig: {
+        ...summary.localAdapterOffUnits[`genie-herdr@${tier}`].serviceConfig,
+        InaccessiblePaths: [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          `/var/lib/genie-agent/claude-${other}`,
+          `/var/lib/genie-agent/cwd-${other}`,
+          `/var/lib/genie-agent/dispatcher-${other}`,
+          `/var/lib/genie-agent/herdr-session-${other}`,
+          `-/var/lib/genie-agent/.config/herdr/sessions/genie-${other}`,
+        ],
+      },
+    };
+    assert.deepEqual(summary.units[`genie-herdr@${tier}`], expectedHerdr);
+
+    const expectedDisp = {
+      ...summary.localAdapterOffUnits[`genie-dispatcher@${tier}`],
+      serviceConfig: {
+        ...summary.localAdapterOffUnits[`genie-dispatcher@${tier}`].serviceConfig,
+        ExecStart: summary.localAdapterOffUnits[`genie-dispatcher@${tier}`].serviceConfig.ExecStart.replace(
+          /--token-credential-file \S+/,
+          `--token-credential-file /run/credentials/genie-dispatcher@${tier}.service/tier-token`,
+        ),
+        LoadCredential: [`tier-token:/run/agenix/genie-expert-${tier}-token`],
+        BindReadOnlyPaths: summary.localAdapterOffUnits[`genie-dispatcher@${tier}`].serviceConfig.BindReadOnlyPaths.filter(
+          (p: string) => !p.startsWith("/run/agenix/"),
+        ),
+        InaccessiblePaths: [
+          `-/run/credentials/genie-dispatcher@${other}.service`,
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          `/var/lib/genie-agent/claude-${other}`,
+          `/var/lib/genie-agent/cwd-${other}`,
+          `/var/lib/genie-agent/dispatcher-${other}`,
+          `/var/lib/genie-agent/herdr-session-${other}`,
+          `-/var/lib/genie-agent/.config/herdr/sessions/genie-${other}`,
+        ],
+      },
+    };
+    assert.deepEqual(summary.units[`genie-dispatcher@${tier}`], expectedDisp);
+  }
+});

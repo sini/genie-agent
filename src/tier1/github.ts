@@ -95,7 +95,19 @@ export async function ghRead(req: GhReadRequest, opts: GhReadOptions = {}): Prom
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const maxBytes = opts.maxBytes ?? 16_384;
 
-  const token = opts.tokenFile ? readFileSync(opts.tokenFile, "utf8").trim() : undefined;
+  const token =
+    opts.tokenFile !== undefined && opts.tokenFile !== null
+      ? (() => {
+          let raw: string;
+          try {
+            raw = readFileSync(opts.tokenFile, "utf8").trim();
+          } catch (e) {
+            throw new Error(`gh_read: token file unreadable (${opts.tokenFile}): ${e instanceof Error ? e.message : String(e)}`);
+          }
+          if (!raw) throw new Error(`gh_read: token file is empty: ${opts.tokenFile}`);
+          return raw;
+        })()
+      : undefined;
   const enc = (s: string) => encodeURIComponent(s);
 
   const fetchEndpoint = async (pathAndQuery: string, accept = "application/vnd.github+json"): Promise<string> => {

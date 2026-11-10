@@ -992,6 +992,34 @@ test("oracle O-GC1-gh-read: gh_read supports all 8 kinds against stub GitHub API
     "ghRead must refuse 3xx redirects",
   );
   assert.equal(redirectHits.length, 0, "redirect target must receive 0 requests under redirect: manual");
+
+  // 5. Configured tokenFile that is missing, empty, or whitespace-only fails closed with 0 HTTP requests;
+  //    unconfigured tokenFile (undefined) proceeds anonymously without an Authorization header.
+  const emptyTok = `${tmp}/empty-gh-token`;
+  const blankTok = `${tmp}/blank-gh-token`;
+  const missingTok = `${tmp}/missing-gh-token`;
+  writeFileSync(emptyTok, "");
+  writeFileSync(blankTok, "  \n\t ");
+  const hitsBeforeCredCheck = ghHits.length;
+  for (const [label, badFile, re] of [
+    ["missing", missingTok, /gh_read: token file unreadable/],
+    ["empty", emptyTok, /gh_read: token file is empty/],
+    ["blank", blankTok, /gh_read: token file is empty/],
+  ] as const) {
+    await assert.rejects(
+      ghRead({ kind: "issue", repo: "denful/den", id: "42" }, { ...opts, tokenFile: badFile }),
+      re,
+      `ghRead (${label} tokenFile) must fail closed`,
+    );
+  }
+  assert.equal(ghHits.length, hitsBeforeCredCheck, "failed tokenFile read must make 0 HTTP requests");
+
+  const anonRes = (await ghRead(
+    { kind: "issue", repo: "denful/den", id: "42" },
+    { githubApi: opts.githubApi, tokenFile: undefined },
+  )) as any;
+  assert.equal(anonRes.issue.number, 42);
+  assert.equal(ghHits.at(-1)?.auth, undefined, "unconfigured tokenFile must omit Authorization header");
 });
 
 test("oracle O-GE2-FA-reply: reply tool description warns that posted: true means already posted and not to call reply again", () => {

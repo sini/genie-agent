@@ -36,6 +36,7 @@ import {
   type XmsgClient,
 } from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
+import { config as dispatcherConfig, startDispatcher } from "../src/dispatcher/main.ts";
 
 // A herdr server that outlives the dispatcher, recording every call.
 class FakeHerdr implements Herdr {
@@ -1330,3 +1331,140 @@ test("portable dispatcher migrates legacy token references without launching an 
   assert.deepEqual(reopened.journal.tokens["tier-token"], { state: "available" });
   assert.equal(herdr.starts.length, starts);
 });
+
+expertHostTest(
+  "oracle (loadCredential adapter off & fail-closed tokenCredentialFile): CliHerdr and startDispatcher prioritize configured tokenCredentialFile / credentialsDir over decoy CREDENTIALS_DIRECTORY and fail closed on missing or empty tokenCredentialFile",
+  { timeout: 15_000 },
+  async () => {
+    const dir = mkdtempSync(`${tmpdir()}/dao-`);
+    const credDir = `${dir}/creds`;
+    const decoyDir = `${dir}/decoy`;
+    const stateDir = `${dir}/s`;
+    const cwdDir = `${dir}/cwd`;
+    const cfgDir = `${dir}/cfg`;
+    const shimBin = `${dir}/shim`;
+    const handoffOut = `${dir}/handoff.json`;
+    mkdirSync(credDir, { recursive: true, mode: 0o700 });
+    mkdirSync(decoyDir, { recursive: true, mode: 0o700 });
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cwdDir, { recursive: true, mode: 0o700 });
+    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+
+    const configuredTokenFile = `${credDir}/public.token`;
+    writeFileSync(configuredTokenFile, "CLAUDE_CODE_OAUTH_TOKEN=real-adapter-off-token-0000\n", { mode: 0o600 });
+    writeFileSync(`${decoyDir}/tier-token`, "CLAUDE_CODE_OAUTH_TOKEN=decoy-cred-dir-token-9999\n", { mode: 0o600 });
+    writeFileSync(`${decoyDir}/public.token`, "CLAUDE_CODE_OAUTH_TOKEN=decoy-cred-dir-token-9999\n", { mode: 0o600 });
+
+    writeFileSync(
+      shimBin,
+      [
+        "import json, os, socket, sys",
+        "sep = sys.argv.index('--')",
+        "head = sys.argv[1:sep]",
+        "sock_path = head[1]",
+        "thread_id = head[3]",
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        "s.connect(sock_path)",
+        "msg, fds, _, _ = socket.recv_fds(s, 16, 1)",
+        "s.close()",
+        "fd = fds[0]",
+        "with os.fdopen(fd, 'r', encoding='utf-8', closefd=True) as f:",
+        "    tok = f.read().strip()",
+        `with open(${JSON.stringify(handoffOut)}, 'w', encoding='utf-8') as out:`,
+        "    json.dump({'thread_id': thread_id, 'tok': tok}, out)",
+      ].join("\n") + "\n",
+      { mode: 0o755 },
+    );
+
+    const selfNspids = readFileSync("/proc/self/status", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("NSpid:"))!
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+
+    // 1. Fail-closed check on startDispatcher when tokenCredentialFile is missing or empty (0-byte), before xmsg registration
+    const emptyTokenFile = `${credDir}/empty-token`;
+    const missingTokenFile = `${credDir}/missing-token`;
+    writeFileSync(emptyTokenFile, "", { mode: 0o600 });
+
+    const baseDispCfg = dispatcherConfig(
+      [
+        "--state-dir",
+        stateDir,
+        "--herdr-session",
+        "genie-public",
+        "--cwd",
+        cwdDir,
+        "--token-config-dir",
+        cfgDir,
+        "--token-credential-file",
+        configuredTokenFile,
+      ],
+      { XDG_RUNTIME_DIR: `${dir}/nonexistent-runtime` },
+    );
+    await assert.rejects(
+      startDispatcher({ ...baseDispCfg, tokenCredentialFile: missingTokenFile }),
+      /credential file unreadable/,
+      "startDispatcher must fail closed when configured tokenCredentialFile is missing",
+    );
+    await assert.rejects(
+      startDispatcher({ ...baseDispCfg, tokenCredentialFile: emptyTokenFile }),
+      /credential file is empty/,
+      "startDispatcher must fail closed when configured tokenCredentialFile is 0-byte empty",
+    );
+
+    // 2. CliHerdr with decoy CREDENTIALS_DIRECTORY in process.env reads from configured tokenCredentialFile, not decoyDir
+    const prevCredsEnv = process.env.CREDENTIALS_DIRECTORY;
+    process.env.CREDENTIALS_DIRECTORY = decoyDir;
+    try {
+      const herdr = new CliHerdr({
+        session: "genie-public",
+        claude: shimBin,
+        cwdDir,
+        stateDir,
+        tokenCredentialFile: configuredTokenFile,
+        expectedNspidDepth: selfNspids.length,
+        run: async (argv) => {
+          const key = argv.slice(3, 5).join(" ");
+          if (key === "agent list") return ok({ agents: [] });
+          if (key === "pane list") return ok({ panes: [] });
+          if (key === "workspace create") return ok({ root_pane: { pane_id: "w1:p1" } });
+          if (key === "pane split") return ok({ pane: { pane_id: "w1:p2" } });
+          if (key === "pane close") return ok({ type: "ok" });
+          if (key === "agent start") {
+            const sep = argv.indexOf("--");
+            const cmd = argv[argv.indexOf("--command") + 1];
+            const shimArgs = argv.slice(sep + 1);
+            await new Promise<void>((resolve, reject) => {
+              const p = spawn("python3", ["-I", cmd, ...shimArgs], { cwd: cwdDir, stdio: "ignore" });
+              p.once("error", reject);
+              p.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`shim exited ${code}`))));
+            });
+            return ok({ type: "agent_started" });
+          }
+          throw new Error(`unexpected herdr command: ${argv.join(" ")}`);
+        },
+      });
+
+      const d = await Dispatcher.open({
+        stateDir,
+        herdr,
+        xmsg: { list: async () => [] },
+        pickToken: () => ({ id: "tier-token", configDir: cfgDir }),
+        cwd: cwdDir,
+      });
+      await d.escalate("th-1");
+      const recorded = JSON.parse(readFileSync(handoffOut, "utf8"));
+      assert.equal(recorded.thread_id, "th-1");
+      assert.equal(
+        recorded.tok,
+        "real-adapter-off-token-0000",
+        "CliHerdr must hand off token from configured tokenCredentialFile, ignoring decoy CREDENTIALS_DIRECTORY",
+      );
+    } finally {
+      if (prevCredsEnv === undefined) delete process.env.CREDENTIALS_DIRECTORY;
+      else process.env.CREDENTIALS_DIRECTORY = prevCredsEnv;
+    }
+  },
+);

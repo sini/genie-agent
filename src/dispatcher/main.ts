@@ -2,6 +2,7 @@
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
 // single executable, which is the path xmsg's `--svc-exe` attests.
+import { closeSync, openSync, statSync } from "node:fs";
 import process from "node:process";
 import type { Clock } from "./clock.ts";
 import { CliHerdr, type Herdr } from "./herdr.ts";
@@ -69,13 +70,26 @@ export async function startDispatcher(
   c: Config,
   deps: MainDeps = {},
 ): Promise<{ x: SocketXmsg; d: Dispatcher; del: Delivery }> {
+  if (c.tokenCredentialFile !== undefined && c.tokenCredentialFile !== null) {
+    let st: { size: number };
+    try {
+      const fd = openSync(c.tokenCredentialFile, "r");
+      closeSync(fd);
+      st = statSync(c.tokenCredentialFile);
+    } catch (e) {
+      throw new Error(`credential file unreadable (${c.tokenCredentialFile}): ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (st.size === 0) {
+      throw new Error(`credential file is empty: ${c.tokenCredentialFile}`);
+    }
+  }
   const x = new SocketXmsg(c.xmsgDir, c.serviceName);
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
   await x.register();
-  const credentialsDir =
-    process.env.CREDENTIALS_DIRECTORY ??
-    (c.tokenCredentialFile ? c.tokenCredentialFile.replace(/\/[^/]+$/, "") : undefined);
+  const credentialsDir = c.tokenCredentialFile
+    ? c.tokenCredentialFile.replace(/\/[^/]+$/, "")
+    : process.env.CREDENTIALS_DIRECTORY;
   const d = await Dispatcher.open({
     stateDir: c.stateDir,
     herdr:

@@ -41,7 +41,20 @@ export function configuredEval(config: EvalConfig = {}, worktreeRoot: string): R
   validateEvalConfig(config);
   if (config.backend !== "kubernetes") return (launch) => runEval(launch, { ...config, worktreeRoot });
   const k = config.kubernetes!;
-  const client = new K8sClient({ baseUrl: k.baseUrl, namespace: k.namespace, timeoutMs: config.timeoutMs, token: k.tokenFile ? readFileSync(k.tokenFile, "utf8").trim() : undefined });
+  const token =
+    k.tokenFile !== undefined && k.tokenFile !== null
+      ? (() => {
+          let raw: string;
+          try {
+            raw = readFileSync(k.tokenFile, "utf8").trim();
+          } catch (e) {
+            throw new Error(`credential file unreadable (${k.tokenFile}): ${e instanceof Error ? e.message : String(e)}`);
+          }
+          if (!raw) throw new Error(`credential file is empty: ${k.tokenFile}`);
+          return raw;
+        })()
+      : undefined;
+  const client = new K8sClient({ baseUrl: k.baseUrl, namespace: k.namespace, timeoutMs: config.timeoutMs, token });
   return k8sRunner({
     client, namespace: k.namespace, image: k.image, runtimeClassName: k.runtimeClassName,
     storeClaimName: k.store.claimName, storeSubPath: k.store.subPath,

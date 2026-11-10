@@ -174,7 +174,16 @@ const repo = process.env.GENIE_REPO_ROOT
   : import.meta.url
     ? new URL("../../", import.meta.url)
     : pathToFileURL(`${process.cwd()}/`);
-const secret = (file: string) => readFileSync(file, "utf8").trim();
+const secret = (file: string) => {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8").trim();
+  } catch (e) {
+    throw new Error(`credential file unreadable (${file}): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!raw) throw new Error(`credential file is empty: ${file}`);
+  return raw;
+};
 
 const evalRequestSchema = load("eval-request");
 const proposalSchema = load("proposal");
@@ -345,6 +354,18 @@ export function main(
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
   const readOnlyBinds = tier1ReadOnlyBinds({ pi: c.pi, memoryRoot: c.tier1.memoryRoot });
   const exportedRoots = [c.stateRoot, c.mirror.worktreeRoot, ...[...readOnlyBinds.system, ...readOnlyBinds.application].map((bind) => bind[1])].filter((p): p is string => Boolean(p)).map((p) => existsSync(p) ? realpathSync(p) : resolve(p));
+  const configuredCredentials: Array<string | null | undefined> = [
+    c.model.keyFile,
+    c.broker?.tokenFile,
+    guardOutEnable ? c.broker?.guardOut?.keyFile : undefined,
+    c.githubReadTokenFile,
+    c.s3?.secretKeyFile,
+    c.eval?.backend === "kubernetes" ? c.eval.kubernetes?.tokenFile : undefined,
+  ];
+  for (const credential of configuredCredentials) {
+    if (credential === null || credential === undefined) continue;
+    secret(credential);
+  }
   for (const credential of [c.model.keyFile, c.broker?.tokenFile, c.broker?.guardOut?.keyFile, c.githubReadTokenFile, c.s3?.secretKeyFile, c.eval?.kubernetes?.tokenFile]) {
     if (!credential || !existsSync(credential)) continue;
     const file = realpathSync(credential);

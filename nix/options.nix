@@ -9,6 +9,7 @@ rec {
   mkTierExpertSubmodule =
     {
       lib,
+      cfg ? null,
       tier,
       defaultAddress,
       defaultReposDir,
@@ -49,9 +50,14 @@ rec {
 
           tokenEnvironmentFile = lib.mkOption {
             type = lib.types.nullOr (secretPathType lib);
-            default = null;
+            default =
+              if cfg != null && (cfg.credentialsDir or null) != null then
+                "${cfg.credentialsDir}/expert-${tier}-token"
+              else
+                null;
+            defaultText = lib.literalExpression ''if cfg.credentialsDir != null then "''${cfg.credentialsDir}/expert-${tier}-token" else null'';
             example = "/run/agenix/genie-expert-${tier}-token";
-            description = "Root-owned credential file holding `CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token>` (or raw token) loaded via LoadCredential= on genie-dispatcher@${tier} and handed off per launch over an SO_PEERPIDFD-verified AF_UNIX socketpair (GI-15).";
+            description = "Credential file holding `CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token>` (or raw token) for genie-dispatcher@${tier}, staged via LoadCredential= when `loadCredential` is enabled or read directly from its configured path when `loadCredential` is disabled, and handed off per launch over an SO_PEERPIDFD-verified AF_UNIX socketpair (GI-15).";
           };
         };
       };
@@ -73,6 +79,19 @@ rec {
     in
     {
       enable = lib.mkEnableOption "genie-agent tiered support expert";
+
+      loadCredential = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether systemd units stage configured credential files through LoadCredential=. Set false to read configured credential file paths directly (for example from credentialsDir or a projected volume).";
+      };
+
+      credentialsDir = lib.mkOption {
+        type = lib.types.nullOr secretPath;
+        default = null;
+        example = "/run/secrets/genie-agent";
+        description = "Optional directory holding plain credential files (`model-key`, `s3-secret-key`, `expert-public-token`, `expert-trusted-token`). Explicit per-credential `*File` options take precedence.";
+      };
 
       package = lib.mkOption {
         type = lib.types.package;
@@ -179,8 +198,14 @@ rec {
 
             keyFile = lib.mkOption {
               type = secretPath;
+              default =
+                if cfg.credentialsDir != null then
+                  "${cfg.credentialsDir}/model-key"
+                else
+                  throw "services.genie-agent.model.keyFile (or services.genie-agent.credentialsDir) must be set";
+              defaultText = lib.literalExpression ''"\${cfg.credentialsDir}/model-key" when cfg.credentialsDir != null'';
               example = "/run/secrets/hyperqwen-api-key";
-              description = "Path to the model API key file (must not be in /nix/store).";
+              description = "Path to the model API key file (must not be in /nix/store). Defaults to `\${cfg.credentialsDir}/model-key` when `credentialsDir` is set.";
             };
           };
         };
@@ -307,7 +332,13 @@ rec {
               };
               secretKeyFile = lib.mkOption {
                 type = secretPath;
-                description = "Path to the S3 secret access key file (must not be in /nix/store).";
+                default =
+                  if cfg.credentialsDir != null then
+                    "${cfg.credentialsDir}/s3-secret-key"
+                  else
+                    throw "services.genie-agent.s3.secretKeyFile (or services.genie-agent.credentialsDir) must be set";
+                defaultText = lib.literalExpression ''"\${cfg.credentialsDir}/s3-secret-key" when cfg.credentialsDir != null'';
+                description = "Path to the S3 secret access key file (must not be in /nix/store). Defaults to `\${cfg.credentialsDir}/s3-secret-key` when `credentialsDir` is set.";
               };
             };
           }
@@ -625,7 +656,7 @@ rec {
 
             public = lib.mkOption {
               type = mkTierExpertSubmodule {
-                inherit lib;
+                inherit lib cfg;
                 tier = "public";
                 defaultAddress = "genie-expert-public";
                 defaultReposDir = "/var/lib/genie/public-repos";
@@ -637,7 +668,7 @@ rec {
 
             trusted = lib.mkOption {
               type = mkTierExpertSubmodule {
-                inherit lib;
+                inherit lib cfg;
                 tier = "trusted";
                 defaultAddress = "genie-expert-trusted";
                 defaultReposDir = "/var/lib/genie/trusted-repos";
@@ -680,11 +711,16 @@ rec {
     { lib, pkgs }:
     cfg:
     {
-      modelKeyFile,
-      guardOutKeyFile ? null,
-      brokerTokenFile ? null,
-      githubReadTokenFile ? null,
-      s3SecretKeyFile ? null,
+      modelKeyFile ? toString cfg.model.keyFile,
+      guardOutKeyFile ?
+        if cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null then
+          toString cfg.broker.guardOut.keyFile
+        else
+          null,
+      brokerTokenFile ? if cfg.broker.tokenFile != null then toString cfg.broker.tokenFile else null,
+      githubReadTokenFile ?
+        if cfg.githubReadTokenFile != null then toString cfg.githubReadTokenFile else null,
+      s3SecretKeyFile ? if cfg.s3 != null then toString cfg.s3.secretKeyFile else null,
     }:
     let
       mirrorAttrs = {

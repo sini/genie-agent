@@ -350,6 +350,22 @@ test("GENIE_GUARD_API_KEY_FILE is the environment spelling of --api-key-file", (
   assert.equal(c.apiKey, "k1");
 });
 
+test("oracle (loadCredential adapter off): genie-guard config reads --api-key-file from configured path and ignores decoy CREDENTIALS_DIRECTORY", () => {
+  const decoyDir = mkdtempSync(`${tmpdir()}/guard-decoy-creds-`);
+  writeFileSync(`${decoyDir}/api-key`, "decoy-guard-key\n");
+  const realKey = keyFile("real-guard-key\n");
+  const c = config(
+    ["--ninfer-url", "http://x/v1", "--api-key-file", realKey],
+    { XDG_RUNTIME_DIR: "/run", CREDENTIALS_DIRECTORY: decoyDir },
+  );
+  assert.equal(c.apiKey, "real-guard-key");
+  const cUnconfigured = config(
+    ["--ninfer-url", "http://x/v1"],
+    { XDG_RUNTIME_DIR: "/run", CREDENTIALS_DIRECTORY: decoyDir },
+  );
+  assert.equal(cUnconfigured.apiKey, undefined);
+});
+
 // G4: /v1/models answers `status` per attempt (the last one repeats); `order` records probes and registers.
 async function modelsAt(statuses: number[]) {
   const order: string[] = [];
