@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { relative } from "node:path";
 import type { Runner } from "./lock.ts";
 import {
+  assertConfinedFlakeTree,
   effectiveTier,
   resolveWorktreeSubdir,
   fetchRefused,
@@ -262,6 +263,7 @@ export function renderJob(launch: Launch, options: RenderJobOptions): K8sJob {
     const st = lstatSync(`${source}/flake.nix`, { throwIfNoEntry: false });
     if (!st || !st.isFile() || st.isSymbolicLink())
       throw new Error("worktreeSubdir has no regular flake.nix");
+    assertConfinedFlakeTree(source, request.worktreeSubdir);
     const selected = relative(
       realpathSync(`${worktreeRoot}/${thread}`),
       source,

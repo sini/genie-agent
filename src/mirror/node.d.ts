@@ -51,9 +51,11 @@ declare module "node:fs" {
   export function lstatSync(path: string, options: { throwIfNoEntry: false }): Stats | undefined;
   export function readdirSync(path: string): string[];
   export function readFileSync(path: string): Buffer;
+  export function readlinkSync(path: string, encoding?: "utf8"): string;
   export function rmSync(path: string, options: { recursive?: boolean; force?: boolean }): void;
   export function statSync(path: string): Stats;
   export function statSync(path: string, options: { throwIfNoEntry: false }): Stats | undefined;
+  export function symlinkSync(target: string, path: string): void;
   export function writeFileSync(path: string, data: string | Uint8Array, options?: { mode?: number }): void;
 }
 interface Process {

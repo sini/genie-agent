@@ -3,10 +3,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { after, before, test } from "node:test";
+import { computeWorktreeDiff } from "../src/broker/index.ts";
+import { renderJob } from "../src/eval/k8s.ts";
+import { runEval } from "../src/eval/run.ts";
+import { confine, confineWrite, tier1, type Host, type Pi, type ToolCall } from "../src/tier1/index.ts";
 import {
   diskBytes,
   git,
@@ -606,12 +610,12 @@ test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked syml
   assert.equal(st.isFile(), true, "tracked symlink must be checked out as a regular file under core.symlinks=false");
   assert.equal(readFileSync(`${wt.path}/linked-file`, "utf8").trim(), "/etc/hosts");
   assert.equal(existsSync(`${wt.path}/.git`), false, "writable worktree must contain zero .git metadata (F2)");
-  // C4: bare mirror config persists core.symlinks=false (--config core.symlinks=false on clone)
+  // C4: bare mirror config does not force core.symlinks=false (G30: in-tree symlinks are preserved by extractMirrorTree while escaping symlinks are flattened)
   const mirrorCfgText = readFileSync(`${cfg.mirrorRoot}/${mirrorKey(`${base}/gs2symlinks`)}/config`, "utf8");
-  assert.match(mirrorCfgText, /symlinks\s*=\s*false/, "bare mirror config must persist core.symlinks=false");
+  assert.doesNotMatch(mirrorCfgText, /symlinks\s*=\s*false/, "bare mirror config must not set core.symlinks=false (G30)");
 
   // Two-call cell: upstream commit adds a second symlink, and a second worktreeFor call on the same (url, thread)
-  // re-extracts the tree and still keeps symlinks as regular files.
+  // re-extracts the tree and still keeps escaping symlinks as regular files.
   symlinkSync("/etc/resolv.conf", `${work}/second-link`);
   sh(["add", "second-link"], work);
   sh(["commit", "-q", "-m", "add-second-symlink"], work);
@@ -620,8 +624,8 @@ test("oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked syml
   const wt2 = await worktreeFor(cfg, `${base}/gs2symlinks`, "thread-gs2", run);
   assert.equal(wt2.path, wt.path);
   const st2 = lstatSync(`${wt2.path}/second-link`);
-  assert.equal(st2.isSymbolicLink(), false, "re-checkout branch must not check out tracked symlink as S_IFLNK");
-  assert.equal(st2.isFile(), true, "re-checkout branch must check out tracked symlink as regular file");
+  assert.equal(st2.isSymbolicLink(), false, "re-checkout branch must not check out escaping symlink as S_IFLNK");
+  assert.equal(st2.isFile(), true, "re-checkout branch must check out escaping symlink as regular file");
 });
 
 test("oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/show/diff/blame/grep on bare mirror (including C-N1 single-rev diff), refuses flag-injection at schema and sink (F3), cleans stale genie-pins (Q5), and mutant M-git-allow-leading-dash goes RED", async () => {
@@ -729,6 +733,291 @@ test("oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/sho
   await worktreeFor(cfg, `${base}/evictor`, "thread-evict", run);
   assert.equal(existsSync(stalePinPath), false, "stale genie-pins/<dead-thread> must be cleaned up by liveWorktree");
 });
+
+test("oracle (G30): a repo with an in-tree symlink checks out as a symlink and evaluates as upstream does", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  fixture("alice/g30repo");
+  const work = `${tmp}/work-alice/g30repo`;
+  mkdirSync(`${work}/sub`, { recursive: true });
+  writeFileSync(`${work}/sub/real.nix`, "{ answer = 42; }\n");
+  symlinkSync("sub/real.nix", `${work}/linked.nix`);
+  symlinkSync("linked.nix", `${work}/chain.nix`);
+  writeFileSync(
+    `${work}/flake.nix`,
+    `{
+  outputs = _: {
+    packages.x86_64-linux.default = (import ./linked.nix).answer + (import ./chain.nix).answer;
+  };
+}
+`,
+  );
+  sh(["add", "sub/real.nix", "linked.nix", "chain.nix", "flake.nix"], work);
+  sh(["commit", "-q", "-m", "in-tree symlinks"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const upstreamEval = await runEval(
+    {
+      sender_tier: "public",
+      request: { attr: "packages.x86_64-linux.default", trusted: "no" },
+    },
+    { localFlake: work, bwrap: `${tmp}/absent-bwrap` },
+  );
+  assert.equal(upstreamEval.exit, 0, `upstream eval must succeed: ${upstreamEval.stderr_tail}`);
+  assert.equal(upstreamEval.stdout_tail.trim(), "84");
+
+  const { cfg, run } = setup();
+  const repoUrl = `${base}/alice/g30repo`;
+  const key = mirrorKey(repoUrl);
+  const wt = await worktreeFor(cfg, repoUrl, "thread-g30", run);
+
+  const linkedSt = lstatSync(`${wt.path}/linked.nix`);
+  assert.equal(linkedSt.isSymbolicLink(), true, "in-tree symlink linked.nix must check out as S_IFLNK");
+  assert.equal(readlinkSync(`${wt.path}/linked.nix`, "utf8"), "sub/real.nix");
+
+  const chainSt = lstatSync(`${wt.path}/chain.nix`);
+  assert.equal(chainSt.isSymbolicLink(), true, "chained in-tree symlink chain.nix must check out as S_IFLNK");
+  assert.equal(readlinkSync(`${wt.path}/chain.nix`, "utf8"), "linked.nix");
+
+  const mirroredEval = await runEval(
+    {
+      sender_tier: "public",
+      thread: "thread-g30",
+      request: { worktreeSubdir: key, attr: "packages.x86_64-linux.default", trusted: "no" },
+    },
+    { worktreeRoot: cfg.worktreeRoot, bwrap: `${tmp}/absent-bwrap` },
+  );
+  assert.equal(mirroredEval.exit, 0, `mirrored worktree eval must succeed: ${mirroredEval.stderr_tail}`);
+  assert.equal(mirroredEval.stdout_tail.trim(), upstreamEval.stdout_tail.trim(), "mirrored eval must match upstream");
+});
+
+test("oracle (G30) consumer 1 (extractMirrorTree): a symlink pointing outside the tree is never materialized as S_IFLNK", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  fixture("alice/g30extract");
+  const work = `${tmp}/work-alice/g30extract`;
+  writeFileSync(`${work}/README.md`, "in-tree\n");
+  symlinkSync("README.md", `${work}/in-tree-link`);
+  symlinkSync("/etc/hosts", `${work}/abs-escape`);
+  symlinkSync("../../outside-secret.nix", `${work}/rel-escape`);
+  symlinkSync("nonexistent.nix", `${work}/dangling.nix`);
+  sh(["add", "README.md", "in-tree-link", "abs-escape", "rel-escape", "dangling.nix"], work);
+  sh(["commit", "-q", "-m", "in-tree and escaping symlinks"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const { cfg, run } = setup();
+  const wt = await worktreeFor(cfg, `${base}/alice/g30extract`, "thread-g30-c1", run);
+
+  assert.equal(lstatSync(`${wt.path}/in-tree-link`).isSymbolicLink(), true, "in-tree symlink must materialize as S_IFLNK");
+  for (const name of ["abs-escape", "rel-escape", "dangling.nix"]) {
+    const st = lstatSync(`${wt.path}/${name}`);
+    assert.equal(st.isSymbolicLink(), false, `escaping/dangling entry ${name} must not materialize as S_IFLNK`);
+    assert.equal(st.isFile(), true, `escaping/dangling entry ${name} must fall back to regular file`);
+  }
+});
+
+test("oracle (G30) consumer 2 (tier1 confine and confineWrite): a symlink pointing outside the tree is never followed by tier-1 tools", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  fixture("alice/g30tier1");
+  const work = `${tmp}/work-alice/g30tier1`;
+  mkdirSync(`${work}/sub`, { recursive: true });
+  writeFileSync(`${work}/sub/real.nix`, "{ answer = 42; }\n");
+  symlinkSync("sub/real.nix", `${work}/linked.nix`);
+  sh(["add", "sub/real.nix", "linked.nix"], work);
+  sh(["commit", "-q", "-m", "in-tree symlink"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const { cfg, run } = setup();
+  const repoUrl = `${base}/alice/g30tier1`;
+  const key = mirrorKey(repoUrl);
+  const wt = await worktreeFor(cfg, repoUrl, "thread-g30-c2", run);
+
+  const outsideSecret = `${tmp}/g30-outside-secret.txt`;
+  writeFileSync(outsideSecret, "g30-outside-secret-canary\n");
+  const threadRoot = `${cfg.worktreeRoot}/thread-g30-c2`;
+  const memRoot = `${tmp}/g30-memory`;
+  mkdirSync(memRoot, { recursive: true });
+  writeFileSync(`${memRoot}/MEMORY.md`, "# Memory\n");
+
+  const confinedInTree = confine(threadRoot, `${key}/linked.nix`, memRoot);
+  assert.equal(readFileSync(confinedInTree, "utf8"), "{ answer = 42; }\n");
+
+  symlinkSync(outsideSecret, `${wt.path}/planted-abs-escape`);
+  symlinkSync("../../../../g30-outside-secret.txt", `${wt.path}/planted-rel-escape`);
+  assert.throws(
+    () => confine(threadRoot, `${key}/planted-abs-escape`, memRoot),
+    /outside the thread's worktrees and memory mount/,
+    "confine must refuse absolute escaping symlink",
+  );
+  assert.throws(
+    () => confine(threadRoot, `${key}/planted-rel-escape`, memRoot),
+    /outside the thread's worktrees and memory mount/,
+    "confine must refuse relative escaping symlink",
+  );
+  assert.throws(
+    () => confineWrite(threadRoot, `${key}/planted-abs-escape`, { memoryRoot: memRoot }),
+    /outside the thread's worktrees|is a symlink/,
+    "confineWrite must refuse writing through escaping symlink",
+  );
+  assert.throws(
+    () => confineWrite(threadRoot, `${key}/linked.nix`, { memoryRoot: memRoot }),
+    /is a symlink/,
+    "confineWrite must refuse writing through in-tree symlink",
+  );
+  let toolHook: ((e: ToolCall) => Promise<{ block: true; reason: string } | void>) | undefined;
+  const fakePi: Pi = {
+    registerTool: () => {},
+    on: (ev, h) => {
+      if (ev === "tool_call") toolHook = h;
+    },
+    setActiveTools: () => {},
+  };
+  const stubHost: Host = {
+    eval: async () => ({}),
+    recall: async () => ({}),
+    escalate: async () => ({}),
+    reply: async () => ({}),
+    propose: async () => ({}),
+    clone: async () => ({ path: threadRoot, rev: "0" }),
+    git: async () => "",
+    gh_read: async () => ({}),
+    screen: async (x) => x,
+    room_context: async () => "",
+  };
+  tier1({ root: threadRoot, memoryRoot: memRoot, searxngUrl: "http://127.0.0.1:1", cluster: [] }, { host: stubHost })(fakePi);
+  const blockedRead = await toolHook!({ toolName: "read", input: { path: `${key}/planted-abs-escape` } });
+  assert.equal(blockedRead?.block, true, "tier1 read hook must block escaping symlink");
+  assert.match(blockedRead?.reason ?? "", /outside the thread's worktrees and memory mount/);
+  const allowedRead = await toolHook!({ toolName: "read", input: { path: `${key}/linked.nix` } });
+  assert.equal(allowedRead, undefined, "tier1 read hook must allow in-tree symlink");
+});
+
+test("oracle (G30) consumer 3 (eval runEval and renderJob): a symlink pointing outside the tree is never followed by local or k8s eval", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  fixture("alice/g30eval");
+  const work = `${tmp}/work-alice/g30eval`;
+  writeFileSync(`${work}/flake.nix`, '{ outputs = _: { packages.x86_64-linux.default = "ok"; }; }\n');
+  sh(["add", "flake.nix"], work);
+  sh(["commit", "-q", "-m", "flake"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const { cfg, run } = setup();
+  const repoUrl = `${base}/alice/g30eval`;
+  const key = mirrorKey(repoUrl);
+  const wt = await worktreeFor(cfg, repoUrl, "thread-g30-c3", run);
+
+  const outsideSecret = `${tmp}/g30-eval-outside.txt`;
+  writeFileSync(outsideSecret, "g30-eval-outside-canary\n");
+  symlinkSync(outsideSecret, `${wt.path}/planted-abs-escape`);
+
+  await assert.rejects(
+    runEval(
+      {
+        sender_tier: "public",
+        thread: "thread-g30-c3",
+        request: { worktreeSubdir: key, attr: "packages.x86_64-linux.default", trusted: "no" },
+      },
+      { worktreeRoot: cfg.worktreeRoot, bwrap: `${tmp}/absent-bwrap` },
+    ),
+    /worktreeSubdir symlink escapes thread worktree/,
+    "runEval must refuse worktreeSubdir when it contains an escaping symlink",
+  );
+  assert.throws(
+    () =>
+      renderJob(
+        {
+          sender_tier: "public",
+          thread: "thread-g30-c3",
+          request: { worktreeSubdir: key, attr: "packages.x86_64-linux.default", trusted: "no" },
+        },
+        {
+          namespace: "default",
+          image: "img",
+          storeClaimName: "store-pvc",
+          repoClaimName: "repo-pvc",
+          worktreeRoot: cfg.worktreeRoot,
+        },
+      ),
+    /worktreeSubdir symlink escapes thread worktree/,
+    "renderJob (k8s eval) must refuse worktreeSubdir when it contains an escaping symlink",
+  );
+});
+
+test("oracle (G30) consumer 4 (broker computeWorktreeDiff): a symlink pointing outside the tree is never followed by computeWorktreeDiff", async () => {
+  mkdirSync(`${served}/alice`, { recursive: true });
+  mkdirSync(`${tmp}/work-alice`, { recursive: true });
+  fixture("alice/g30broker");
+  const work = `${tmp}/work-alice/g30broker`;
+  mkdirSync(`${work}/sub`, { recursive: true });
+  writeFileSync(`${work}/sub/real.nix`, "{ answer = 42; }\n");
+  symlinkSync("sub/real.nix", `${work}/linked.nix`);
+  sh(["add", "sub/real.nix", "linked.nix"], work);
+  sh(["commit", "-q", "-m", "in-tree symlink"], work);
+  sh(["push", "-q", "origin", "HEAD:main"], work);
+
+  const { cfg, run } = setup();
+  const repoUrl = `${base}/alice/g30broker`;
+  const key = mirrorKey(repoUrl);
+  const wt = await worktreeFor(cfg, repoUrl, "thread-g30-c4", run);
+
+  const outsideSecret = `${tmp}/g30-broker-outside.txt`;
+  writeFileSync(outsideSecret, "g30-broker-outside-canary\n");
+  symlinkSync(outsideSecret, `${wt.path}/planted-abs-escape`);
+  await assert.rejects(
+    computeWorktreeDiff({
+      mirrorRoot: cfg.mirrorRoot,
+      worktreeRoot: cfg.worktreeRoot,
+      thread: "thread-g30-c4",
+      repo: "alice/g30broker",
+      worktreeSubdir: key,
+      repoUrlBase: base,
+    }),
+    /worktreeSubdir contains a symlink at/,
+    "computeWorktreeDiff must refuse planted escaping symlink",
+  );
+  rmSync(`${wt.path}/planted-abs-escape`, { force: true });
+
+  symlinkSync("../../../../g30-broker-outside.txt", `${wt.path}/planted-rel-escape`);
+  await assert.rejects(
+    computeWorktreeDiff({
+      mirrorRoot: cfg.mirrorRoot,
+      worktreeRoot: cfg.worktreeRoot,
+      thread: "thread-g30-c4",
+      repo: "alice/g30broker",
+      worktreeSubdir: key,
+      repoUrlBase: base,
+    }),
+    /worktreeSubdir contains a symlink at/,
+    "computeWorktreeDiff must refuse planted relative escaping symlink",
+  );
+  rmSync(`${wt.path}/planted-rel-escape`, { force: true });
+
+  const cleanDiff = await computeWorktreeDiff({
+    mirrorRoot: cfg.mirrorRoot,
+    worktreeRoot: cfg.worktreeRoot,
+    thread: "thread-g30-c4",
+    repo: "alice/g30broker",
+    worktreeSubdir: key,
+    repoUrlBase: base,
+  });
+  assert.deepEqual(cleanDiff.entries, [], "untouched checkout with in-tree symlinks must produce 0 diff entries");
+
+  symlinkSync("sub/real.nix", `${wt.path}/new-link.nix`);
+  const addedLinkDiff = await computeWorktreeDiff({
+    mirrorRoot: cfg.mirrorRoot,
+    worktreeRoot: cfg.worktreeRoot,
+    thread: "thread-g30-c4",
+    repo: "alice/g30broker",
+    worktreeSubdir: key,
+    repoUrlBase: base,
+  });
+  assert.deepEqual(addedLinkDiff.entries, [
+    { path: "new-link.nix", mode: "120000", type: "blob", content: "sub/real.nix" },
+  ]);
+});
+
 
 
 

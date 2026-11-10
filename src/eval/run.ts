@@ -1,7 +1,7 @@
 // The local eval runner: one launch (an eval-request and its sender tier) evaluated by Nix inside bubblewrap, starting from an
 // empty throwaway store, and reported as an eval-result.
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BASELINE_ISOLATION, BWRAP_ISOLATION, usableBwrap } from "../isolation.ts";
 
@@ -99,6 +99,30 @@ export function resolveWorktreeSubdir(
     throw new Error(`worktreeSubdir symlink escapes thread worktree: ${subdir}`);
   }
   return real;
+}
+
+export function assertConfinedFlakeTree(flakeDir: string, subdir: string): void {
+  const root = realpathSync(flakeDir);
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      if (name === ".git") continue;
+      const full = `${dir}/${name}`;
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) {
+        const linkTarget = readlinkSync(full, "utf8");
+        let linkReal = "";
+        try {
+          linkReal = realpathSync(full);
+        } catch {}
+        if (linkTarget.startsWith("/") || (linkReal !== root && !linkReal.startsWith(`${root}/`))) {
+          throw new Error(`worktreeSubdir symlink escapes thread worktree: ${subdir}`);
+        }
+      } else if (st.isDirectory()) {
+        walk(full);
+      }
+    }
+  };
+  walk(root);
 }
 
 // Generates a Nix wrapper expression to evaluate a NixOS configuration with agenix and sops-nix
@@ -367,6 +391,7 @@ export async function runEval(launch: Launch, options: RunOptions = {}): Promise
     if (!st || !st.isFile() || st.isSymbolicLink()) {
       throw new Error(`worktreeSubdir has no regular flake.nix: ${request.worktreeSubdir}`);
     }
+    assertConfinedFlakeTree(flakeDir, request.worktreeSubdir);
     boundFlake = flakeDir;
   } else if (!boundFlake) {
     const [owner, name, ...rest] = (request.repo ?? "").split("/");

@@ -8,7 +8,7 @@
 // publishes exactly the bytes guard-out passed. Guard-out still sees the `[redacted:<kind>]` mark.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { resolveWorktreeSubdir, WORKTREE_SUBDIR_RE } from "../eval/run.ts";
 import { reviewOut, type NinferOut } from "../guard/service.ts";
 import { listMirrorTree, mirrorKey, readMirrorPin } from "../mirror/index.ts";
@@ -391,7 +391,8 @@ export async function computeWorktreeDiff(opts: {
   const baseTreeSha = await resolveCommitTreeSha(bareDir, pin.rev);
   const baseMap = new Map(baseList.map((e) => [e.path, e]));
 
-  const diskFiles = new Map<string, { mode: "100644" | "100755"; sha: string; content: string }>();
+  const repoRoot = realpathSync(`${opts.worktreeRoot}/${opts.thread}/${expectedKey}`);
+  const diskFiles = new Map<string, { mode: "100644" | "100755" | "120000"; sha: string; content: string }>();
   const walk = (dir: string, relPrefix: string) => {
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
       if (dirent.name === ".git") continue;
@@ -399,7 +400,22 @@ export async function computeWorktreeDiff(opts: {
       const relToSub = relPrefix ? `${relPrefix}/${dirent.name}` : dirent.name;
       const st = lstatSync(fullPath);
       if (st.isSymbolicLink()) {
-        throw new Error(`worktreeSubdir contains a symlink at ${relToSub}`);
+        const linkTarget = readlinkSync(fullPath, "utf8");
+        let linkReal = "";
+        try {
+          linkReal = realpathSync(fullPath);
+        } catch {}
+        if (linkTarget.startsWith("/") || (linkReal !== repoRoot && !linkReal.startsWith(`${repoRoot}/`))) {
+          throw new Error(`worktreeSubdir contains a symlink at ${relToSub}`);
+        }
+        const repoRelPath = subPrefix ? `${subPrefix}/${relToSub}` : relToSub;
+        if (!isValidProposalFilePath(repoRelPath, "pr")) {
+          throw new Error(`worktreeSubdir contains invalid file path ${repoRelPath}`);
+        }
+        const buf = Buffer.from(linkTarget, "utf8");
+        const sha = createHash("sha1").update(`blob ${buf.length}\0`).update(buf).digest("hex");
+        diskFiles.set(repoRelPath, { mode: "120000", sha, content: linkTarget });
+        continue;
       }
       if (st.isDirectory()) {
         walk(fullPath, relToSub);

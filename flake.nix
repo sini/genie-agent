@@ -578,20 +578,28 @@
                 nativeBuildInputs = [
                   pkgs.nodejs
                   pkgs.git
+                  pkgs.nix
+                  pkgs.coreutils
                 ];
                 src = nixpkgs.lib.fileset.toSource {
                   root = ./.;
                   fileset = nixpkgs.lib.fileset.unions [
+                    ./src/broker
+                    ./src/eval
+                    ./src/guard
+                    ./src/isolation.ts
+                    ./src/isolation-node.d.ts
                     ./src/mirror
                     ./src/lifecycle
+                    ./src/redactor
                     ./src/root/io.ts
                     ./src/state
                     ./src/supervisor
                     ./src/tier
-                    ./src/tier1/schema.ts
+                    ./src/tier1
                     ./src/dispatcher/xmsg.ts
-                    ./src/guard/verdict.ts
                     ./schemas
+                    ./skills
                     ./prompts
                     ./tests/mirror.test.ts
                   ];
@@ -602,14 +610,39 @@
                 rc=0
                 node --test --test-reporter=tap tests/mirror.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/show/diff/blame/grep on bare mirror (including C-N1 single-rev diff), refuses flag-injection at schema and sink (F3), cleans stale genie-pins (Q5), and mutant M-git-allow-leading-dash goes RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: two threads on one repo share one clone, each with its own worktree$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: an over-cap clone is killed and leaves nothing, an under-cap one is mirrored$' $TMPDIR/tap && grep -q '^ok [0-9]* - a fetch that takes an unpinned mirror past its cap removes the mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a killed over-cap fetch into a pinned mirror leaves its refs and bytes as they were, and its worktree resolves$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: refs deleted upstream are pruned only after a successful fetch, and a failed prune leaves them$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a pinned mirror already past its cap is refused before git starts$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: filling past the quota evicts the least-recently-used mirror and keeps the total under quota$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a mirror with a live worktree is never evicted, even when it is the least recently used$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: when pinned mirrors alone pass the quota, the new fetch is refused and leaves no mirror$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: the least-recently-used order survives a restart of the fetcher$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: diskBytes counts apparent file sizes, whether blocks are zero or exceed size, and skips directories$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F3): threadName validated at parseMatrixForward boundary, lifecycle.close before rm, and removeWorktrees sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX2 (F3): clone/worktreeFor goes through pin() and refusedList(cfg.cluster), allows https:// only, sanitises git stderr, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GS2 (F1): worktreeFor passes -c core.symlinks=false so tracked symlinks are checked out as regular files, and mutant goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-git: gitRead enforces per-thread clone pin (P7), runs log/show/diff/blame/grep on bare mirror (including C-N1 single-rev diff), refuses flag-injection at schema and sink (F3), cleans stale genie-pins (Q5), and mutant M-git-allow-leading-dash goes RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G30): a repo with an in-tree symlink checks out as a symlink and evaluates as upstream does$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G30) consumer 1 (extractMirrorTree): a symlink pointing outside the tree is never materialized as S_IFLNK$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G30) consumer 2 (tier1 confine and confineWrite): a symlink pointing outside the tree is never followed by tier-1 tools$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G30) consumer 3 (eval runEval and renderJob): a symlink pointing outside the tree is never followed by local or k8s eval$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G30) consumer 4 (broker computeWorktreeDiff): a symlink pointing outside the tree is never followed by computeWorktreeDiff$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 cp -r . $TMPDIR/mut-symlinks
                 chmod -R u+w $TMPDIR/mut-symlinks
                 substituteInPlace $TMPDIR/mut-symlinks/src/mirror/index.ts \
-                  --replace-fail '  chmodSync,' '  chmodSync, symlinkSync,' \
-                  --replace-fail '    writeFileSync(target, content, { mode: fmode });' '    if (entry.mode === "120000") { symlinkSync(content.toString("utf8").trim(), target); continue; } writeFileSync(target, content, { mode: fmode });'
-                if (cd $TMPDIR/mut-symlinks && node --test --test-force-exit --test-name-pattern='oracle GS2 \(F1\)' tests/mirror.test.ts >/dev/null 2>&1); then
+                  --replace-fail 'isLexicallyContainedSymlink(destReal, target, linkTarget)' 'true' \
+                  --replace-fail 'if (realTarget !== destReal && !realTarget.startsWith(`''${destReal}/`)) {' 'if (false) {'
+                if (cd $TMPDIR/mut-symlinks && node --test --test-force-exit --test-name-pattern='oracle \(G30\) consumer 1 \(extractMirrorTree\)' tests/mirror.test.ts >/dev/null 2>&1); then
                   echo "mutant M-symlinks-true survived in mirror" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-g30-tier1
+                chmod -R u+w $TMPDIR/mut-g30-tier1
+                substituteInPlace $TMPDIR/mut-g30-tier1/src/tier1/index.ts \
+                  --replace-fail 'if (real !== top && !real.startsWith(`''${top}/`)) {' 'if (false) {' \
+                  --replace-fail 'if (!inWorktree && !inMemory)' 'if (false)'
+                if (cd $TMPDIR/mut-g30-tier1 && node --test --test-force-exit --test-name-pattern='oracle \(G30\) consumer 2 \(tier1 confine and confineWrite\)' tests/mirror.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-g30-tier1-confine survived in mirror" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-g30-eval
+                chmod -R u+w $TMPDIR/mut-g30-eval
+                substituteInPlace $TMPDIR/mut-g30-eval/src/eval/run.ts \
+                  --replace-fail 'if (linkTarget.startsWith("/") || (linkReal !== root && !linkReal.startsWith(`''${root}/`))) {' 'if (false) {'
+                if (cd $TMPDIR/mut-g30-eval && node --test --test-force-exit --test-name-pattern='oracle \(G30\) consumer 3 \(eval runEval and renderJob\)' tests/mirror.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-g30-eval-confine survived in mirror" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-g30-broker
+                chmod -R u+w $TMPDIR/mut-g30-broker
+                substituteInPlace $TMPDIR/mut-g30-broker/src/broker/index.ts \
+                  --replace-fail 'if (linkTarget.startsWith("/") || (linkReal !== repoRoot && !linkReal.startsWith(`''${repoRoot}/`))) {' 'if (false) {'
+                if (cd $TMPDIR/mut-g30-broker && node --test --test-force-exit --test-name-pattern='oracle \(G30\) consumer 4 \(broker computeWorktreeDiff\)' tests/mirror.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-g30-broker-confine survived in mirror" >&2
                   exit 1
                 fi
                 cp -r . $TMPDIR/mut-git-dash
@@ -1906,8 +1939,8 @@
                 cp -r . $TMPDIR/mut-root-symlinks
                 chmod -R u+w $TMPDIR/mut-root-symlinks
                 substituteInPlace $TMPDIR/mut-root-symlinks/src/mirror/index.ts \
-                  --replace-fail '  chmodSync,' '  chmodSync, symlinkSync,' \
-                  --replace-fail '    writeFileSync(target, content, { mode: fmode });' '    if (entry.mode === "120000") { symlinkSync(content.toString("utf8").trim(), target); continue; } writeFileSync(target, content, { mode: fmode });'
+                  --replace-fail 'isLexicallyContainedSymlink(destReal, target, linkTarget)' 'true' \
+                  --replace-fail 'if (realTarget !== destReal && !realTarget.startsWith(`''${destReal}/`)) {' 'if (false) {'
                 if (cd $TMPDIR/mut-root-symlinks && node --test --test-force-exit --test-name-pattern='oracle GS2 \(F1\)' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-symlinks-true survived in root" >&2
                   exit 1

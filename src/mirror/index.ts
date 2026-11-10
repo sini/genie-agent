@@ -13,13 +13,15 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { BlockList, isIP } from "node:net";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const REPO_COORD_RE =
   /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\/[A-Za-z0-9_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
@@ -207,7 +209,6 @@ export const git: Runner = (args, signal) => {
     "protocol.git.allow=never",
     "protocol.file.allow=never",
     "credential.helper=",
-    "core.symlinks=false",
   ].flatMap((c) => ["-c", c]);
   return new Promise((resolve, reject) => {
     // Its own process group, so an abort also kills the transport and index-pack git spawns.
@@ -324,12 +325,11 @@ async function fetchMirror(run: Runner, mirrorRoot: string, dir: string, url: st
     return;
   }
   // Cloned beside the mirror and renamed into place, so a failed clone leaves no mirror.
-  // --config core.symlinks=false persists in the bare mirror's config so every worktree inherits it (GS2 C4).
   const tmp = mkdtempSync(`${mirrorRoot}/.clone-`);
   try {
     await capped(
       run,
-      ["clone", "--config", "core.symlinks=false", "--mirror", "--", url, `${tmp}/m`],
+      ["clone", "--mirror", "--", url, `${tmp}/m`],
       tmp,
       cap,
       url,
@@ -527,9 +527,19 @@ export async function listMirrorTree(dir: string, rev: string, prefix?: string):
   return entries;
 }
 
-// Populates `destPath` from `git --git-dir=<dir> ls-tree -r -z <rev>` + `cat-file --batch` (Gate v1 C1):
+// Returns true when `linkTarget` is a relative path with no NUL byte whose lexical resolution
+// from `dirname(target)` stays strictly inside `destReal`.
+function isLexicallyContainedSymlink(destReal: string, target: string, linkTarget: string): boolean {
+  if (linkTarget.length === 0 || linkTarget.includes("\0") || linkTarget.startsWith("/")) {
+    return false;
+  }
+  const resolved = resolve(dirname(target), linkTarget);
+  return resolved !== destReal && resolved.startsWith(`${destReal}/`);
+}
+
+// Populates `destPath` from `git --git-dir=<dir> ls-tree -r -z <rev>` + `cat-file --batch` (Gate v1 C1, G30):
 // - 100644 / 100755: regular files with raw blob bytes (no .gitattributes export-ignore/export-subst/eol).
-// - 120000: regular file whose content is the link target (preserving GS2 F1 symlink-flattening).
+// - 120000: materialized as a symlink when its target resolves inside `destPath`, else flattened to a regular file.
 // - 160000: skipped.
 // Zero `.git` metadata is ever written into `destPath`.
 async function extractMirrorTree(dir: string, rev: string, destPath: string): Promise<void> {
@@ -576,6 +586,8 @@ async function extractMirrorTree(dir: string, rev: string, destPath: string): Pr
     child.stdin.end();
   });
 
+  const destReal = realpathSync(destPath);
+  const symlinks: { target: string; content: Buffer }[] = [];
   let offset = 0;
   for (const entry of entries) {
     const nl = raw.indexOf(0x0a, offset);
@@ -592,11 +604,48 @@ async function extractMirrorTree(dir: string, rev: string, destPath: string): Pr
     const content = raw.subarray(start, end);
     offset = end + 1; // trailing LF after each object body
 
-    const target = `${destPath}/${entry.path}`;
+    const target = `${destReal}/${entry.path}`;
     mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
+    if (entry.mode === "120000") {
+      symlinks.push({ target, content });
+      continue;
+    }
     const fmode = entry.mode === "100755" ? 0o755 : 0o644;
     writeFileSync(target, content, { mode: fmode });
     chmodSync(target, fmode);
+  }
+
+  const placedSymlinks: { target: string; content: Buffer }[] = [];
+  for (const { target, content } of symlinks) {
+    const linkTarget = content.toString("utf8");
+    let parentReal = "";
+    try {
+      parentReal = realpathSync(dirname(target));
+    } catch {}
+    const parentOk = parentReal === destReal || parentReal.startsWith(`${destReal}/`);
+    if (
+      parentOk &&
+      !lstatSync(target, { throwIfNoEntry: false }) &&
+      isLexicallyContainedSymlink(destReal, target, linkTarget)
+    ) {
+      symlinkSync(linkTarget, target);
+      placedSymlinks.push({ target, content });
+    } else {
+      writeFileSync(target, content, { mode: 0o644 });
+      chmodSync(target, 0o644);
+    }
+  }
+
+  for (const { target, content } of placedSymlinks) {
+    let realTarget = "";
+    try {
+      realTarget = realpathSync(target);
+    } catch {}
+    if (realTarget !== destReal && !realTarget.startsWith(`${destReal}/`)) {
+      rmSync(target, { force: true });
+      writeFileSync(target, content, { mode: 0o644 });
+      chmodSync(target, 0o644);
+    }
   }
 }
 
@@ -739,8 +788,6 @@ export async function gitRead(req: GitReadRequest, opts: GitReadOptions): Promis
     "core.hooksPath=/dev/null",
     "-c",
     "core.fsmonitor=false",
-    "-c",
-    "core.symlinks=false",
     "--no-pager",
     `--git-dir=${bareDir}`,
   ];
