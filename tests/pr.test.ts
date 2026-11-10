@@ -74,7 +74,7 @@ async function github(override: (r: Req) => Reply | undefined = () => undefined)
 }
 
 // The proposal through the broker with guard-out passing and the dispatching act at `gh`.
-async function run(raw: string, gh: Awaited<ReturnType<typeof github>>, token = randomUUID(), allowedRepos: string[] = ["alice/flake"]) {
+async function run(raw: string, gh: Awaited<ReturnType<typeof github>>, token = randomUUID()) {
   const ninfer = createServer((_req, res) =>
     res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ verdict: "pass", reason: "clean" }) } }] })),
   );
@@ -84,7 +84,7 @@ async function run(raw: string, gh: Awaited<ReturnType<typeof github>>, token = 
   try {
     const act = byKind({ gist: gist(gh.base), pr: pr(link, gh.base, { pollMs: 10 }) });
     const guard = { base: `http://127.0.0.1:${(ninfer.address() as { port: number }).port}/v1`, model: "m", system: "guard-out" };
-    return { action: await broker(THREAD, raw, { tokenFile: `${dir}/token`, allowedRepos, guard, act }), token };
+    return { action: await broker(THREAD, raw, { tokenFile: `${dir}/token`, guard, act }), token };
   } finally {
     ninfer.close();
   }

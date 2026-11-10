@@ -207,7 +207,6 @@ writeFileSync(
     s3: { endpoint: `http://127.0.0.1:${(s3.address() as AddressInfo).port}`, region: "garage", bucket: "genie-transcripts", accessKeyId: "GK", secretKeyFile: `${tmp}/s3-key` },
     broker: {
       tokenFile: `${tmp}/token-key`,
-      allowedRepos: ["alice/flake"],
       githubApi: `http://127.0.0.1:${(github.address() as AddressInfo).port}`,
       threadLink: "https://chat.example.org/thread/{thread}",
       guardOut: { base: `http://127.0.0.1:${(ninfer.address() as AddressInfo).port}/v1`, model: "m" },
@@ -2694,7 +2693,7 @@ test("oracle O-GC1-silent: silent reply ack (GAP-1), redactLastPost & editLastPo
   assert.match(sends.at(-1)!.text, /memory clean workflow note/, "escalation package must include recall_transcript from context(t)");
 
   // 4. Public propose executes immediately through the broker without PendingAction or !approve,
-  //    refuses disallowed repos before GitHub calls, and enforces maxProposalsPerThreadPerDay.
+  //    refuses invalid file paths and private repos, and enforces maxProposalsPerThreadPerDay.
   const pubThread = "gc1_pub_propose";
   await inbound({ thread: pubThread, envelope: envelope(BOB, "please open a PR for my fix") });
   assert.equal(root.store.read(pubThread)?.sender_tier, "public");

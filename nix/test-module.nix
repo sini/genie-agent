@@ -534,6 +534,7 @@ pkgs.runCommand "genie-agent-nixos-module"
         ../src
         ../schemas
         ../tests/nixos-module.test.ts
+        ../tests/fixtures/nixos-module
       ];
     };
   }
@@ -569,6 +570,7 @@ pkgs.runCommand "genie-agent-nixos-module"
       && grep -q '^ok [0-9]* - oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-write and exactly its repos and memory read-only, runs in a private PID namespace, and only herdr loads the tier token$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle (loadCredential = false): adapter-off mode sets LoadCredential = \[\] on all units, wires credentialsDir and explicit \*File paths into rootConfigJson, ExecStart, BindReadOnlyPaths, and InaccessiblePaths$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle (loadCredential = true): default adapter-on mode is deepEqual on every rendered unit and rootConfigJson to the LoadCredential baseline$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle: deployed-host default units are unchanged modulo store hashes compared against the base commit render$' $TMPDIR/tap \
       && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
     touch $out
   ''

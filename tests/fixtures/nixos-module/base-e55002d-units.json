@@ -1,0 +1,2183 @@
+{
+  "baseCommit": "e55002d8d7fa9e188f741b2b3dd6e0705a8f2c3f",
+  "credsDirAdapterOffUnits": {
+    "genie-agent": {
+      "after": [
+        "network.target",
+        "genie-guard.service"
+      ],
+      "description": "genie-agent Tier-1 composition root service",
+      "environment": {
+        "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
+        "HOME": "/var/lib/genie-agent",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/nix/store/<HASH>-genie-operating-memory-0.1.0:/memory",
+          "/var/credentials/genie/model-key",
+          "/var/custom-secrets/broker-token",
+          "/var/custom-secrets/gh-read-token",
+          "/var/credentials/genie/s3-secret-key"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": true,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": false,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@public": {
+      "after": [
+        "network.target",
+        "genie-herdr@public.service"
+      ],
+      "description": "genie-agent expert dispatcher (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@public.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory",
+          "/var/credentials/genie/expert-public-token"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /var/credentials/genie/expert-public-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@trusted.service",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted",
+          "-/var/credentials/genie/model-key",
+          "-/var/custom-secrets/broker-token",
+          "-/var/custom-secrets/gh-read-token",
+          "-/var/credentials/genie/s3-secret-key",
+          "-/var/custom-secrets/trusted-token"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@trusted": {
+      "after": [
+        "network.target",
+        "genie-herdr@trusted.service"
+      ],
+      "description": "genie-agent expert dispatcher (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@trusted.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory",
+          "/var/custom-secrets/trusted-token"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /var/custom-secrets/trusted-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@public.service",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public",
+          "-/var/credentials/genie/model-key",
+          "-/var/custom-secrets/broker-token",
+          "-/var/custom-secrets/gh-read-token",
+          "-/var/credentials/genie/s3-secret-key",
+          "-/var/credentials/genie/expert-public-token"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-guard": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-guard inbound prompt-injection screening service",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/credentials/genie/model-key"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /var/credentials/genie/model-key",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@public": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory",
+          "/nix/store/<HASH>-genie-claude-public-settings.json:/var/lib/genie-agent/claude-public/settings.json",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/claude-public/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-public/.config.json",
+          "/nix/store/<HASH>-genie-expert-public-CLAUDE.md:/var/lib/genie-agent/claude-public/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/output-styles",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-public:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted",
+          "-/var/credentials/genie",
+          "-/var/credentials/genie/model-key",
+          "-/var/custom-secrets/broker-token",
+          "-/var/custom-secrets/gh-read-token",
+          "-/var/credentials/genie/s3-secret-key",
+          "-/var/credentials/genie/expert-public-token",
+          "-/var/custom-secrets/trusted-token"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@trusted": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory",
+          "/nix/store/<HASH>-genie-claude-trusted-settings.json:/var/lib/genie-agent/claude-trusted/settings.json",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/claude-trusted/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-trusted/.config.json",
+          "/nix/store/<HASH>-genie-expert-trusted-CLAUDE.md:/var/lib/genie-agent/claude-trusted/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/output-styles",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-trusted:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public",
+          "-/var/credentials/genie",
+          "-/var/credentials/genie/model-key",
+          "-/var/custom-secrets/broker-token",
+          "-/var/custom-secrets/gh-read-token",
+          "-/var/credentials/genie/s3-secret-key",
+          "-/var/credentials/genie/expert-public-token",
+          "-/var/custom-secrets/trusted-token"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    }
+  },
+  "fullUnits": {
+    "genie-agent": {
+      "after": [
+        "network.target",
+        "genie-guard.service"
+      ],
+      "description": "genie-agent Tier-1 composition root service",
+      "environment": {
+        "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
+        "HOME": "/var/lib/genie-agent",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/nix/store/<HASH>-genie-operating-memory-0.1.0:/memory"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": true,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [
+          "model-key:/run/secrets/model-key",
+          "guard-out-key:/run/secrets/guard-out-key",
+          "broker-token:/run/secrets/github-pat",
+          "s3-secret-key:/run/secrets/s3-key"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": false,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-guard": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-guard inbound prompt-injection screening service",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --api-key-file /run/credentials/genie-guard.service/api-key",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [
+          "api-key:/run/secrets/model-key"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    }
+  },
+  "localAdapterOffUnits": {
+    "genie-agent": {
+      "after": [
+        "network.target",
+        "genie-guard.service"
+      ],
+      "description": "genie-agent Tier-1 composition root service",
+      "environment": {
+        "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
+        "HOME": "/var/lib/genie-agent",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/nix/store/<HASH>-genie-operating-memory-0.1.0:/memory",
+          "/home/sini/.config/hyperqwen/api-key"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": true,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": false,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@public": {
+      "after": [
+        "network.target",
+        "genie-herdr@public.service"
+      ],
+      "description": "genie-agent expert dispatcher (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@public.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory",
+          "/run/agenix/genie-expert-public-token"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /run/agenix/genie-expert-public-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@trusted.service",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted",
+          "-/home/sini/.config/hyperqwen/api-key",
+          "-/run/agenix/genie-expert-trusted-token"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@trusted": {
+      "after": [
+        "network.target",
+        "genie-herdr@trusted.service"
+      ],
+      "description": "genie-agent expert dispatcher (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@trusted.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory",
+          "/run/agenix/genie-expert-trusted-token"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /run/agenix/genie-expert-trusted-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@public.service",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public",
+          "-/home/sini/.config/hyperqwen/api-key",
+          "-/run/agenix/genie-expert-public-token"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-guard": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-guard inbound prompt-injection screening service",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/.config/hyperqwen/api-key"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /home/sini/.config/hyperqwen/api-key",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@public": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory",
+          "/nix/store/<HASH>-genie-claude-public-settings.json:/var/lib/genie-agent/claude-public/settings.json",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/claude-public/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-public/.config.json",
+          "/nix/store/<HASH>-genie-expert-public-CLAUDE.md:/var/lib/genie-agent/claude-public/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/output-styles",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-public:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted",
+          "-/home/sini/.config/hyperqwen/api-key",
+          "-/run/agenix/genie-expert-public-token",
+          "-/run/agenix/genie-expert-trusted-token"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@trusted": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory",
+          "/nix/store/<HASH>-genie-claude-trusted-settings.json:/var/lib/genie-agent/claude-trusted/settings.json",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/claude-trusted/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-trusted/.config.json",
+          "/nix/store/<HASH>-genie-expert-trusted-CLAUDE.md:/var/lib/genie-agent/claude-trusted/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/output-styles",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-trusted:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public",
+          "-/home/sini/.config/hyperqwen/api-key",
+          "-/run/agenix/genie-expert-public-token",
+          "-/run/agenix/genie-expert-trusted-token"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    }
+  },
+  "noGuardUnits": {
+    "genieAgent": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent Tier-1 composition root service",
+      "environment": {
+        "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
+        "HOME": "/var/lib/genie-agent",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/nix/store/<HASH>-genie-operating-memory-0.1.0:/memory"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": true,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [
+          "model-key:/home/sini/.config/hyperqwen/api-key"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": false,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "hasGenieGuard": false
+  },
+  "units": {
+    "genie-agent": {
+      "after": [
+        "network.target",
+        "genie-guard.service"
+      ],
+      "description": "genie-agent Tier-1 composition root service",
+      "environment": {
+        "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
+        "HOME": "/var/lib/genie-agent",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [
+          "/nix/store/<HASH>-genie-operating-memory-0.1.0:/memory"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": true,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [
+          "model-key:/home/sini/.config/hyperqwen/api-key",
+          "guard-out-key:/home/sini/.config/hyperqwen/api-key"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": false,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@public": {
+      "after": [
+        "network.target",
+        "genie-herdr@public.service"
+      ],
+      "description": "genie-agent expert dispatcher (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@public.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /run/credentials/genie-dispatcher@public.service/tier-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@trusted.service",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [
+          "tier-token:/run/agenix/genie-expert-public-token"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-dispatcher@trusted": {
+      "after": [
+        "network.target",
+        "genie-herdr@trusted.service"
+      ],
+      "description": "genie-agent expert dispatcher (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [
+        "genie-herdr@trusted.service"
+      ],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /run/credentials/genie-dispatcher@trusted.service/tier-token",
+        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "InaccessiblePaths": [
+          "-/run/credentials/genie-dispatcher@public.service",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "LimitCORE": 0,
+        "LoadCredential": [
+          "tier-token:/run/agenix/genie-expert-trusted-token"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": true,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": "invisible",
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": true,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "@system-service",
+          "~@privileged",
+          "~@resources",
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-guard": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-guard inbound prompt-injection screening service",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      },
+      "path": [
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg"
+        ],
+        "BindReadOnlyPaths": [],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /run/credentials/genie-guard.service/api-key",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [],
+        "LimitCORE": null,
+        "LoadCredential": [
+          "api-key:/home/sini/.config/hyperqwen/api-key"
+        ],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": false,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": null,
+        "SystemCallFilter": [],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@public": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (public tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-public",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-public:/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "BindReadOnlyPaths": [
+          "/var/lib/genie/public-repos",
+          "/var/lib/genie/support-memory",
+          "/nix/store/<HASH>-genie-claude-public-settings.json:/var/lib/genie-agent/claude-public/settings.json",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/claude-public/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-public/.config.json",
+          "/nix/store/<HASH>-genie-expert-public-CLAUDE.md:/var/lib/genie-agent/claude-public/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-public/output-styles",
+          "/nix/store/<HASH>-genie-claude-public-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-public:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-trusted",
+          "/var/lib/genie-agent/cwd-trusted",
+          "/var/lib/genie-agent/dispatcher-trusted",
+          "/var/lib/genie-agent/herdr-session-trusted",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    },
+    "genie-herdr@trusted": {
+      "after": [
+        "network.target"
+      ],
+      "description": "genie-agent headless herdr server (trusted tier)",
+      "environment": {
+        "HOME": "/var/lib/genie-agent",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
+      },
+      "path": [
+        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-genie-claude-shim-trusted",
+        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-xmsg",
+        "/nix/store/<HASH>-ripgrep-15.2.0",
+        "/nix/store/<HASH>-python3-3.14.7",
+        "/nix/store/<HASH>-git-2.55.0",
+        "/nix/store/<HASH>-nix-2.34.8",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-claude",
+        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-findutils-4.11.0",
+        "/nix/store/<HASH>-gnugrep-3.12",
+        "/nix/store/<HASH>-gnused-4.10",
+        "/nix/store/<HASH>-systemd-261.3"
+      ],
+      "requires": [],
+      "serviceConfig": {
+        "AmbientCapabilities": "",
+        "BindPaths": [
+          "/run/user/1000/xmsg",
+          "/var/lib/genie-agent/herdr-session-trusted:/var/lib/genie-agent/.config/herdr/sessions/genie-trusted"
+        ],
+        "BindReadOnlyPaths": [
+          "/home/sini/Documents/repos/sini",
+          "/home/sini/.claude/memory",
+          "/nix/store/<HASH>-genie-claude-trusted-settings.json:/var/lib/genie-agent/claude-trusted/settings.json",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/claude-trusted/.claude.json",
+          "/nix/store/<HASH>-genie-empty.json:/var/lib/genie-agent/claude-trusted/.config.json",
+          "/nix/store/<HASH>-genie-expert-trusted-CLAUDE.md:/var/lib/genie-agent/claude-trusted/CLAUDE.md",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/hooks",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/cowork_plugins",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/commands",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/skills",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/agents",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/rules",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/workflows",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/routines",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/claude-trusted/output-styles",
+          "/nix/store/<HASH>-genie-claude-trusted-claude.json:/var/lib/genie-agent/.claude.json",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshenv",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zshrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zprofile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogin",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.zlogout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bashrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_login",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_logout",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.profile",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.bash_completion",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.inputrc",
+          "/nix/store/<HASH>-genie-empty-file:/var/lib/genie-agent/.envrc",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.nix-profile",
+          "/nix/store/<HASH>-genie-empty-dir:/var/lib/genie-agent/.local/state/nix/profile",
+          "/nix/store/<HASH>-genie-herdr-ro-config-trusted:/var/lib/genie-agent/.config/herdr"
+        ],
+        "CapabilityBoundingSet": "",
+        "Delegate": false,
+        "DevicePolicy": "closed",
+        "EnvironmentFile": null,
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStartPre": null,
+        "InaccessiblePaths": [
+          "-/run/credentials",
+          "-/run/agenix",
+          "-/run/agenix.d",
+          "-/run/genie-secrets",
+          "/var/lib/genie-agent/claude-public",
+          "/var/lib/genie-agent/cwd-public",
+          "/var/lib/genie-agent/dispatcher-public",
+          "/var/lib/genie-agent/herdr-session-public",
+          "-/var/lib/genie-agent/.config/herdr/sessions/genie-public"
+        ],
+        "LimitCORE": null,
+        "LoadCredential": [],
+        "LockPersonality": true,
+        "NoNewPrivileges": true,
+        "PrivateDevices": true,
+        "PrivateNetwork": false,
+        "PrivatePIDs": true,
+        "PrivateTmp": true,
+        "PrivateUsers": false,
+        "ProtectClock": true,
+        "ProtectControlGroups": true,
+        "ProtectHome": "tmpfs",
+        "ProtectHostname": true,
+        "ProtectKernelLogs": true,
+        "ProtectKernelModules": true,
+        "ProtectKernelTunables": true,
+        "ProtectProc": null,
+        "ProtectSystem": "strict",
+        "RemoveIPC": true,
+        "RestrictAddressFamilies": [
+          "AF_INET",
+          "AF_INET6",
+          "AF_UNIX"
+        ],
+        "RestrictNamespaces": false,
+        "RestrictRealtime": true,
+        "RestrictSUIDSGID": true,
+        "RuntimeDirectory": "genie-agent",
+        "StateDirectory": "genie-agent",
+        "SystemCallArchitectures": "native",
+        "SystemCallErrorNumber": "EPERM",
+        "SystemCallFilter": [
+          "~perf_event_open"
+        ],
+        "Type": "simple",
+        "UMask": "0077",
+        "User": "sini",
+        "WorkingDirectory": "/var/lib/genie-agent"
+      },
+      "wantedBy": [
+        "multi-user.target"
+      ]
+    }
+  }
+}

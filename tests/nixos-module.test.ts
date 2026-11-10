@@ -229,11 +229,13 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
     ["accessKeyId", "bucket", "endpoint", "region", "secretKeyFile"],
   );
   assert.deepEqual(
-    Object.keys(summary.fullRootAttrs.broker).sort(),
-    ["allowedRepos", "botLogin", "githubApi", "guardOut", "threadLink", "tokenFile"],
+    Object.keys(summary.localRootAttrs.broker).sort(),
+    ["botLogin", "guardOut", "tokenFile"],
   );
-  assert.deepEqual(summary.localRootAttrs.broker.allowedRepos, []);
-  assert.deepEqual(summary.fullRootAttrs.broker.allowedRepos, []);
+  assert.deepEqual(
+    Object.keys(summary.fullRootAttrs.broker).sort(),
+    ["botLogin", "githubApi", "guardOut", "threadLink", "tokenFile"],
+  );
   assert.deepEqual(
     Object.keys(summary.fullRootAttrs.broker.guardOut).sort(),
     ["base", "enable", "keyFile", "model"],
@@ -696,4 +698,38 @@ test("oracle (loadCredential = true): default adapter-on mode is deepEqual on ev
     };
     assert.deepEqual(summary.units[`genie-dispatcher@${tier}`], expectedDisp);
   }
+});
+
+const STORE_HASH_RE = /\/nix\/store\/[0-9a-df-np-sv-z]{32}-/g;
+function normalizeStoreHashes(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(STORE_HASH_RE, "/nix/store/<HASH>-");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeStoreHashes(item));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, normalizeStoreHashes(v)]),
+    );
+  }
+  return value;
+}
+
+test("oracle: deployed-host default units are unchanged modulo store hashes compared against the base commit render", () => {
+  const baseRender = JSON.parse(readFileSync("tests/fixtures/nixos-module/base-e55002d-units.json", "utf8"));
+  assert.equal(baseRender.baseCommit, "e55002d8d7fa9e188f741b2b3dd6e0705a8f2c3f");
+  if (process.env.GENIE_BASE_NIXOS_MODULE_SUMMARY) {
+    const liveBase = JSON.parse(readFileSync(process.env.GENIE_BASE_NIXOS_MODULE_SUMMARY, "utf8"));
+    assert.deepEqual(normalizeStoreHashes(liveBase.units), baseRender.units);
+    assert.deepEqual(normalizeStoreHashes(liveBase.fullUnits), baseRender.fullUnits);
+    assert.deepEqual(normalizeStoreHashes(liveBase.localAdapterOffUnits), baseRender.localAdapterOffUnits);
+    assert.deepEqual(normalizeStoreHashes(liveBase.credsDirAdapterOffUnits), baseRender.credsDirAdapterOffUnits);
+    assert.deepEqual(normalizeStoreHashes(liveBase.noGuardUnits), baseRender.noGuardUnits);
+  }
+  assert.deepEqual(normalizeStoreHashes(summary.units), baseRender.units);
+  assert.deepEqual(normalizeStoreHashes(summary.fullUnits), baseRender.fullUnits);
+  assert.deepEqual(normalizeStoreHashes(summary.localAdapterOffUnits), baseRender.localAdapterOffUnits);
+  assert.deepEqual(normalizeStoreHashes(summary.credsDirAdapterOffUnits), baseRender.credsDirAdapterOffUnits);
+  assert.deepEqual(normalizeStoreHashes(summary.noGuardUnits), baseRender.noGuardUnits);
 });

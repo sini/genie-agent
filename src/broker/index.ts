@@ -100,14 +100,6 @@ export function isValidRepoCoord(repo: unknown): repo is string {
   );
 }
 
-// Repository allowlist check for PR proposals (GX2 F2). Defaults to empty ([]), refusing all
-// repositories unless explicitly configured as "owner/repo" or "owner/*".
-export function isRepoAllowed(repo: unknown, allowedRepos: readonly string[] = []): boolean {
-  if (!isValidRepoCoord(repo)) return false;
-  const [owner] = repo.split("/");
-  return allowedRepos.some((entry) => entry === repo || entry === `${owner}/*`);
-}
-
 export function isValidBranchRef(branch: unknown): branch is string {
   if (typeof branch !== "string" || !BRANCH_REF_RE.test(branch) || branch.includes("..")) return false;
   const parts = branch.split("/");

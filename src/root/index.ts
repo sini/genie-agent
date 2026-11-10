@@ -154,7 +154,6 @@ export interface Config {
     maxProposalsPerThreadPerDay?: number;
     githubApi?: string;
     threadLink?: string;
-    allowedRepos?: string[];
     guardOut?: { enable?: boolean; base?: string; model?: string; keyFile?: string };
   };
   // Eval limits are requested from detected host adapters; unavailable enforcement is reported.
