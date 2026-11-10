@@ -494,7 +494,15 @@
                 rc=0
                 node --expose-gc --test --test-force-exit --test-reporter=tap tests/dispatcher.test.ts tests/delivery.test.ts tests/dispatcher-gc.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F1): THREAD_ID_RE validated at packageThread boundary and at every fs/dispatcher sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F5): loadJournal validates entries (after N1 migration) and GC/escalate sinks re-validate$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle 24: a parked thread resumes with its first launch.s uuid across a kill and restart$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-14: first escalation against a real herdr server lazily creates the base pane and starts claude$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GI-15 (K7 + SO_PEERPIDFD socketpair): CliHerdr splits panes in cwdDir and hands off token over SCM_RIGHTS socketpair$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GT3 (Arm A1): zero V8 and Python accept-window token residency across credential formats, D4b validated token id under CREDENTIALS_DIRECTORY, and pre-split refusal on invalid credentials$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F1): THREAD_ID_RE validated at packageThread boundary and at every fs/dispatcher sink$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GX1 (F5): loadJournal validates entries (after N1 migration) and GC/escalate sinks re-validate$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (loadCredential adapter off & fail-closed tokenCredentialFile): CliHerdr and startDispatcher prioritize configured tokenCredentialFile / credentialsDir over decoy CREDENTIALS_DIRECTORY and fail closed on missing or empty tokenCredentialFile$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle GE1: malformed expert replies (plain text, empty answer, missing/wrong tier, out-of-range confidence, forged approval, deferred proposal) are rejected back to the expert session with a schema error, never relayed, and leave the turn outstanding until a valid reply arrives$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: never parked with a message outstanding or in buffer$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: parked at the threshold after the last reply, and resumable$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle 26: at 95h idle kept, at 96h handed off and gone$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                cp -r . $TMPDIR/mut-herdr-cred-dir
+                chmod -R u+w $TMPDIR/mut-herdr-cred-dir
+                substituteInPlace $TMPDIR/mut-herdr-cred-dir/src/dispatcher/herdr.ts \
+                  --replace-fail '      this.o.credentialsDir ??' '      this.env.CREDENTIALS_DIRECTORY ?? this.o.credentialsDir ??'
+                if (cd $TMPDIR/mut-herdr-cred-dir && node --expose-gc --test --test-force-exit --test-name-pattern='oracle \(loadCredential adapter off & fail-closed tokenCredentialFile\)' tests/dispatcher.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-herdr-cred-dir-env-first survived in dispatcher" >&2
+                  exit 1
+                fi
                 touch $out
               '';
           # The verdict parser's gating oracle: any reply outside schemas/verdict.json, or breaking its
@@ -554,6 +562,7 @@
                   && grep -q '^ok [0-9]* - oracle 2: parser fails closed to block on invalid or malformed output$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - scope authority: only exact transport service origin enables public targets$' $TMPDIR/tap \
                   && grep -q '^ok [0-9]* - scope schema and zero targets: validation precedes calls and legacy trusted attacks stay reviewed$' $TMPDIR/tap \
+                  && grep -q '^ok [0-9]* - oracle (loadCredential adapter off): genie-guard config reads --api-key-file from configured path and ignores decoy CREDENTIALS_DIRECTORY$' $TMPDIR/tap \
                   && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 python3 tests/guard-scope-mutants.py $TMPDIR/scope-mutants
                 touch $out
@@ -1678,6 +1687,8 @@
                 grep -q '^ok [0-9]* - oracle O-GE2-today (Arm a): !t79jR_rVSlmFceMqpE shape (2 recalls, 0 evals, imperative Nix prose in draft.answer, 3 gaps, confidence 0.75) posts once and escalates once with 0 escalationGuard calls$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GP7-escalate-after-refused-eval: refused trusted evals on a public thread (guard-out block, C9 pending action, and duplicate pending action) leave eval_transcript clean so subsequent reply, escalate, and deeper escalations validate against schemas/escalation.json and send to @public$' $TMPDIR/tap || exit 1
                 grep -q '^ok [0-9]* - oracle O-GP7-repair-persisted-refused-eval: context(t) drops legacy persisted refused-eval entries lacking result.exit from context.json while preserving valid EvalResult entries so pre-GP7 threads escalate cleanly$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle (loadCredential adapter off): main reads configured credential files from credentialsDir and ignores decoy CREDENTIALS_DIRECTORY$' $TMPDIR/tap || exit 1
+                grep -q '^ok [0-9]* - oracle (fail-closed credentials): main and configuredEval reject missing or empty configured credentials and skip unconfigured optional credentials$' $TMPDIR/tap || exit 1
                 [ "$(grep -c 'escalation\.reply(' src/root/index.ts)" -eq 1 ] && awk '/const escalateAfterPost = async/,/^  };/' src/root/index.ts | grep -q 'escalation\.reply(' || {
                   echo "guard failed: every escalation.reply call in src/root/index.ts must sit inside escalateAfterPost" >&2
                   exit 1
@@ -1862,6 +1873,14 @@
                   --replace-fail 'eval_transcript: (raw.eval_transcript ?? []).filter(hasEvalExit),' 'eval_transcript: raw.eval_transcript ?? [],'
                 if (cd $TMPDIR/mut-gp7-persisted && node --test --test-force-exit --test-name-pattern='oracle O-GP7-repair-persisted-refused-eval' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-GP7-keep-persisted-refused-eval survived in root" >&2
+                  exit 1
+                fi
+                cp -r . $TMPDIR/mut-root-cred-skip
+                chmod -R u+w $TMPDIR/mut-root-cred-skip
+                substituteInPlace $TMPDIR/mut-root-cred-skip/src/root/index.ts \
+                  --replace-fail '    if (credential === null || credential === undefined) continue;' '    if (!credential || !existsSync(credential)) continue;'
+                if (cd $TMPDIR/mut-root-cred-skip && node --test --test-force-exit --test-name-pattern='oracle \(fail-closed credentials\)' tests/root.test.ts >/dev/null 2>&1); then
+                  echo "mutant M-root-skip-missing-credential survived in root" >&2
                   exit 1
                 fi
                 touch $out

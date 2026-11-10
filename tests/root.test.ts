@@ -19,6 +19,7 @@ import type { Envelope, Verdict } from "../src/guard/verdict.ts";
 import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } from "../src/lifecycle/index.ts";
 import { git } from "../src/mirror/index.ts";
 import { DEADLINE_NOTICE, type Inbound, main, parseMatrixForward, REFUSAL, validateRootConfig, WITHHELD, XmsgIo } from "../src/root/index.ts";
+import { configuredEval } from "../src/root/eval.ts";
 import { parseArgs } from "../src/root/main.ts";
 import { piAiPath } from "../src/tier1/custody.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
@@ -4390,6 +4391,341 @@ test("oracle O-GP7-repair-persisted-refused-eval: context(t) drops legacy persis
     await root.supervisor.teardown(thRepairDeeper);
   }
 });
+
+test("oracle (loadCredential adapter off): main reads configured credential files from credentialsDir and ignores decoy CREDENTIALS_DIRECTORY", async () => {
+  const baseCfg = JSON.parse(readFileSync(`${tmp}/config.json`, "utf8"));
+  const dir = mkdtempSync(`${tmp}/adapter-off-`);
+  const credsDir = `${dir}/credentials`;
+  const decoyDir = `${dir}/decoy-credentials`;
+  mkdirSync(credsDir, { recursive: true });
+  mkdirSync(decoyDir, { recursive: true });
+
+  writeFileSync(`${credsDir}/model-key`, "real-model-key\n");
+  writeFileSync(`${credsDir}/guard-out-key`, "real-guard-out-key\n");
+  writeFileSync(`${credsDir}/broker-token`, "real-broker-token\n");
+  writeFileSync(`${credsDir}/github-read-token`, "real-gh-read-token\n");
+  writeFileSync(`${credsDir}/s3-secret-key`, "real-s3-secret-key\n");
+
+  // Plant decoy files in CREDENTIALS_DIRECTORY with distinct names/values
+  writeFileSync(`${decoyDir}/model-key`, "decoy-model-key\n");
+  writeFileSync(`${decoyDir}/guard-out-key`, "decoy-guard-out-key\n");
+  writeFileSync(`${decoyDir}/broker-token`, "decoy-broker-token\n");
+  writeFileSync(`${decoyDir}/github-read-token`, "decoy-gh-read-token\n");
+  writeFileSync(`${decoyDir}/s3-secret-key`, "decoy-s3-secret-key\n");
+
+  const guardOutAuths: (string | undefined)[] = [];
+  const guardOutSrv = createServer((req, res) => {
+    guardOutAuths.push(req.headers.authorization);
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ verdict: "pass", reason: "ok" }) } }],
+      }),
+    );
+  });
+  await new Promise<void>((r) => guardOutSrv.listen(0, "127.0.0.1", r));
+  const guardOutPort = (guardOutSrv.address() as AddressInfo).port;
+
+  const ghAuths: { url: string; auth: string | undefined; body: string }[] = [];
+  const ghSrv = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      ghAuths.push({ url: req.url!, auth: req.headers.authorization, body });
+      if (req.url === "/user") {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ login: "genie-bot" }));
+        return;
+      }
+      if (req.url === "/gists" && req.method === "POST") {
+        res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ html_url: "https://gist.github.com/1" }));
+        return;
+      }
+      if (req.url?.startsWith("/repos/alice/flake/issues/1/comments")) {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify([]));
+        return;
+      }
+      if (req.url?.startsWith("/repos/alice/flake/issues/1")) {
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({ number: 1, title: "t", state: "open", body: "b", user: { login: "alice" } }),
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((r) => ghSrv.listen(0, "127.0.0.1", r));
+  const ghPort = (ghSrv.address() as AddressInfo).port;
+
+  const cfgFile = `${dir}/config.json`;
+  writeFileSync(
+    cfgFile,
+    JSON.stringify({
+      ...baseCfg,
+      stateRoot: `${dir}/state`,
+      storeRoot: `${dir}/store`,
+      model: {
+        ...baseCfg.model,
+        keyFile: `${credsDir}/model-key`,
+      },
+      githubReadTokenFile: `${credsDir}/github-read-token`,
+      s3: {
+        ...baseCfg.s3,
+        secretKeyFile: `${credsDir}/s3-secret-key`,
+      },
+      broker: {
+        ...baseCfg.broker,
+        githubApi: `http://127.0.0.1:${ghPort}`,
+        tokenFile: `${credsDir}/broker-token`,
+        guardOut: {
+          enable: true,
+          base: `http://127.0.0.1:${guardOutPort}/v1`,
+          model: "m",
+          keyFile: `${credsDir}/guard-out-key`,
+        },
+      },
+    }),
+  );
+
+  const prevCredsDir = process.env.CREDENTIALS_DIRECTORY;
+  process.env.CREDENTIALS_DIRECTORY = decoyDir;
+  const rBatches: Inbound[][] = [];
+  const rPosts: { thread: string; text: string }[] = [];
+  const r = main(
+    cfgFile,
+    {
+      intake: { next: async () => rBatches.shift() ?? null },
+      post: {
+        post: async (t, text) => {
+          rPosts.push({ thread: t, text: JSON.stringify(text) });
+          return "$ev";
+        },
+      },
+      guard: { check: async () => ({ verdict: "allow", reason: "ok", cleaned_text: "" }) },
+      xmsg: { send: async () => "m1" },
+    },
+    async () => ({ exit: 0, stdout_tail: "", stderr_tail: "", limit_hit: "none" }),
+  );
+  try {
+    rBatches.push([
+      {
+        thread: "th_adapter_off",
+        envelope: envelope(BOB, "Verify credentialsDir vs decoy CREDENTIALS_DIRECTORY"),
+      },
+    ]);
+    await r.run();
+    const h = async (method: string, arg: unknown) =>
+      JSON.parse(
+        (
+          (
+            await r.supervisor.command("th_adapter_off", {
+              type: "host",
+              title: BRIDGE,
+              placeholder: JSON.stringify({ method, arg }),
+            })
+          ).data as any
+        ).value,
+      );
+
+    // 1. gh_read uses configured githubReadTokenFile, not decoy
+    const ghRes = await h("gh_read", { kind: "issue", repo: "alice/flake", id: "1" });
+    assert.equal(ghRes.ok.issue.number, 1);
+    assert.ok(
+      ghAuths.some((a) => a.url.startsWith("/repos/alice/flake/issues/1") && a.auth === "Bearer real-gh-read-token"),
+      "gh_read must authenticate with configured githubReadTokenFile, not decoy",
+    );
+
+    // 2. propose uses configured broker.tokenFile for Bearer auth, not decoy
+    const propRes = await h("propose", {
+      kind: "gist",
+      title: "test gist",
+      body: "test body",
+      files: { "a.txt": "{ }: 42\n" },
+    });
+    assert.equal(propRes.ok.acted, true);
+    const gistPost = ghAuths.find((a) => a.url === "/gists");
+    assert.ok(gistPost, "expected POST /gists");
+    assert.equal(gistPost.auth, "Bearer real-broker-token", "broker must authenticate with configured broker.tokenFile, not decoy");
+
+    // 3. reply uses configured broker.guardOut.keyFile, not decoy
+    const rep = await h("reply", {
+      answer: "Clean reply",
+      confidence: 0.9,
+      gaps: [],
+      escalate_forced: false,
+    });
+    assert.equal(rep.ok.posted, true);
+    assert.ok(
+      guardOutAuths.every((a) => a === "Bearer real-guard-out-key"),
+      "guard-out must authenticate with configured guard-out-key, not decoy",
+    );
+    assert.equal(rPosts.length, 1);
+
+    // 4. close (control: "accept") archives to S3 using configured s3.secretKeyFile
+    const putsBefore = puts.length;
+    rBatches.push([{ thread: "th_adapter_off", control: "accept" }]);
+    await r.run();
+    assert.equal(puts.length, putsBefore + 1, "close must archive once to S3 with configured s3.secretKeyFile");
+  } finally {
+    if (prevCredsDir === undefined) delete process.env.CREDENTIALS_DIRECTORY;
+    else process.env.CREDENTIALS_DIRECTORY = prevCredsDir;
+    await r.stop();
+    await new Promise<void>((res) => guardOutSrv.close(() => res()));
+    await new Promise<void>((res) => ghSrv.close(() => res()));
+  }
+});
+
+test("oracle (fail-closed credentials): main and configuredEval reject missing or empty configured credentials and skip unconfigured optional credentials", async () => {
+  const baseCfg = JSON.parse(readFileSync(`${tmp}/config.json`, "utf8"));
+  const dir = mkdtempSync(`${tmp}/fail-closed-creds-`);
+  const validKey = `${dir}/valid-key`;
+  const emptyKey = `${dir}/empty-key`;
+  const blankKey = `${dir}/blank-key`;
+  const missingKey = `${dir}/missing-key`;
+  writeFileSync(validKey, "valid-secret-value\n");
+  writeFileSync(emptyKey, "");
+  writeFileSync(blankKey, "  \n\t ");
+
+  const fakeDeps = {
+    intake: { next: async () => null },
+    post: { post: async () => "$ev" },
+    guard: { check: async () => ({ verdict: "allow" as const, reason: "ok", cleaned_text: "" }) },
+    xmsg: { send: async () => "m1" },
+  };
+  const fakeRun = async () => ({ exit: 0, stdout_tail: "", stderr_tail: "", limit_hit: "none" as const });
+
+  const writeCfg = (name: string, overrides: Record<string, unknown>) => {
+    const p = `${dir}/${name}.json`;
+    writeFileSync(
+      p,
+      JSON.stringify({
+        ...baseCfg,
+        stateRoot: `${dir}/state-${name}`,
+        storeRoot: `${dir}/store-${name}`,
+        model: { ...baseCfg.model, keyFile: validKey },
+        s3: { ...baseCfg.s3, secretKeyFile: validKey },
+        broker: {
+          ...baseCfg.broker,
+          tokenFile: validKey,
+          guardOut: { ...baseCfg.broker.guardOut, enable: true, keyFile: validKey },
+        },
+        ...overrides,
+      }),
+    );
+    return p;
+  };
+
+  // 1. Configured credentials fail closed when missing or empty/whitespace:
+  //    model.keyFile, broker.tokenFile, broker.guardOut.keyFile, githubReadTokenFile, s3.secretKeyFile, eval.kubernetes.tokenFile
+  for (const [label, badPath, expectedRe] of [
+    ["missing", missingKey, /credential file is not readable|credential file unreadable/],
+    ["empty", emptyKey, /credential file is empty/],
+    ["blank", blankKey, /credential file is empty/],
+  ] as const) {
+    assert.throws(
+      () => main(writeCfg(`model-${label}`, { model: { ...baseCfg.model, keyFile: badPath } }), fakeDeps, fakeRun),
+      expectedRe,
+      `model.keyFile (${label}) must fail closed`,
+    );
+    assert.throws(
+      () =>
+        main(
+          writeCfg(`broker-${label}`, {
+            broker: { ...baseCfg.broker, tokenFile: badPath, guardOut: { ...baseCfg.broker.guardOut, keyFile: validKey } },
+          }),
+          fakeDeps,
+          fakeRun,
+        ),
+      expectedRe,
+      `broker.tokenFile (${label}) must fail closed`,
+    );
+    assert.throws(
+      () =>
+        main(
+          writeCfg(`guardout-${label}`, {
+            broker: {
+              ...baseCfg.broker,
+              tokenFile: validKey,
+              guardOut: { ...baseCfg.broker.guardOut, enable: true, keyFile: badPath },
+            },
+          }),
+          fakeDeps,
+          fakeRun,
+        ),
+      expectedRe,
+      `broker.guardOut.keyFile (${label}) must fail closed`,
+    );
+    assert.throws(
+      () => main(writeCfg(`ghread-${label}`, { githubReadTokenFile: badPath }), fakeDeps, fakeRun),
+      expectedRe,
+      `githubReadTokenFile (${label}) must fail closed`,
+    );
+    assert.throws(
+      () => main(writeCfg(`s3-${label}`, { s3: { ...baseCfg.s3, secretKeyFile: badPath } }), fakeDeps, fakeRun),
+      expectedRe,
+      `s3.secretKeyFile (${label}) must fail closed`,
+    );
+    const k8sCfg = {
+      backend: "kubernetes" as const,
+      kubernetes: {
+        baseUrl: "https://127.0.0.1:6443",
+        namespace: "genie",
+        image: "evaluator:test",
+        tokenFile: badPath,
+        store: { claimName: "store-pvc" },
+      },
+    };
+    assert.throws(
+      () => main(writeCfg(`k8s-main-${label}`, { eval: k8sCfg }), fakeDeps, fakeRun),
+      expectedRe,
+      `eval.kubernetes.tokenFile (${label}) in main() must fail closed`,
+    );
+    assert.throws(
+      () => configuredEval(k8sCfg, `${dir}/wt`),
+      expectedRe,
+      `eval.kubernetes.tokenFile (${label}) in configuredEval() must fail closed`,
+    );
+  }
+
+  // 2. Unconfigured optional credentials (null / undefined, or disabled subsystem) are skipped cleanly:
+  const optionalSkippedCfg = writeCfg("optional-skipped", {
+    s3: null,
+    githubReadTokenFile: null,
+    broker: {
+      tokenFile: null,
+      guardOut: {
+        enable: false,
+        base: baseCfg.broker.guardOut.base,
+        model: baseCfg.broker.guardOut.model,
+        keyFile: missingKey, // ignored when guardOut.enable === false
+      },
+    },
+    eval: {
+      backend: "kubernetes",
+      kubernetes: {
+        baseUrl: "https://127.0.0.1:6443",
+        namespace: "genie",
+        image: "evaluator:test",
+        store: { claimName: "store-pvc" },
+      },
+    },
+  });
+  const rSkipped = main(optionalSkippedCfg, fakeDeps, fakeRun);
+  await rSkipped.stop();
+  const runnerNoToken = configuredEval(
+    {
+      backend: "kubernetes",
+      kubernetes: {
+        baseUrl: "https://127.0.0.1:6443",
+        namespace: "genie",
+        image: "evaluator:test",
+        store: { claimName: "store-pvc" },
+      },
+    },
+    `${dir}/wt`,
+  );
+  assert.equal(typeof runnerNoToken, "function");
+});
+
 
 
 

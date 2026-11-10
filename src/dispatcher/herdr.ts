@@ -360,15 +360,18 @@ export class CliHerdr implements Herdr {
   private resolveCredentialTarget(threadId: string, spec: StartSpec): { credDir: string; credName: string } {
     const credDir =
       this.o.credentialsDir ??
-      this.env.CREDENTIALS_DIRECTORY ??
-      (this.o.tokenCredentialFile ? this.o.tokenCredentialFile.replace(/\/[^/]+$/, "") : undefined);
+      (this.o.tokenCredentialFile ? this.o.tokenCredentialFile.replace(/\/[^/]+$/, "") : undefined) ??
+      this.env.CREDENTIALS_DIRECTORY;
     if (!credDir || !credDir.startsWith("/")) {
       throw new Error("credential error: credentialsDir is not configured");
     }
     const defaultName = this.o.tokenCredentialFile
       ? (this.o.tokenCredentialFile.split("/").pop() ?? "tier-token")
       : "tier-token";
-    const rawId = spec.token ?? (this.o.resolveTokenId ? this.o.resolveTokenId(threadId) : defaultName);
+    const rawId =
+      this.o.tokenCredentialFile && (spec.token === undefined || spec.token === "tier-token")
+        ? defaultName
+        : (spec.token ?? (this.o.resolveTokenId ? this.o.resolveTokenId(threadId) : defaultName));
     if (!rawId || rawId === "." || rawId === ".." || rawId.includes("/") || !TOKEN_ID_RE.test(rawId)) {
       throw new Error(`credential error: invalid token id ${JSON.stringify(rawId)}`);
     }

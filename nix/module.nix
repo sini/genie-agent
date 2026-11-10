@@ -16,16 +16,27 @@ let
     if cfg.xmsgSocket != null then builtins.dirOf (toString cfg.xmsgSocket) else "/run/genie-agent";
 
   credDir = "/run/credentials/genie-agent.service";
-  modelKeyRuntime = "${credDir}/model-key";
+  modelKeyRuntime = if cfg.loadCredential then "${credDir}/model-key" else toString cfg.model.keyFile;
   guardOutKeyRuntime =
     if cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null then
-      "${credDir}/guard-out-key"
+      (if cfg.loadCredential then "${credDir}/guard-out-key" else toString cfg.broker.guardOut.keyFile)
     else
       null;
-  brokerTokenRuntime = if cfg.broker.tokenFile != null then "${credDir}/broker-token" else null;
+  brokerTokenRuntime =
+    if cfg.broker.tokenFile != null then
+      (if cfg.loadCredential then "${credDir}/broker-token" else toString cfg.broker.tokenFile)
+    else
+      null;
   githubReadTokenRuntime =
-    if cfg.githubReadTokenFile != null then "${credDir}/github-read-token" else null;
-  s3SecretKeyRuntime = if cfg.s3 != null then "${credDir}/s3-secret-key" else null;
+    if cfg.githubReadTokenFile != null then
+      (if cfg.loadCredential then "${credDir}/github-read-token" else toString cfg.githubReadTokenFile)
+    else
+      null;
+  s3SecretKeyRuntime =
+    if cfg.s3 != null then
+      (if cfg.loadCredential then "${credDir}/s3-secret-key" else toString cfg.s3.secretKeyFile)
+    else
+      null;
 
   rootConfigJson = shared.mkRootConfigJson { inherit lib pkgs; } cfg {
     modelKeyFile = modelKeyRuntime;
@@ -338,7 +349,11 @@ let
       claudeJson = mkExpertClaudeJson tier;
       claudeMd = mkExpertClaudeMd tier;
       claudeShim = mkExpertClaudeShim tier;
-      dispCredPath = "/run/credentials/genie-dispatcher@${tier}.service/tier-token";
+      dispCredPath =
+        if cfg.loadCredential then
+          "/run/credentials/genie-dispatcher@${tier}.service/tier-token"
+        else
+          toString tierCfg.tokenEnvironmentFile;
       bootstrapScript = pkgs.writeShellScript "genie-expert-${tier}-bootstrap" ''
         set -euo pipefail
         [ "$(${pkgs.coreutils}/bin/cat /proc/sys/kernel/yama/ptrace_scope)" -ge 1 ] || {
@@ -405,23 +420,74 @@ let
         "${cfg.stateDir}/dispatcher-${otherTier}"
         "${cfg.stateDir}/herdr-session-${otherTier}"
         "-${cfg.stateDir}/.config/herdr/sessions/genie-${otherTier}"
-      ];
+      ]
+      ++ lib.optionals (!cfg.loadCredential) (
+        map (p: "-${toString p}") (
+          lib.filter (p: p != null) [
+            cfg.credentialsDir
+            cfg.model.keyFile
+            (if cfg.broker.guardOut.enable then cfg.broker.guardOut.keyFile else null)
+            cfg.broker.tokenFile
+            cfg.githubReadTokenFile
+            (if cfg.s3 != null then cfg.s3.secretKeyFile else null)
+            (if cfg.guard.enable then cfg.guard.apiKeyFile else null)
+            cfg.experts.public.tokenEnvironmentFile
+            cfg.experts.trusted.tokenEnvironmentFile
+          ]
+        )
+      );
       dispBindPaths = herdrBindPaths;
       dispBindReadOnlyPaths = [
         tierCfg.reposDir
         tierCfg.memoryDir
-      ];
+      ]
+      ++ lib.optional (!cfg.loadCredential && tierCfg.tokenEnvironmentFile != null) (
+        toString tierCfg.tokenEnvironmentFile
+      );
       dispInaccessiblePaths = [
         "-/run/credentials/genie-dispatcher@${otherTier}.service"
-        "-/run/agenix"
-        "-/run/agenix.d"
-        "-/run/genie-secrets"
+      ]
+      ++ (
+        if cfg.loadCredential || tierCfg.tokenEnvironmentFile == null then
+          [
+            "-/run/agenix"
+            "-/run/agenix.d"
+            "-/run/genie-secrets"
+          ]
+        else
+          lib.filter (m: !lib.hasPrefix "${lib.removePrefix "-" m}/" (toString tierCfg.tokenEnvironmentFile))
+            [
+              "-/run/agenix"
+              "-/run/agenix.d"
+              "-/run/genie-secrets"
+            ]
+      )
+      ++ [
         "${cfg.stateDir}/claude-${otherTier}"
         "${cfg.stateDir}/cwd-${otherTier}"
         "${cfg.stateDir}/dispatcher-${otherTier}"
         "${cfg.stateDir}/herdr-session-${otherTier}"
         "-${cfg.stateDir}/.config/herdr/sessions/genie-${otherTier}"
-      ];
+      ]
+      ++ lib.optionals (!cfg.loadCredential) (
+        map (p: "-${toString p}") (
+          lib.filter
+            (
+              p:
+              p != null
+              && (tierCfg.tokenEnvironmentFile == null || toString p != toString tierCfg.tokenEnvironmentFile)
+            )
+            [
+              cfg.model.keyFile
+              (if cfg.broker.guardOut.enable then cfg.broker.guardOut.keyFile else null)
+              cfg.broker.tokenFile
+              cfg.githubReadTokenFile
+              (if cfg.s3 != null then cfg.s3.secretKeyFile else null)
+              (if cfg.guard.enable then cfg.guard.apiKeyFile else null)
+              cfg.experts.${otherTier}.tokenEnvironmentFile
+            ]
+        )
+      );
       herdrPackages = [
         cfg.experts.herdrPackage
         claudeShim
@@ -525,7 +591,7 @@ let
             ];
             SystemCallErrorNumber = "EPERM";
             LoadCredential = lib.optional (
-              tierCfg.tokenEnvironmentFile != null
+              cfg.loadCredential && tierCfg.tokenEnvironmentFile != null
             ) "tier-token:${toString tierCfg.tokenEnvironmentFile}";
             BindPaths = lib.unique dispBindPaths;
             BindReadOnlyPaths = lib.unique dispBindReadOnlyPaths;
@@ -711,19 +777,34 @@ in
             PrivatePIDs = true;
             ProtectProc = "invisible";
 
-            LoadCredential = [
-              "model-key:${toString cfg.model.keyFile}"
-            ]
-            ++ lib.optional (
-              cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null
-            ) "guard-out-key:${toString cfg.broker.guardOut.keyFile}"
-            ++ lib.optional (cfg.broker.tokenFile != null) "broker-token:${toString cfg.broker.tokenFile}"
-            ++ lib.optional (
-              cfg.githubReadTokenFile != null
-            ) "github-read-token:${toString cfg.githubReadTokenFile}"
-            ++ lib.optional (cfg.s3 != null) "s3-secret-key:${toString cfg.s3.secretKeyFile}";
+            LoadCredential = lib.optionals cfg.loadCredential (
+              [
+                "model-key:${toString cfg.model.keyFile}"
+              ]
+              ++ lib.optional (
+                cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null
+              ) "guard-out-key:${toString cfg.broker.guardOut.keyFile}"
+              ++ lib.optional (cfg.broker.tokenFile != null) "broker-token:${toString cfg.broker.tokenFile}"
+              ++ lib.optional (
+                cfg.githubReadTokenFile != null
+              ) "github-read-token:${toString cfg.githubReadTokenFile}"
+              ++ lib.optional (cfg.s3 != null) "s3-secret-key:${toString cfg.s3.secretKeyFile}"
+            );
 
-            BindReadOnlyPaths = [ "${cfg.operatingMemoryPackage}:${cfg.tier1.memoryRoot}" ];
+            BindReadOnlyPaths = [
+              "${cfg.operatingMemoryPackage}:${cfg.tier1.memoryRoot}"
+            ]
+            ++ lib.optionals (!cfg.loadCredential) (
+              lib.unique (
+                [ (toString cfg.model.keyFile) ]
+                ++ lib.optional (cfg.broker.guardOut.enable && cfg.broker.guardOut.keyFile != null) (
+                  toString cfg.broker.guardOut.keyFile
+                )
+                ++ lib.optional (cfg.broker.tokenFile != null) (toString cfg.broker.tokenFile)
+                ++ lib.optional (cfg.githubReadTokenFile != null) (toString cfg.githubReadTokenFile)
+                ++ lib.optional (cfg.s3 != null) (toString cfg.s3.secretKeyFile)
+              )
+            );
           }
           // lib.optionalAttrs (effectiveGroup != null) {
             Group = effectiveGroup;
@@ -736,7 +817,11 @@ in
     // lib.optionalAttrs cfg.guard.enable {
       genie-guard =
         let
-          guardCredFile = "/run/credentials/genie-guard.service/api-key";
+          guardCredFile =
+            if cfg.loadCredential then
+              "/run/credentials/genie-guard.service/api-key"
+            else
+              toString cfg.guard.apiKeyFile;
           modelArg = lib.optionalString (
             cfg.guard.model != null
           ) " --model ${lib.escapeShellArg cfg.guard.model}";
@@ -769,8 +854,11 @@ in
               RestartSec = "5s";
               ProtectControlGroups = true;
               LoadCredential = lib.optional (
-                cfg.guard.apiKeyFile != null
+                cfg.loadCredential && cfg.guard.apiKeyFile != null
               ) "api-key:${toString cfg.guard.apiKeyFile}";
+            }
+            // lib.optionalAttrs (!cfg.loadCredential && cfg.guard.apiKeyFile != null) {
+              BindReadOnlyPaths = [ (toString cfg.guard.apiKeyFile) ];
             }
             // lib.optionalAttrs (effectiveGroup != null) {
               Group = effectiveGroup;
