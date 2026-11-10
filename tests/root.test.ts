@@ -31,7 +31,7 @@ process.env.GENIE_PI_AI = piAiPath(process.env.PI ?? "pi");
 const pi = `${tmp}/pi`;
 writeFileSync(pi, `#!/bin/sh\nexport PI_SETTLE=manual\nexec "${process.execPath}" "${new URL("./fixtures/supervisor/fake-pi.ts", import.meta.url).pathname}" "$@"\n`);
 chmodSync(pi, 0o755);
-for (const f of ["model", "s3", "token"]) writeFileSync(`${tmp}/${f}-key`, "k\n");
+for (const f of ["model", "s3", "token"]) writeFileSync(`${tmp}/${f}-key`, f === "token" ? "fixture-broker-credential\n" : "k\n");
 
 // A stub S3 that answers every request with `status` and records it.
 let status = 200;
