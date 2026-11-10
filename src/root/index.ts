@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { resolve } from "node:path";
 import { archiver, replayResume, type S3Config } from "../archive/index.ts";
 import { type BankRecallItem, DEFAULT_HINDSIGHT_ENDPOINT, HindsightRecallClient, recallBankId } from "../bank/index.ts";
-import { gist } from "../broker/gist.ts";
+import { gist, gistRead, gistUpdate, gistComment } from "../broker/gist.ts";
 import {
   BOT_LOGIN_RE,
   broker,
@@ -405,6 +405,9 @@ export function main(
   };
   const act = byKind({
     gist: gist(githubApi, 30_000, { botLogin, forbiddenLogins }),
+    gist_read: gistRead(githubApi, 30_000, { botLogin, forbiddenLogins }),
+    gist_update: gistUpdate(githubApi, 30_000, { botLogin, forbiddenLogins }),
+    gist_comment: gistComment(githubApi, 30_000, { botLogin, forbiddenLogins }),
     pr: pr(link, githubApi, { botLogin, forbiddenLogins }),
   });
 
@@ -666,14 +669,6 @@ export function main(
         return { posted: true, ...(await escalateAfterPost(t, out.value)) };
       },
       propose: async (p) => {
-        if (!c.broker.tokenFile) {
-          return {
-            thread: t,
-            acted: false,
-            reason: "the proposal broker is not configured on this deployment",
-            redactions: [],
-          };
-        }
         const bad = errors(proposalSchema, p);
         if (bad.length) {
           return { thread: t, acted: false, reason: `not a proposal: ${bad.join("; ")}`, redactions: [] };
@@ -682,6 +677,9 @@ export function main(
         const fieldErr = validateProposalFields(prop);
         if (fieldErr !== null) {
           return { thread: t, acted: false, reason: `not a proposal: ${fieldErr}`, redactions: [] };
+        }
+        if (!c.broker.tokenFile && prop.kind !== "gist_read") {
+          return { thread: t, acted: false, reason: "the proposal broker is not configured on this deployment", redactions: [] };
         }
         if (
           typeof c.broker.maxProposalsPerThreadPerDay === "number" &&
@@ -695,7 +693,8 @@ export function main(
           };
         }
         const res = await broker(t, JSON.stringify(p), {
-          tokenFile: c.broker.tokenFile,
+          tokenFile: c.broker.tokenFile ?? null,
+          readScreen: screen,
           botLogin,
           forbiddenLogins,
           githubApi,
@@ -706,6 +705,14 @@ export function main(
           act,
         });
         if (res.acted) {
+          if (res.gist) {
+            setContext(t, {
+              gh_transcript: [
+                ...context(t).gh_transcript,
+                { request: { kind: "gist_read", id: res.gist.id }, output: JSON.stringify(res.gist), screened: guardEnable },
+              ],
+            });
+          }
           store.recordProposal(t);
         }
         return res;

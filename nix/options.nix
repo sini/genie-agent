@@ -322,13 +322,13 @@ rec {
             tokenFile = lib.mkOption {
               type = lib.types.nullOr secretPath;
               default = null;
-              description = "Optional GitHub PAT file for propose actions (null disables propose in local mode before I11).";
+              description = "Optional GitHub PAT file for credentialed proposal writes. Null keeps writes disabled and permits anonymous gist_read proposals; reads still use the configured inbound guard and proposal quota.";
             };
 
             botLogin = lib.mkOption {
               type = lib.types.str;
               default = "genie-bot";
-              description = "GitHub service account login enforced via GET /user and fork ownership on propose actions (GC1 OQ-3).";
+              description = "GitHub service account login enforced via GET /user for credentialed proposals, gist-update ownership and PR fork ownership.";
             };
 
             forbiddenLogins = lib.mkOption {

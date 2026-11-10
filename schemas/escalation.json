@@ -88,7 +88,28 @@
         ],
         "properties": {
           "request": {
-            "$ref": "gh-read.json"
+            "oneOf": [
+              {
+                "$ref": "gh-read.json"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "gist_read"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{1,64}$"
+                  }
+                }
+              }
+            ]
           },
           "output": {
             "type": "string"

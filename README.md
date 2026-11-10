@@ -190,12 +190,22 @@ Each service is built as a standalone Node single executable (`sea { … }` in `
 
 > **Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus. The expert tiers do not share that user's Claude credentials: each tier authenticates with its own Claude setup-token, which systemd reads from `experts.<tier>.tokenEnvironmentFile` into that tier's `genie-herdr@<tier>` unit only, and no expert unit mounts the user's `~/.claude` beyond the tier's configured memory directory, read-only. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, and `PrivatePIDs=true` on the expert units), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel or network isolation between `@public` and `@trusted` expert sessions, which run as the same OS user.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).
 
+### Gist proposals
+
+The existing `propose` tool accepts `gist_read`, `gist_update` and `gist_comment`
+alongside gist creation and PRs. Reads return bounded, screened, explicitly
+untrusted data. With `broker.tokenFile = null`, anonymous gist reads remain
+available and credentialed writes remain disabled. Gist creation defaults to
+secret/unlisted; public creation requires an explicit flag. See
+[broker operations](docs/broker.md) for proposal shapes, account ownership checks,
+limits, guard behavior and local fake-API tests.
+
 ### Optional Guard Switches (`guard.enable` and `broker.guardOut.enable`)
 
 For private or internal deployments where a guard model is unavailable or deemed unnecessary overhead, inbound and outbound model screening can be disabled independently (both default to `true`):
 
 - **`guard.enable = false`** (`services.genie-agent.guard.enable = false`, with `guardRef = null` allowed): Disables `genie-guard` inbound model screening across all four input-screening points — inbound Matrix requests (`guardIn`), web results (`webScreen`; `G10` 32 KiB paging and per-thread caching still apply), recalled Hindsight entries and replayed archive transcripts (`seedGuard`), and escalation packages (`escalationGuard`). No `XmsgGuardClient` is constructed and no `xmsg` guard target is required. Tier 1 receives `UNSCREENED_PROMPT` via `--append-system-prompt` and `prompts/tier1.md` frames all inputs and tool outputs as untrusted data, but **gives up separate model-level prompt-injection filtering (`allow`/`rewrite`/`reject`) before untrusted text enters Tier 1 or an expert escalation package**.
-- **`broker.guardOut.enable = false`** (`services.genie-agent.broker.guardOut.enable = false`): Skips the outbound `guard-out` model review on Tier 1 draft replies, deadline notices, expert replies, and broker proposals (`gist`/`pr`). **The deterministic credential redactor (`src/redactor/index.ts`) always runs unconditionally before any outbound post or broker action**, so shaped credentials and hashed secret lines are still scrubbed to `[redacted:<kind>]`, but turning `broker.guardOut.enable` off **gives up semantic model-level review for unshaped private context leaks or off-policy outbound text**.
+- **`broker.guardOut.enable = false`** (`services.genie-agent.broker.guardOut.enable = false`): Skips the outbound `guard-out` model review on Tier 1 draft replies, deadline notices, expert replies, and broker write proposals (gist create/update/comment and PRs). Read requests do not invoke guard-out; fetched gist data uses the global inbound guard setting. **The deterministic credential redactor (`src/redactor/index.ts`) always runs unconditionally before any outbound post or broker action**, so shaped credentials and hashed secret lines are still scrubbed to `[redacted:<kind>]`, but turning `broker.guardOut.enable` off **gives up semantic model-level review for unshaped private context leaks or off-policy outbound text**.
 
 ## Tests
 
