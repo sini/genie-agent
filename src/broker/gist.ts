@@ -14,7 +14,7 @@
 // broker, which is the only thing the error reaches.
 import {
   DEFAULT_BOT_LOGIN, GIST_READ_MAX_BYTES, GIST_METADATA_MAX_BYTES,
-  normalizeGistId, verifyBotIdentity, type Act, type GistReadResult,
+  ensureBotIdentity, normalizeGistId, type Act, type GistReadResult,
 } from "./index.ts";
 
 export const README = "README.md";
@@ -25,13 +25,13 @@ export interface GistOptions {
 }
 
 export function gist(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
-  return async (p, token) => {
+  return async (p, token, _thread, verifiedIdentity) => {
     if (p.kind !== "gist") throw new Error(`gist: cannot act on a ${p.kind} proposal`);
     if (!token) throw new Error("gist: a credential is required");
     const pFiles = p.files ?? {};
     if (p.body && README in pFiles) throw new Error(`gist: the body and a file both claim ${README}`);
     if (opts.botLogin) {
-      await verifyBotIdentity(base, token, opts.botLogin, opts.forbiddenLogins ?? [], timeoutMs);
+      await ensureBotIdentity(base, token, opts.botLogin, opts.forbiddenLogins ?? [], timeoutMs, verifiedIdentity);
     }
     const files = Object.fromEntries(Object.entries(pFiles).map(([name, content]) => [name, { content }]));
     if (p.body) files[README] = { content: p.body };
@@ -124,9 +124,18 @@ function canonicalMetadata(value: unknown, id: string): { data: Record<string, u
 }
 
 export function gistRead(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
-  return async (p, token) => {
+  return async (p, token, _thread, verifiedIdentity) => {
     if (p.kind !== "gist_read") throw new Error(`gist_read: cannot act on a ${p.kind} proposal`);
-    if (token) await verifyBotIdentity(base, token, opts.botLogin ?? DEFAULT_BOT_LOGIN, opts.forbiddenLogins ?? [], timeoutMs);
+    if (token) {
+      await ensureBotIdentity(
+        base,
+        token,
+        opts.botLogin ?? DEFAULT_BOT_LOGIN,
+        opts.forbiddenLogins ?? [],
+        timeoutMs,
+        verifiedIdentity,
+      );
+    }
     const id = normalizeGistId(p.id);
     const { data, url, owner } = canonicalMetadata(await request(base, `/gists/${id}`, token, timeoutMs, GIST_READ_MAX_BYTES), id);
     if (data.truncated === true || (data.truncated !== undefined && typeof data.truncated !== "boolean")) throw new Error("gist_read: truncated or malformed gist");
@@ -148,11 +157,18 @@ export function gistRead(base = "https://api.github.com", timeoutMs = 30_000, op
 }
 
 export function gistUpdate(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
-  return async (p, token) => {
+  return async (p, token, _thread, verifiedIdentity) => {
     if (p.kind !== "gist_update") throw new Error(`gist_update: cannot act on a ${p.kind} proposal`);
     if (!token) throw new Error("gist_update: a credential is required");
     const id = normalizeGistId(p.id);
-    const login = await verifyBotIdentity(base, token, opts.botLogin ?? DEFAULT_BOT_LOGIN, opts.forbiddenLogins ?? [], timeoutMs);
+    const login = await ensureBotIdentity(
+      base,
+      token,
+      opts.botLogin ?? DEFAULT_BOT_LOGIN,
+      opts.forbiddenLogins ?? [],
+      timeoutMs,
+      verifiedIdentity,
+    );
     const { url, owner } = canonicalMetadata(await request(base, `/gists/${id}`, token, timeoutMs, GIST_METADATA_MAX_BYTES), id);
     if (owner === null || owner.toLowerCase() !== login.toLowerCase()) throw new Error("gist_update: target is not owned by the authenticated account");
     await request(base, `/gists/${id}`, token, timeoutMs, GIST_METADATA_MAX_BYTES, "PATCH", { ...(p.title === undefined ? {} : { description: p.title }), files: Object.fromEntries(Object.entries(p.files).map(([name, content]) => [name, { content }])) });
@@ -161,11 +177,18 @@ export function gistUpdate(base = "https://api.github.com", timeoutMs = 30_000, 
 }
 
 export function gistComment(base = "https://api.github.com", timeoutMs = 30_000, opts: GistOptions = {}): Act {
-  return async (p, token) => {
+  return async (p, token, _thread, verifiedIdentity) => {
     if (p.kind !== "gist_comment") throw new Error(`gist_comment: cannot act on a ${p.kind} proposal`);
     if (!token) throw new Error("gist_comment: a credential is required");
     const id = normalizeGistId(p.id);
-    await verifyBotIdentity(base, token, opts.botLogin ?? DEFAULT_BOT_LOGIN, opts.forbiddenLogins ?? [], timeoutMs);
+    await ensureBotIdentity(
+      base,
+      token,
+      opts.botLogin ?? DEFAULT_BOT_LOGIN,
+      opts.forbiddenLogins ?? [],
+      timeoutMs,
+      verifiedIdentity,
+    );
     const { url } = canonicalMetadata(await request(base, `/gists/${id}`, token, timeoutMs, GIST_METADATA_MAX_BYTES), id);
     const receipt = object(await request(base, `/gists/${id}/comments`, token, timeoutMs, GIST_METADATA_MAX_BYTES, "POST", { body: p.body }));
     if (typeof receipt.id !== "number" || !Number.isSafeInteger(receipt.id) || receipt.id <= 0) throw new Error("gist_comment: missing comment ID");

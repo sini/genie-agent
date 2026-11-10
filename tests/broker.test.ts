@@ -10,8 +10,16 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { broker, byKind, computeWorktreeDiff, type Proposal } from "../src/broker/index.ts";
-import { gist as gistAct } from "../src/broker/gist.ts";
+import {
+  broker,
+  byKind,
+  computeWorktreeDiff,
+  credentialVersion,
+  verifyBotIdentityContext,
+  type Proposal,
+  type VerifiedBotIdentity,
+} from "../src/broker/index.ts";
+import { gist as gistAct, gistComment, gistRead, gistUpdate } from "../src/broker/gist.ts";
 import { pr as prAct } from "../src/broker/pr.ts";
 import { git, mirrorKey, worktreeFor, type MirrorConfig, type Runner } from "../src/mirror/index.ts";
 import { tier1, type Host, type Pi, type ToolCall } from "../src/tier1/index.ts";
@@ -548,6 +556,11 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
     const okRes = await runBroker(nPass.base);
     assert.equal(okRes.acted, true, `expected acted: true, got ${JSON.stringify(okRes)}`);
     assert.equal(okRes.url, "https://github.com/alice/c1repo/pull/99");
+    assert.equal(
+      ghCalls.filter((c) => c.method === "GET" && c.url === "/user").length,
+      1,
+      "one PR action through broker must make exactly 1 GET /user call",
+    );
     const treeCall = ghCalls.find((c) => c.method === "POST" && c.url === "/repos/genie-bot/c1repo/git/trees");
     assert.ok(treeCall, "must POST /repos/genie-bot/c1repo/git/trees");
     const treePaths = new Map<string, any>(treeCall.body.tree.map((e: any) => [e.path, e]));
@@ -705,4 +718,270 @@ test("gist operations: redacted target metadata refuses without throwing or invo
   assert.equal(result.acted, false);
   assert.equal(calls, 0);
   assert.ok(!JSON.stringify(result).includes(id));
+});
+
+test("oracle (G11): one GET /user per credential version and action, changed credential version re-checks, and revoked bot identity is refused before any write", async () => {
+  interface GhReq {
+    method: string;
+    url: string;
+    auth: string;
+    body: string;
+  }
+  const ghReqs: GhReq[] = [];
+  const tokenIdentities = new Map<string, { status: number; login?: string }>([
+    ["tok-v1", { status: 200, login: "genie-bot" }],
+    ["tok-v2-valid", { status: 200, login: "Genie-Bot" }],
+    ["tok-v2-owner", { status: 200, login: "sini" }],
+    ["tok-v3-mismatch", { status: 200, login: "mallory" }],
+  ]);
+  const GIST_ID = "abcdef1234567890";
+
+  const ghServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const method = req.method ?? "GET";
+      const url = req.url ?? "/";
+      const auth = String(req.headers.authorization ?? "");
+      ghReqs.push({ method, url, auth, body });
+      const json = (status: number, obj: unknown) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(obj));
+      };
+
+      if (method === "GET" && url === "/user") {
+        const tok = auth.replace(/^Bearer\s+/i, "");
+        const id = tokenIdentities.get(tok) ?? { status: 401 };
+        if (id.status !== 200) return json(id.status, { message: "Bad credentials" });
+        return json(200, { login: id.login });
+      }
+      if (method === "GET" && url === "/repos/alice/flake") {
+        return json(200, {
+          private: false,
+          owner: { login: "alice" },
+          default_branch: "main",
+          permissions: { push: false, maintain: false, admin: false },
+        });
+      }
+      if (method === "POST" && url === "/repos/alice/flake/forks") {
+        return json(202, { full_name: "genie-bot/flake", owner: { login: "genie-bot" } });
+      }
+      if (method === "GET" && url === "/repos/genie-bot/flake/git/ref/heads/main") {
+        return json(200, { object: { sha: "0123456789abcdef0123456789abcdef01234567" } });
+      }
+      if (method === "GET" && url === "/repos/alice/flake/branches/main") {
+        return json(200, {
+          commit: {
+            sha: "0123456789abcdef0123456789abcdef01234567",
+            commit: { tree: { sha: "89abcdef0123456789abcdef0123456789abcdef" } },
+          },
+        });
+      }
+      if (method === "POST" && url === "/repos/genie-bot/flake/git/trees") {
+        return json(201, { sha: "fedcba9876543210fedcba9876543210fedcba98" });
+      }
+      if (method === "POST" && url === "/repos/genie-bot/flake/git/commits") {
+        return json(201, { sha: "1111111111111111111111111111111111111111" });
+      }
+      if (method === "POST" && url === "/repos/genie-bot/flake/git/refs") {
+        return json(201, { ref: "refs/heads/fix" });
+      }
+      if (method === "POST" && url === "/repos/alice/flake/pulls") {
+        return json(201, { html_url: "https://github.com/alice/flake/pull/42" });
+      }
+      if (method === "POST" && url === "/gists") {
+        return json(201, { html_url: `https://gist.github.com/genie-bot/${GIST_ID}` });
+      }
+      if (method === "GET" && url === `/gists/${GIST_ID}`) {
+        return json(200, {
+          id: GIST_ID,
+          html_url: `https://gist.github.com/genie-bot/${GIST_ID}`,
+          description: "desc",
+          owner: { login: "genie-bot" },
+          truncated: false,
+          history: [{ version: "a".repeat(40) }],
+          files: { "note.md": { filename: "note.md", content: "hello", truncated: false } },
+        });
+      }
+      if (method === "PATCH" && url === `/gists/${GIST_ID}`) {
+        return json(200, { id: GIST_ID, html_url: `https://gist.github.com/genie-bot/${GIST_ID}` });
+      }
+      if (method === "POST" && url === `/gists/${GIST_ID}/comments`) {
+        return json(201, { id: 77 });
+      }
+      return json(404, { message: "Not Found" });
+    });
+  });
+  await new Promise<void>((r) => ghServer.listen(0, "127.0.0.1", r));
+  const ghPort = (ghServer.address() as { port: number }).port;
+  const ghApi = `http://127.0.0.1:${ghPort}`;
+
+  const dir = mkdtempSync(`${tmpdir()}/broker-g11-`);
+  const tokPath = `${dir}/token`;
+  writeFileSync(tokPath, "tok-v1\n");
+
+  const userCalls = () => ghReqs.filter((r) => r.method === "GET" && r.url === "/user");
+  const writeCalls = () => ghReqs.filter((r) => r.method !== "GET");
+
+  try {
+    const botLogin = "genie-bot";
+    const forbiddenLogins = ["sini"];
+    const act = byKind({
+      gist: gistAct(ghApi, 30_000, { botLogin, forbiddenLogins }),
+      gist_read: gistRead(ghApi, 30_000, { botLogin, forbiddenLogins }),
+      gist_update: gistUpdate(ghApi, 30_000, { botLogin, forbiddenLogins }),
+      gist_comment: gistComment(ghApi, 30_000, { botLogin, forbiddenLogins }),
+      pr: prAct((th) => `https://chat.example.org/thread/${th}`, ghApi, {
+        botLogin,
+        forbiddenLogins,
+        pollMs: 10,
+        forkWaitMs: 500,
+      }),
+    });
+
+    const runAction = (p: Proposal) =>
+      broker("th-g11", JSON.stringify(p), {
+        tokenFile: tokPath,
+        botLogin,
+        forbiddenLogins,
+        githubApi: ghApi,
+        guard: { enable: false },
+        readScreen: async (s) => s,
+        act,
+      });
+
+    // 1. Counting fake GitHub sees exactly ONE GET /user per action across all 5 action kinds (RED at main, where each made 2).
+    const actions: Proposal[] = [
+      { kind: "pr", repo: "alice/flake", branch: "fix", files: { "flake.nix": "{ }\n" }, title: "Fix", body: "Body" },
+      { kind: "gist", files: { "repro.nix": "{ }\n" }, title: "Repro", body: "Notes" },
+      { kind: "gist_read", id: GIST_ID },
+      { kind: "gist_update", id: GIST_ID, files: { "note.md": "updated" }, title: "Updated" },
+      { kind: "gist_comment", id: GIST_ID, body: "Comment body" },
+    ];
+    for (const p of actions) {
+      ghReqs.length = 0;
+      const res = await runAction(p);
+      assert.equal(res.acted, true, `expected ${p.kind} to succeed, got ${JSON.stringify(res)}`);
+      assert.equal(
+        userCalls().length,
+        1,
+        `expected exactly 1 GET /user for ${p.kind} action, got ${userCalls().length}`,
+      );
+      assert.equal(userCalls()[0].auth, "Bearer tok-v1");
+    }
+
+    // 2a. Changed token / credential version against a verified identity context re-checks GET /user
+    // (mutant: cache across credential versions => RED).
+    ghReqs.length = 0;
+    const verifiedV1 = await verifyBotIdentityContext(ghApi, "tok-v1", botLogin, forbiddenLogins);
+    assert.equal(userCalls().length, 1);
+
+    // Same credential version ("tok-v1") with matching verifiedV1 makes 0 additional GET /user calls in action:
+    ghReqs.length = 0;
+    const sameVerRes = await act(
+      { kind: "gist", files: { "a.nix": "1\n" }, title: "Same", body: "" },
+      "tok-v1",
+      "th-g11",
+      verifiedV1,
+    );
+    assert.equal(sameVerRes.url, `https://gist.github.com/genie-bot/${GIST_ID}`);
+    assert.equal(userCalls().length, 0, "matching credentialVersion must not repeat GET /user inside action");
+
+    // Changed credential version ("tok-v2-owner" -> forbidden login "sini") with stale verifiedV1 MUST re-check GET /user and refuse before any write:
+    ghReqs.length = 0;
+    await assert.rejects(
+      act(
+        { kind: "pr", repo: "alice/flake", branch: "fix", files: { "flake.nix": "{ }\n" }, title: "Fix", body: "Body" },
+        "tok-v2-owner",
+        "th-g11",
+        verifiedV1,
+      ),
+      /broker token identity forbidden: sini/,
+    );
+    assert.equal(userCalls().length, 1, "changed credentialVersion must re-check GET /user");
+    assert.equal(userCalls()[0].auth, "Bearer tok-v2-owner");
+    assert.equal(writeCalls().length, 0, "forbidden rotated credential must make 0 write calls");
+
+    // Changed credential version ("tok-v2-valid" -> "Genie-Bot") with stale verifiedV1 MUST re-check GET /user and succeed:
+    ghReqs.length = 0;
+    const rotatedValidRes = await act(
+      { kind: "gist_update", id: GIST_ID, files: { "note.md": "v2" } },
+      "tok-v2-valid",
+      "th-g11",
+      verifiedV1,
+    );
+    assert.equal(rotatedValidRes.url, `https://gist.github.com/genie-bot/${GIST_ID}`);
+    assert.equal(userCalls().length, 1, "rotated valid token must re-check GET /user once");
+    assert.equal(userCalls()[0].auth, "Bearer tok-v2-valid");
+
+    // Forged / unbranded VerifiedBotIdentity object is never trusted without a live GET /user check:
+    ghReqs.length = 0;
+    const forgedContext: VerifiedBotIdentity = {
+      githubApi: ghApi,
+      credentialVersion: credentialVersion("tok-v2-owner"),
+      botLogin: "genie-bot",
+      forbiddenKey: '["sini"]',
+      login: "genie-bot",
+    };
+    await assert.rejects(
+      act(
+        { kind: "gist", files: { "a.nix": "1\n" }, title: "Forged", body: "" },
+        "tok-v2-owner",
+        "th-g11",
+        forgedContext,
+      ),
+      /broker token identity forbidden: sini/,
+    );
+    assert.equal(userCalls().length, 1, "forged VerifiedBotIdentity must not bypass GET /user");
+    assert.equal(writeCalls().length, 0);
+
+    // 2b. Rotating tokenFile on disk between broker() calls re-checks GET /user with the new credential version:
+    writeFileSync(tokPath, "tok-v2-owner\n");
+    ghReqs.length = 0;
+    const rotatedOwnerBroker = await runAction({
+      kind: "pr",
+      repo: "alice/flake",
+      branch: "fix",
+      files: { "flake.nix": "{ }\n" },
+      title: "Fix",
+      body: "Body",
+    });
+    assert.equal(rotatedOwnerBroker.acted, false);
+    assert.match(rotatedOwnerBroker.reason, /broker token identity forbidden: sini/);
+    assert.equal(userCalls().length, 1);
+    assert.equal(userCalls()[0].auth, "Bearer tok-v2-owner");
+    assert.equal(writeCalls().length, 0);
+
+    writeFileSync(tokPath, "tok-v3-mismatch\n");
+    ghReqs.length = 0;
+    const rotatedMismatchBroker = await runAction({
+      kind: "gist_comment",
+      id: GIST_ID,
+      body: "Attempt with wrong bot account",
+    });
+    assert.equal(rotatedMismatchBroker.acted, false);
+    assert.match(rotatedMismatchBroker.reason, /broker token identity mismatch: expected genie-bot, got mallory/);
+    assert.equal(userCalls().length, 1);
+    assert.equal(writeCalls().length, 0);
+
+    // 3. Revoked bot identity (GET /user -> 401 on subsequent action with tok-v1) is refused before any write:
+    writeFileSync(tokPath, "tok-v1\n");
+    tokenIdentities.set("tok-v1", { status: 401 });
+    for (const p of [
+      { kind: "pr", repo: "alice/flake", branch: "fix", files: { "flake.nix": "{ }\n" }, title: "Fix", body: "Body" } as Proposal,
+      { kind: "gist", files: { "repro.nix": "{ }\n" }, title: "Repro", body: "Notes" } as Proposal,
+      { kind: "gist_update", id: GIST_ID, files: { "note.md": "updated" } } as Proposal,
+      { kind: "gist_comment", id: GIST_ID, body: "Comment" } as Proposal,
+    ]) {
+      ghReqs.length = 0;
+      const revokedRes = await runAction(p);
+      assert.equal(revokedRes.acted, false, `revoked token must be refused for ${p.kind}`);
+      assert.match(revokedRes.reason, /broker identity check GET \/user failed: HTTP 401/);
+      assert.equal(userCalls().length, 1, `revoked token must make 1 GET /user for ${p.kind}`);
+      assert.equal(writeCalls().length, 0, `revoked token must make 0 write calls for ${p.kind}`);
+    }
+  } finally {
+    ghServer.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

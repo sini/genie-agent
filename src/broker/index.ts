@@ -201,6 +201,28 @@ export function validateProposalFields(p: Proposal): string | null {
   return null;
 }
 
+const verifiedIdentities = new WeakSet<VerifiedBotIdentity>();
+
+export interface VerifiedBotIdentity {
+  readonly githubApi: string;
+  readonly credentialVersion: string;
+  readonly botLogin: string;
+  readonly forbiddenKey: string;
+  readonly login: string;
+}
+
+export function credentialVersion(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function normalizeGithubApi(githubApi: string): string {
+  return githubApi.replace(/\/+$/, "");
+}
+
+function normalizeForbiddenKey(forbiddenLogins: readonly string[]): string {
+  return JSON.stringify([...new Set(forbiddenLogins.map((f) => f.toLowerCase()))].sort());
+}
+
 export async function verifyBotIdentity(
   githubApi: string,
   token: string,
@@ -214,7 +236,7 @@ export async function verifyBotIdentity(
   if (forbiddenLogins.some((f) => f.toLowerCase() === botLogin.toLowerCase())) {
     throw new Error(`broker.botLogin ${botLogin} is in forbiddenLogins`);
   }
-  const base = githubApi.replace(/\/+$/, "");
+  const base = normalizeGithubApi(githubApi);
   const res = await fetch(`${base}/user`, {
     method: "GET",
     headers: {
@@ -245,6 +267,46 @@ export async function verifyBotIdentity(
     throw new Error(`broker token identity mismatch: expected ${botLogin}, got ${login}`);
   }
   return login;
+}
+
+export async function verifyBotIdentityContext(
+  githubApi: string,
+  token: string,
+  botLogin: string,
+  forbiddenLogins: readonly string[] = [],
+  timeoutMs = 15_000,
+): Promise<VerifiedBotIdentity> {
+  const login = await verifyBotIdentity(githubApi, token, botLogin, forbiddenLogins, timeoutMs);
+  const verified: VerifiedBotIdentity = Object.freeze({
+    githubApi: normalizeGithubApi(githubApi),
+    credentialVersion: credentialVersion(token),
+    botLogin: botLogin.toLowerCase(),
+    forbiddenKey: normalizeForbiddenKey(forbiddenLogins),
+    login,
+  });
+  verifiedIdentities.add(verified);
+  return verified;
+}
+
+export async function ensureBotIdentity(
+  githubApi: string,
+  token: string,
+  botLogin: string,
+  forbiddenLogins: readonly string[] = [],
+  timeoutMs = 15_000,
+  verifiedIdentity?: VerifiedBotIdentity,
+): Promise<string> {
+  if (
+    verifiedIdentity &&
+    verifiedIdentities.has(verifiedIdentity) &&
+    verifiedIdentity.githubApi === normalizeGithubApi(githubApi) &&
+    verifiedIdentity.credentialVersion === credentialVersion(token) &&
+    verifiedIdentity.botLogin === botLogin.toLowerCase() &&
+    verifiedIdentity.forbiddenKey === normalizeForbiddenKey(forbiddenLogins)
+  ) {
+    return verifiedIdentity.login;
+  }
+  return verifyBotIdentity(githubApi, token, botLogin, forbiddenLogins, timeoutMs);
 }
 
 async function resolveCommitTreeSha(bareDir: string, commitRev: string): Promise<string> {
@@ -379,16 +441,21 @@ export async function computeWorktreeDiff(opts: {
 
 // The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read and the
 // thread the proposal came from (A3's PR body links it). It is the only thing the token is handed to.
-export type Act = (p: Proposal, token: string, thread: string) => Promise<ActResult>;
+export type Act = (
+  p: Proposal,
+  token: string,
+  thread: string,
+  verifiedIdentity?: VerifiedBotIdentity,
+) => Promise<ActResult>;
 
 // One Act per proposal kind; a kind with no Act throws, so it is not acted on.
 export const byKind =
   (acts: Partial<Record<Proposal["kind"], Act>>): Act =>
-  async (p, token, thread) => {
+  async (p, token, thread, verifiedIdentity) => {
     if (!Object.hasOwn(acts, p.kind)) throw new Error(`no action for a ${p.kind} proposal`);
     const act = acts[p.kind];
     if (!act) throw new Error(`no action for a ${p.kind} proposal`);
-    return act(p, token, thread);
+    return act(p, token, thread, verifiedIdentity);
   };
 
 export type GuardOutConfig =
@@ -615,15 +682,21 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     }
     if (!token) return done(false, `token empty: ${c.tokenFile}`);
   }
+  let verifiedIdentity: VerifiedBotIdentity | undefined;
   if (token && c.botLogin) {
     try {
-      await verifyBotIdentity(c.githubApi ?? "https://api.github.com", token, c.botLogin, c.forbiddenLogins ?? []);
+      verifiedIdentity = await verifyBotIdentityContext(
+        c.githubApi ?? "https://api.github.com",
+        token,
+        c.botLogin,
+        c.forbiddenLogins ?? [],
+      );
     } catch (e) {
       return done(false, String(e instanceof Error ? e.message : e).split(token).join("[token]"));
     }
   }
   try {
-    const result = await c.act(p, token, thread);
+    const result = await c.act(p, token, thread, verifiedIdentity);
     if (p.kind === "gist_read") {
       const value = await processGistRead(result.gist, p.id, token, c, redactions);
       return { ...done(true, "read", value.url), gist: value };

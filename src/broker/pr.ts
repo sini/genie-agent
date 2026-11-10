@@ -21,11 +21,11 @@
 // An unreferenced tree or commit is GitHub's to collect. The act throws and the broker records
 // it as not acted, with the token scrubbed from the reason.
 import {
+  ensureBotIdentity,
   isValidBranchRef,
   isValidProposalFilePath,
   isValidRepoCoord,
   validateProposalFields,
-  verifyBotIdentity,
   type Act,
 } from "./index.ts";
 
@@ -42,7 +42,7 @@ export function pr(
   base = "https://api.github.com",
   { forkWaitMs = 60_000, pollMs = 2_000, timeoutMs = 30_000, botLogin, forbiddenLogins = [] }: PrOptions = {},
 ): Act {
-  return async (p, token, thread) => {
+  return async (p, token, thread, verifiedIdentity) => {
     if (p.kind !== "pr" || !p.repo || !p.branch) throw new Error(`pr: cannot act on a ${p.kind} proposal without a repo and branch`);
     if (!isValidRepoCoord(p.repo)) throw new Error(`pr: invalid repo coordinate ${JSON.stringify(p.repo)}`);
     if (!isValidBranchRef(p.branch)) throw new Error(`pr: invalid branch ref ${JSON.stringify(p.branch)}`);
@@ -59,7 +59,7 @@ export function pr(
     const fieldErr = validateProposalFields(p);
     if (fieldErr !== null) throw new Error(`pr: ${fieldErr}`);
     if (botLogin) {
-      await verifyBotIdentity(base, token, botLogin, forbiddenLogins, timeoutMs);
+      await ensureBotIdentity(base, token, botLogin, forbiddenLogins, timeoutMs, verifiedIdentity);
     }
     const body = `${p.body}\n\nThread: ${link(thread)}`;
     const call = async (method: string, route: string, payload?: unknown) => {

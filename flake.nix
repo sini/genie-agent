@@ -1313,7 +1313,7 @@
                 rc=0
                 node --test --test-force-exit --test-reporter=tap tests/broker.test.ts tests/broker-bridge.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
-                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 / F2), subdirectory computeWorktreeDiff (C-N4), confineWrite + write-delta quota (F5 / F9), genie-bot identity & fork enforcement (F6 / Q1), and all four mutants go RED$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                [ "$rc" -eq 0 ] && grep -q '^ok [0-9]* - oracle: a proposal that fails guard-out is not acted on$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle: a passing proposal is acted on exactly once, with redacted content$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): when guardOut.enable is false, the deterministic redactor still runs and guard-out receives 0 calls$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 / F2), subdirectory computeWorktreeDiff (C-N4), confineWrite + write-delta quota (F5 / F9), genie-bot identity & fork enforcement (F6 / Q1), and all four mutants go RED$' $TMPDIR/tap && grep -q '^ok [0-9]* - oracle (G11): one GET /user per credential version and action, changed credential version re-checks, and revoked bot identity is refused before any write$' $TMPDIR/tap && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                 for cell in \
                   'broker bridge: attested allowlist, single proposal and body label cannot confer authority' \
                   'broker bridge: durable duplicates replay, intake remains free, serialized UTF8 is bounded' \
@@ -1378,6 +1378,15 @@
                   echo "mutant M-broker-skip-bot-identity survived in broker" >&2
                   exit 1
                 fi
+                cp -r . $TMPDIR/mut-cred-ver
+                chmod -R u+w $TMPDIR/mut-cred-ver
+                substituteInPlace $TMPDIR/mut-cred-ver/src/broker/index.ts \
+                  --replace-fail 'verifiedIdentity.credentialVersion === credentialVersion(token)' 'true'
+                if (cd $TMPDIR/mut-cred-ver && node --test --test-force-exit --test-reporter=tap --test-name-pattern='oracle \(G11\): one GET /user per credential version and action' tests/broker.test.ts >$TMPDIR/cred-ver-mutant-tap 2>&1); then
+                  echo "mutant M-broker-cache-across-credential-versions survived in broker" >&2
+                  exit 1
+                fi
+                grep -q '^not ok [0-9]* - oracle (G11): one GET /user per credential version and action, changed credential version re-checks, and revoked bot identity is refused before any write$' $TMPDIR/cred-ver-mutant-tap
                 cp -r . $TMPDIR/mut-guard-out
                 chmod -R u+w $TMPDIR/mut-guard-out
                 substituteInPlace $TMPDIR/mut-guard-out/src/broker/index.ts \
