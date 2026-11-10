@@ -24,8 +24,10 @@ export interface PrTreeEntry {
 }
 
 // One record of schemas/proposal.json.
-export interface Proposal {
-  kind: "gist" | "pr";
+interface ProposalFields {
+  kind: "gist" | "pr" | "gist_read" | "gist_update" | "gist_comment";
+  id?: string;
+  public?: boolean;
   repo?: string;
   branch?: string;
   commits?: string[];
@@ -35,8 +37,48 @@ export interface Proposal {
   treeEntries?: PrTreeEntry[];
   baseTreeSha?: string;
   baseCommitSha?: string;
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
+}
+
+export type Proposal = ProposalFields & (
+  | { kind: "gist" | "pr"; title: string; body: string }
+  | { kind: "gist_read"; id: string }
+  | { kind: "gist_update"; id: string; files: Record<string, string> }
+  | { kind: "gist_comment"; id: string; body: string }
+);
+
+export const GIST_READ_MAX_BYTES = 65_536;
+export const GIST_METADATA_MAX_BYTES = 1_048_576;
+
+export interface GistReadResult {
+  untrusted: true;
+  id: string;
+  url: string;
+  description: string;
+  owner: string | null;
+  revision: string;
+  files: Record<string, string>;
+}
+export interface ActResult {
+  url: string;
+  gist?: GistReadResult;
+}
+
+export function normalizeGistId(input: string): string {
+  if (typeof input !== "string" || input.length > 4096 || /[\s\x00-\x1f\x7f]/u.test(input)) {
+    throw new Error("invalid gist ID or URL");
+  }
+  if (/^[0-9a-f]{1,64}$/i.test(input)) return input.toLowerCase();
+  let url: URL;
+  try { url = new URL(input); } catch { throw new Error("invalid gist ID or URL"); }
+  const authority = input.split("://")[1]?.split(/[/?#]/)[0] ?? "";
+  if (url.protocol !== "https:" || url.hostname !== "gist.github.com" || url.port || authority.includes("@") || url.username || url.password) {
+    throw new Error("invalid gist ID or URL");
+  }
+  const match = /^https:\/\/gist\.github\.com\/(?:[A-Za-z0-9][A-Za-z0-9-]{0,38}\/)?([0-9a-f]{1,64})\/?(?:[?#].*)?$/i.exec(input);
+  if (!match) throw new Error("invalid gist ID or URL");
+  return match[1].toLowerCase();
 }
 
 export const BOT_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
@@ -102,6 +144,18 @@ export function isValidProposalFilePath(path: unknown, kind: "gist" | "pr"): pat
 }
 
 export function validateProposalFields(p: Proposal): string | null {
+  if (["gist_read", "gist_update", "gist_comment"].includes(p.kind)) {
+    const allowed = new Set(p.kind === "gist_read" ? ["kind", "id"] : p.kind === "gist_update" ? ["kind", "id", "files", "title"] : ["kind", "id", "body"]);
+    if (Object.keys(p).some((field) => !allowed.has(field))) return "proposal contains a field not permitted for its kind";
+    try { normalizeGistId(p.id!); } catch { return "$.id is not a gist ID or canonical gist URL"; }
+    if (p.kind === "gist_read") return null;
+    if (p.kind === "gist_comment") return typeof p.body === "string" && p.body.trim().length > 0 ? null : "$.body must be nonempty";
+    if (p.title !== undefined && (typeof p.title !== "string" || !p.title.trim())) return "$.title must be nonempty when supplied";
+  } else if (p.kind !== "gist" && p.kind !== "pr") {
+    return "unknown proposal kind";
+  }
+  if (p.public !== undefined && (p.kind !== "gist" || typeof p.public !== "boolean")) return "$.public is only a boolean for gist creation";
+  if ((p.kind === "gist" || p.kind === "pr") && (typeof p.title !== "string" || !p.title.length || typeof p.body !== "string")) return "legacy gist/PR requires title and body";
   const hasFiles = p.files !== undefined;
   const hasSubdir = p.worktreeSubdir !== undefined;
   if (hasFiles && hasSubdir) {
@@ -111,11 +165,12 @@ export function validateProposalFields(p: Proposal): string | null {
     return "$.files must have at least 1 file";
   }
   if (hasFiles) {
-    if (!p.files || typeof p.files !== "object" || Object.keys(p.files).length < 1) {
+    if (!p.files || typeof p.files !== "object" || Array.isArray(p.files) || Object.keys(p.files).length < 1) {
       return "$.files must have at least 1 file";
     }
     for (const k of Object.keys(p.files)) {
-      if (!isValidProposalFilePath(k, p.kind)) {
+      if (typeof p.files[k] !== "string") return "$.files must contain string content";
+      if (!isValidProposalFilePath(k, p.kind === "pr" ? "pr" : "gist")) {
         return `$.files[${JSON.stringify(k)}] is not a valid file path`;
       }
     }
@@ -332,14 +387,16 @@ export async function computeWorktreeDiff(opts: {
 
 // The gist (A2) or the fork, branch, commit and PR (A3), with the token the broker read and the
 // thread the proposal came from (A3's PR body links it). It is the only thing the token is handed to.
-export type Act = (p: Proposal, token: string, thread: string) => Promise<{ url: string }>;
+export type Act = (p: Proposal, token: string, thread: string) => Promise<ActResult>;
 
 // One Act per proposal kind; a kind with no Act throws, so it is not acted on.
 export const byKind =
-  (acts: Record<Proposal["kind"], Act>): Act =>
+  (acts: Partial<Record<Proposal["kind"], Act>>): Act =>
   async (p, token, thread) => {
     if (!Object.hasOwn(acts, p.kind)) throw new Error(`no action for a ${p.kind} proposal`);
-    return acts[p.kind](p, token, thread);
+    const act = acts[p.kind];
+    if (!act) throw new Error(`no action for a ${p.kind} proposal`);
+    return act(p, token, thread);
   };
 
 export type GuardOutConfig =
@@ -348,7 +405,9 @@ export type GuardOutConfig =
 
 export interface Config {
   // Read at act time, never from argv or the environment.
-  tokenFile: string;
+  tokenFile: string | null;
+  // Required for reads; root supplies its globally controlled inbound screen.
+  readScreen?: (text: string) => Promise<string>;
   guard: GuardOutConfig;
   act: Act;
   // Required in production via validateRootConfig (GC1 OQ-3, F6): verified against GET /user before any act.
@@ -370,6 +429,7 @@ export interface Action {
   reason: string;
   redactions: string[];
   url?: string;
+  gist?: GistReadResult;
 }
 
 const schema = load("proposal");
@@ -405,9 +465,71 @@ export async function outbound<T>(
   return { redactions, value };
 }
 
+function boundedText(text: string, limit = GIST_READ_MAX_BYTES): string {
+  if (new TextEncoder().encode(text).byteLength <= limit) return text;
+  return Buffer.from(text, "utf8").subarray(0, limit - 3).toString("utf8").replace(/\uFFFD$/, "") + "...";
+}
+
+function gistReadValue(value: unknown, expectedId: string): GistReadResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid gist read result");
+  const v = value as Record<string, unknown>;
+  const allowed = new Set(["untrusted", "id", "url", "description", "owner", "revision", "files"]);
+  if (Object.keys(v).some((key) => !allowed.has(key))
+      || v.id !== expectedId || typeof v.url !== "string" || normalizeGistId(v.url) !== expectedId
+      || typeof v.description !== "string" || typeof v.revision !== "string" || !v.revision.length
+      || !(v.owner === null || (typeof v.owner === "string" && BOT_LOGIN_RE.test(v.owner)))
+      || !v.files || typeof v.files !== "object" || Array.isArray(v.files) || Object.keys(v.files).length === 0) {
+    throw new Error("invalid gist read result");
+  }
+  for (const [name, content] of Object.entries(v.files)) {
+    if (!isValidProposalFilePath(name, "gist") || typeof content !== "string") throw new Error("invalid gist read files");
+  }
+  // Neither provenance nor the fetched identifier comes from a model verdict.
+  return { untrusted: true, id: expectedId, url: v.url, description: v.description,
+    owner: v.owner as string | null, revision: v.revision, files: v.files as Record<string, string> };
+}
+
+async function processGistRead(
+  value: unknown, id: string, token: string, c: Config, redactions: string[],
+): Promise<GistReadResult> {
+  if (!c.readScreen) throw new Error("gist reads require an inbound screen");
+  const bounded = (value: unknown) => {
+    const encoded = JSON.stringify(value);
+    if (new TextEncoder().encode(encoded).byteLength > GIST_READ_MAX_BYTES) throw new Error("gist read exceeds byte limit");
+    return encoded;
+  };
+  const scrub = (text: string) => {
+    const exact = token ? text.split(token).join("[token]") : text;
+    const r = redact(exact, { secretFileHashes: c.secretFileHashes });
+    redactions.push(...r.hits.map((hit) => hit.kind));
+    return r.text;
+  };
+  const clean = (input: GistReadResult): GistReadResult => gistReadValue({
+    ...input, id: scrub(input.id), url: scrub(input.url), description: scrub(input.description),
+    owner: input.owner === null ? null : scrub(input.owner), revision: scrub(input.revision),
+    files: Object.fromEntries(Object.entries(input.files).map(([name, text]) => [scrub(name), scrub(text)])),
+  }, id);
+  bounded(value);
+  const initial = clean(gistReadValue(value, id));
+  const screened = await c.readScreen(bounded(initial));
+  if (typeof screened !== "string" || new TextEncoder().encode(screened).byteLength > GIST_READ_MAX_BYTES) throw new Error("gist read screen exceeds byte limit");
+  let rewritten: unknown;
+  try { rewritten = JSON.parse(screened); } catch { throw new Error("gist read screen returned invalid JSON"); }
+  const final = clean(gistReadValue(rewritten, id));
+  if (final.url !== initial.url) throw new Error("gist read screen changed its source URL");
+  bounded(final);
+  return final;
+}
+
 export async function broker(thread: string, raw: string, c: Config): Promise<Action> {
   const redactions: string[] = [];
-  const done = (acted: boolean, reason: string, url?: string): Action => ({ thread, acted, reason, redactions, ...(url ? { url } : {}) });
+  let token = "";
+  const scrubResult = (text: string) => {
+    const r = redact(token ? text.split(token).join("[token]") : text, { secretFileHashes: c.secretFileHashes });
+    redactions.push(...r.hits.map((hit) => hit.kind));
+    return boundedText(r.text);
+  };
+  const done = (acted: boolean, reason: string, url?: string): Action => ({ thread, acted, reason: scrubResult(reason), redactions, ...(url ? { url: scrubResult(url) } : {}) });
 
   let value: unknown;
   try {
@@ -449,10 +571,14 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     }
   }
 
-  const out = await outbound(
+  let out: { redactions: string[] } & ({ value: Proposal } | { reason: string });
+  try {
+    out = await outbound(
     `genie-bot is about to publish this ${v.kind} on GitHub.`,
     (scrub): Proposal => ({
       kind: v.kind,
+      ...(v.id === undefined ? {} : { id: normalizeGistId(scrub(v.id)) }),
+      ...(v.public === undefined ? {} : { public: v.public }),
       ...(v.repo === undefined ? {} : { repo: scrub(v.repo) }),
       ...(v.branch === undefined ? {} : { branch: scrub(v.branch) }),
       ...(v.commits === undefined ? {} : { commits: v.commits.map(scrub) }),
@@ -471,26 +597,33 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
             baseCommitSha,
             baseTreeSha,
           }),
-      title: scrub(v.title),
-      body: scrub(v.body),
-    }),
-    c.guard,
+      ...(v.title === undefined ? {} : { title: scrub(v.title) }),
+      ...(v.body === undefined ? {} : { body: scrub(v.body) }),
+    } as Proposal),
+    v.kind === "gist_read" ? { enable: false } : c.guard,
     c.secretFileHashes,
-  );
+    );
+  } catch {
+    return done(false, "proposal redaction produced invalid metadata");
+  }
   redactions.push(...out.redactions);
   if (!("value" in out)) return done(false, out.reason);
   const p = out.value;
   const postScrubErr = validateProposalFields(p);
   if (postScrubErr !== null) return done(false, `not a proposal: ${postScrubErr}`);
 
-  let token: string;
-  try {
-    token = readFileSync(c.tokenFile, "utf8").trim();
-  } catch {
-    return done(false, `token unreadable: ${c.tokenFile}`);
+  if (p.kind === "gist_read" && !c.readScreen) return done(false, "gist reads require an inbound screen");
+  if (c.tokenFile === null) {
+    if (p.kind !== "gist_read") return done(false, "credentialed writes require a configured token");
+  } else {
+    try {
+      token = readFileSync(c.tokenFile, "utf8").trim();
+    } catch {
+      return done(false, `token unreadable: ${c.tokenFile}`);
+    }
+    if (!token) return done(false, `token empty: ${c.tokenFile}`);
   }
-  if (!token) return done(false, `token empty: ${c.tokenFile}`);
-  if (c.botLogin) {
+  if (token && c.botLogin) {
     try {
       await verifyBotIdentity(c.githubApi ?? "https://api.github.com", token, c.botLogin, c.forbiddenLogins ?? []);
     } catch (e) {
@@ -498,10 +631,14 @@ export async function broker(thread: string, raw: string, c: Config): Promise<Ac
     }
   }
   try {
-    const { url } = await c.act(p, token, thread);
-    return done(true, "acted", url);
+    const result = await c.act(p, token, thread);
+    if (p.kind === "gist_read") {
+      const value = await processGistRead(result.gist, p.id, token, c, redactions);
+      return { ...done(true, "read", value.url), gist: value };
+    }
+    return done(true, "acted", result.url);
   } catch (e) {
     // A failed request may echo its Authorization header.
-    return done(false, `act failed: ${String(e instanceof Error ? e.message : e).split(token).join("[token]")}`);
+    return done(false, `act failed: ${String(e instanceof Error ? e.message : e)}`);
   }
 }

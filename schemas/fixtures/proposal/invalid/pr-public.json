@@ -1,0 +1,11 @@
+{
+  "kind": "pr",
+  "repo": "owner/repo",
+  "branch": "fix",
+  "files": {
+    "a": "b"
+  },
+  "title": "t",
+  "body": "",
+  "public": true
+}

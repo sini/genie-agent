@@ -1,0 +1,8 @@
+{
+  "kind": "gist_comment",
+  "id": "abc123",
+  "body": "review",
+  "files": {
+    "a": "b"
+  }
+}

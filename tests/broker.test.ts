@@ -570,3 +570,139 @@ test("oracle O-GC1-propose: ls-tree + cat-file --batch worktree extraction (C1 /
     rmSync(rootTmp, { recursive: true, force: true });
   }
 });
+
+// Typed gist operations use the same broker, with an inbound screen for fetched data.
+import * as brokerModule from "../src/broker/index.ts";
+import { errors as schemaErrors, forModel, fromModel, load as loadSchema } from "../src/tier1/schema.ts";
+const readGist = (content = "untrusted text") => ({
+  untrusted: true as const, id: "abc123", url: "https://gist.github.com/account/abc123",
+  description: "review", owner: "account", revision: "a".repeat(40), files: { "note.md": content },
+});
+
+test("gist operations: kinds have independent strict arguments and public survives model conversion", async () => {
+  const schema = loadSchema("proposal");
+  for (const p of [
+    { kind: "gist_read", id: "abc123" },
+    { kind: "gist_update", id: "https://gist.github.com/account/abc123", files: { "note.md": "replacement" } },
+    { kind: "gist_comment", id: "abc123", body: "review" },
+  ]) assert.deepEqual(schemaErrors(schema, p), [], JSON.stringify(p));
+  for (const p of [
+    { kind: "gist_read", id: "abc123", public: true },
+    { kind: "gist_read", id: "abc123", files: { a: "b" } },
+    { kind: "gist_update", id: "abc123", files: {} },
+    { kind: "gist_comment", id: "abc123", body: "" },
+    { kind: "gist_comment", id: "abc123", body: "review", repo: "a/b" },
+    { kind: "pr", repo: "a/b", branch: "fix", files: { a: "b" }, title: "t", body: "", public: true },
+  ]) assert.notDeepEqual(schemaErrors(schema, p), [], JSON.stringify(p));
+  assert.deepEqual(forModel(schema).properties.public.enum, ["yes", "no"]);
+  for (const [model, expected] of [["yes", true], ["no", false]] as const) {
+    const p = fromModel(schema, { ...JSON.parse(gist()), public: model });
+    const recording = recordingAct();
+    assert.equal((await broker("thread", JSON.stringify(p), { tokenFile: tokenFile("credential"), guard: { enable: false }, act: recording.act })).acted, true);
+    assert.equal(recording.calls[0].p.public, expected);
+  }
+});
+
+test("gist operations: target IDs normalize without fetching caller URLs or revisions", () => {
+  for (const raw of ["abc123", "ABC123", "https://gist.github.com/abc123", "https://gist.github.com/account/abc123?file=a#note"]) {
+    assert.equal(brokerModule.normalizeGistId(raw), "abc123");
+  }
+  for (const raw of ["", "not-hex", "https://evil.example/abc123", "http://gist.github.com/abc123", "https://user@gist.github.com/abc123", "https://gist.github.com/account/abc123/deadbeef", "https://gist.githubusercontent.com/account/abc123/raw/note", "https://gist.github.com/account/../abc123", "https://gist.github.com/account/abc123/../def456", "https://gist.github.com/account/%61bc123", " abc123"]) {
+    assert.throws(() => brokerModule.normalizeGistId(raw), undefined, raw);
+  }
+});
+
+test("gist operations: anonymous read skips guard-out but requires an inbound processor", async () => {
+  const n = await ninfer(verdict("block", "not a publication"));
+  let calls = 0;
+  try {
+    const config = { tokenFile: null, guard: { base: n.base, model: "m", system: "guard-out" }, act: async (p: Proposal, token: string) => {
+      calls++; assert.equal(token, ""); assert.equal(p.id, "abc123"); return { url: readGist().url, gist: readGist() };
+    }, readScreen: async (text: string) => text };
+    const action = await broker("thread", JSON.stringify({ kind: "gist_read", id: "https://gist.github.com/account/abc123" }), config);
+    assert.equal(action.acted, true, action.reason);
+    assert.equal(action.gist?.untrusted, true);
+    assert.equal(calls, 1); assert.equal(n.requests.length, 0);
+    const missingScreen = await broker("thread", JSON.stringify({ kind: "gist_read", id: "abc123" }), { ...config, readScreen: undefined });
+    assert.equal(missingScreen.acted, false); assert.equal(calls, 1);
+    const missingToken = await broker("thread", JSON.stringify({ kind: "gist_comment", id: "abc123", body: "review" }), { ...config, guard: { enable: false } });
+    assert.equal(missingToken.acted, false); assert.equal(calls, 1);
+  } finally { n.close(); }
+});
+
+test("gist operations: read scrubs before and after screening, bounds output and withholds errors", async () => {
+  const token = randomUUID();
+  const shaped = credential();
+  const raw = JSON.stringify({ kind: "gist_read", id: "abc123" });
+  const act = async () => ({ url: readGist().url, gist: readGist(`${token} ${shaped}`) });
+  const c = { tokenFile: tokenFile(token), guard: { enable: false as const }, act };
+  let screened = "";
+  const action = await broker("thread", raw, { ...c, readScreen: async (text) => {
+    screened = text; const p = JSON.parse(text); p.files["note.md"] = `rewritten ${token} ${shaped}`; p.untrusted = false; return JSON.stringify(p);
+  } });
+  assert.equal(action.acted, true, action.reason);
+  assert.equal(action.gist?.untrusted, true);
+  assert.ok(!screened.includes(token) && !screened.includes(shaped));
+  assert.ok(!JSON.stringify(action).includes(token) && !JSON.stringify(action).includes(shaped));
+  for (const readScreen of [
+    async () => { throw new Error(`reflected ${token} ${shaped}`); },
+    async () => "not json",
+    async () => JSON.stringify(readGist("x".repeat(65_536))),
+    async () => JSON.stringify({ ...readGist(), id: "def456" }),
+  ]) {
+    const failed = await broker("thread", raw, { ...c, readScreen });
+    assert.equal(failed.acted, false);
+    assert.equal(failed.gist, undefined);
+    assert.ok(!JSON.stringify(failed).includes(token) && !JSON.stringify(failed).includes(shaped));
+  }
+  let called = false;
+  const oversized = await broker("thread", raw, { ...c, act: async () => ({ url: readGist().url, gist: readGist("x".repeat(65_536)) }), readScreen: async (s) => { called = true; return s; } });
+  assert.equal(oversized.acted, false); assert.equal(called, false);
+  const unreadable = await broker("thread", raw, { ...c, tokenFile: "/missing/gist-token", readScreen: async (s) => s });
+  assert.equal(unreadable.acted, false);
+});
+
+test("gist operations: update and comment preserve write guard-out and partial action maps refuse", async () => {
+  for (const p of [{ kind: "gist_update", id: "abc123", files: { "note.md": "replacement" } }, { kind: "gist_comment", id: "abc123", body: "review" }]) {
+    const blocked = await run(verdict("block", "leak"), JSON.stringify(p));
+    assert.equal(blocked.calls.length, 0); assert.match(blocked.action.reason, /^guard-out:/);
+  }
+  const act = byKind({ gist: recordingAct().act, pr: recordingAct().act });
+  await assert.rejects(() => act({ kind: "gist_read", id: "abc123" }, "", "thread"), /no action/);
+});
+
+test("gist operations: anonymous screen failures stay readable and configured identity failures never fall back", async () => {
+  let acts = 0;
+  let screens = 0;
+  const c = { tokenFile: null, guard: { enable: false as const }, act: async () => { acts++; return { url: readGist().url, gist: readGist() }; }, readScreen: async () => { screens++; throw new Error("inbound screen unavailable"); } };
+  const raw = JSON.stringify({ kind: "gist_read", id: "abc123" });
+  const refused = await broker("thread", raw, c);
+  assert.equal(refused.acted, false);
+  assert.match(refused.reason, /inbound screen unavailable/);
+  assert.equal(acts, 1); assert.equal(screens, 1, "disabled outbound guard must not bypass inbound screening");
+  const requests: string[] = [];
+  const api = createServer((req, res) => { requests.push(req.url!); res.writeHead(401); res.end('{}'); });
+  await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (api.address() as { port: number }).port;
+    const configured = await broker("thread", raw, { ...c, tokenFile: tokenFile("configured-invalid-token"), botLogin: "machine-account", githubApi: `http://127.0.0.1:${port}` });
+    assert.equal(configured.acted, false);
+    assert.equal(acts, 1, "invalid configured token fell back to anonymous Act");
+    assert.deepEqual(requests, ["/user"]);
+    assert.equal(screens, 1);
+  } finally { api.close(); }
+});
+
+test("gist operations: redacted target metadata refuses without throwing or invoking an Act", async () => {
+  const id = "abcdef1234567890";
+  const hash = (await import("../src/redactor/index.ts")).secretLineHashes(id);
+  let calls = 0;
+  const result = await broker("thread", JSON.stringify({ kind: "gist_read", id }), {
+    tokenFile: null, guard: { enable: false }, secretFileHashes: hash,
+    readScreen: async (s) => s,
+    act: async () => { calls++; return { url: readGist().url, gist: readGist() }; },
+  });
+  assert.equal(result.acted, false);
+  assert.equal(calls, 0);
+  assert.ok(!JSON.stringify(result).includes(id));
+});

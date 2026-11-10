@@ -1,19 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "typed action proposal for the broker",
-  "description": "A gist needs no repository; a PR needs the repository and the branch it opens from, plus either files or worktreeSubdir.",
+  "description": "Typed gist reads, owned updates, comments, secret-by-default creation, or PR proposals.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "kind",
-    "title",
-    "body"
+    "kind"
   ],
   "properties": {
     "kind": {
       "enum": [
         "gist",
-        "pr"
+        "pr",
+        "gist_read",
+        "gist_update",
+        "gist_comment"
       ]
     },
     "repo": {
@@ -54,6 +55,15 @@
     },
     "body": {
       "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "public": {
+      "type": "boolean",
+      "description": "Create a public gist only when explicitly true; absent or false creates an unlisted gist."
     }
   },
   "if": {
@@ -75,9 +85,12 @@
         "kind": {
           "const": "gist"
         },
-        "worktreeSubdir": false
+        "worktreeSubdir": false,
+        "id": false
       },
       "required": [
+        "title",
+        "body",
         "files"
       ]
     },
@@ -86,9 +99,13 @@
         "kind": {
           "const": "pr"
         },
-        "worktreeSubdir": false
+        "worktreeSubdir": false,
+        "public": false,
+        "id": false
       },
       "required": [
+        "title",
+        "body",
         "repo",
         "branch",
         "files"
@@ -99,12 +116,74 @@
         "kind": {
           "const": "pr"
         },
-        "files": false
+        "files": false,
+        "public": false,
+        "id": false
       },
       "required": [
+        "title",
+        "body",
         "repo",
         "branch",
         "worktreeSubdir"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "gist_read"
+        },
+        "repo": false,
+        "branch": false,
+        "commits": false,
+        "files": false,
+        "worktreeSubdir": false,
+        "title": false,
+        "body": false,
+        "public": false
+      },
+      "required": [
+        "id"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "gist_update"
+        },
+        "repo": false,
+        "branch": false,
+        "commits": false,
+        "worktreeSubdir": false,
+        "body": false,
+        "public": false
+      },
+      "required": [
+        "id",
+        "files"
+      ]
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "gist_comment"
+        },
+        "repo": false,
+        "branch": false,
+        "commits": false,
+        "files": false,
+        "worktreeSubdir": false,
+        "title": false,
+        "public": false,
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "required": [
+        "id",
+        "body"
       ]
     }
   ]
