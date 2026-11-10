@@ -4781,6 +4781,7 @@ pkgs.testers.runNixOSTest {
     ''
       import os
       import time
+      import shlex
 
       # Item 52: the gi15 driver's time budget (GI15_DRIVER_TIMEOUT_S below) is sized for KVM.
       # A builder that advertises the `kvm` system feature but exposes no usable /dev/kvm makes
@@ -4822,12 +4823,148 @@ pkgs.testers.runNixOSTest {
       def check_unit_ns_and_exe(m, unit, exe_suffix):
           return m.execute(unit_ns_and_exe_cmd(unit, exe_suffix))[0] == 0
 
+      def initial_unit_snapshot(m, unit, exe_suffix, failed):
+          script = r"""
+      import json, os, subprocess
+      UNIT = None
+      SUFFIX = None
+      FAILED = None
+      def command(args):
+          try:
+              result = subprocess.run(args, text=True, capture_output=True, timeout=3)
+              return {"rc": result.returncode, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+          except subprocess.TimeoutExpired:
+              return {"rc": 124, "stdout": "", "stderr": "diagnostic command timed out after 3 seconds"}
+      def link(name):
+          try:
+              return {"value": os.readlink(name)}
+          except OSError as error:
+              return {"value": "", "errno": error.errno, "error": str(error)}
+      def content(name, maximum=4096):
+          try:
+              with open(name, "rb") as stream:
+                  return {"value": stream.read(maximum).replace(bytes([0]), b" ").decode("utf-8", "replace")}
+          except OSError as error:
+              return {"value": "", "errno": error.errno, "error": str(error)}
+      fields = ["MainPID", "ControlPID", "ActiveState", "SubState", "Result", "NRestarts", "ExecMainCode", "ExecMainStatus", "InvocationID", "ExecMainStartTimestampMonotonic", "ActiveEnterTimestampMonotonic", "ExecStart"]
+      state = command(["systemctl", "show", UNIT, "--no-pager", *["--property=" + field for field in fields]])
+      properties = dict(line.split("=", 1) for line in state["stdout"].splitlines() if "=" in line)
+      pid = properties.get("MainPID", "")
+      mount = link("/proc/" + pid + "/ns/mnt")
+      root_mount = link("/proc/1/ns/mnt")
+      executable = link("/proc/" + pid + "/exe")
+      root_executable = link("/proc/1/exe")
+      cmdline = content("/proc/" + pid + "/cmdline")
+      status = content("/proc/" + pid + "/status")
+      status_fields = {line.split(":", 1)[0]: line.split(":", 1)[1].strip() for line in status["value"].splitlines() if ":" in line and line.split(":", 1)[0] in ("Name", "State", "PPid", "NSpid", "Uid", "Gid", "SigCgt", "SigIgn")}
+      operands = {"pid_nonempty": bool(pid), "pid_positive": pid.isdigit() and int(pid) > 0, "mount_differs": mount["value"] != root_mount["value"], "exe_differs": executable["value"] != root_executable["value"], "exe_suffix": executable["value"].endswith(SUFFIX), "cmdline_contains_suffix": SUFFIX in cmdline["value"]}
+      operands["snapshot_composite"] = operands["pid_nonempty"] and operands["pid_positive"] and operands["mount_differs"] and operands["exe_differs"] and (operands["exe_suffix"] or operands["cmdline_contains_suffix"])
+      print(json.dumps({"unit": UNIT, "phase": "failure" if FAILED else "success", "MainPID": pid, "operands": operands, "mount": mount, "root_mount": root_mount, "exe": executable, "root_exe": root_executable, "cmdline": cmdline, "process_status": status_fields, "process_status_error": status.get("error"), "unit_properties": properties, "unit_query": {"rc": state["rc"], "stderr": state["stderr"]}}, indent=2), flush=True)
+      if FAILED:
+          journal = command(["journalctl", "-u", UNIT, "-n", "40", "--no-pager", "-o", "short-monotonic"])
+          print("INITIAL_READINESS_JOURNAL rc=" + str(journal["rc"]), flush=True)
+          print(journal["stdout"], flush=True)
+          print(journal["stderr"], flush=True)
+      """
+          script = script.replace("UNIT = None", "UNIT = " + repr(unit)).replace("SUFFIX = None", "SUFFIX = " + repr(exe_suffix)).replace("FAILED = None", "FAILED = " + repr(failed))
+          rc, output = m.execute("${pkgs.python3}/bin/python3 -I -c " + shlex.quote(script), timeout=15)
+          print(f"INITIAL_READINESS_SNAPSHOT machine={m.name} unit={unit} phase={'failure' if failed else 'success'} diagnostic_rc={rc}\n{output}")
+
+      def wait_initial_unit(m, unit, exe_suffix):
+          try:
+              m.wait_until_succeeds(unit_ns_and_exe_cmd(unit, exe_suffix), timeout=30)
+          except Exception:
+              try:
+                  initial_unit_snapshot(m, unit, exe_suffix, True)
+              except Exception as diagnostic_error:
+                  print(f"INITIAL_READINESS_DIAGNOSTIC_ERROR {diagnostic_error}")
+              raise
+          try:
+              initial_unit_snapshot(m, unit, exe_suffix, False)
+          except Exception as diagnostic_error:
+              print(f"INITIAL_READINESS_DIAGNOSTIC_ERROR {diagnostic_error}")
+
+      def readiness_diagnostics_control():
+          import builtins
+          import contextlib
+          import io
+          import json
+          import subprocess
+          from types import SimpleNamespace
+          from unittest.mock import patch
+
+          class ForcedReadinessFailure(Exception):
+              pass
+
+          for failed, diagnostics_fail in ((True, False), (False, False), (True, True)):
+              original = ForcedReadinessFailure("forced original readiness failure")
+              raw_open, raw_link = builtins.open, os.readlink
+
+              def fake_run(args, **kwargs):
+                  if args[0] == "systemctl":
+                      text = "MainPID=77\nActiveState=" + ("failed" if failed else "active") + "\nSubState=running\nResult=success\nNRestarts=0\n"
+                      return SimpleNamespace(returncode=0, stdout=text, stderr="")
+                  assert args[0] == "journalctl"
+                  return SimpleNamespace(returncode=0, stdout="forced fixture journal", stderr="")
+
+              def fake_link(name):
+                  values = {"/proc/77/ns/mnt": "mnt:[1]" if failed else "mnt:[2]", "/proc/1/ns/mnt": "mnt:[1]", "/proc/77/exe": "/fixture/bash", "/proc/1/exe": "/fixture/systemd"}
+                  return values[name] if name in values else raw_link(name)
+
+              def fake_open(name, *args, **kwargs):
+                  if name == "/proc/77/cmdline":
+                      return io.BytesIO(b"bash\0/fixture/herdr\0")
+                  if name == "/proc/77/status":
+                      return io.BytesIO(b"Name:\tfixture\nState:\tS (sleeping)\nNSpid:\t77 1\n")
+                  return raw_open(name, *args, **kwargs)
+
+              class FakeMachine:
+                  name = "forced-readiness-control"
+                  def wait_until_succeeds(self, command, timeout):
+                      assert command == unit_ns_and_exe_cmd("fixture.service", "/herdr") and timeout == 30
+                      if failed:
+                          raise original
+                  def execute(self, command, timeout):
+                      assert timeout == 15
+                      if diagnostics_fail:
+                          raise RuntimeError("forced unavailable diagnostic transport")
+                      argv = shlex.split(command)
+                      assert argv[-2] == "-c"
+                      output = io.StringIO()
+                      with patch("subprocess.run", fake_run), patch("os.readlink", fake_link), patch("builtins.open", fake_open), contextlib.redirect_stdout(output):
+                          exec(argv[-1], {})
+                      return 0, output.getvalue()
+
+              captured = io.StringIO()
+              caught = None
+              with contextlib.redirect_stdout(captured):
+                  try:
+                      wait_initial_unit(FakeMachine(), "fixture.service", "/herdr")
+                  except Exception as error:
+                      caught = error
+              assert caught is original if failed else caught is None
+              output = captured.getvalue()
+              if diagnostics_fail:
+                  assert "INITIAL_READINESS_DIAGNOSTIC_ERROR" in output
+              else:
+                  for field in ("MainPID", "pid_nonempty", "pid_positive", "mount_differs", "exe_differs", "exe_suffix", "cmdline_contains_suffix", "cmdline", "process_status", "unit_properties"):
+                      assert '"' + field + '"' in output, f"missing readiness diagnostic {field}"
+                  snapshot, _ = json.JSONDecoder().raw_decode(output[output.index("{"):])
+                  assert snapshot["operands"]["snapshot_composite"] == (not failed)
+                  assert snapshot["MainPID"] == "77" and snapshot["unit_properties"]["ActiveState"] == ("failed" if failed else "active")
+                  assert ("INITIAL_READINESS_JOURNAL" in output) == failed
+                  if failed:
+                      assert "forced fixture journal" in output
+          print("readiness-diagnostics-control:failed-predicate-rethrown-success-observed")
+
+      readiness_diagnostics_control()
+
       start_all()
       for m in (probe, real):
           m.wait_for_unit("multi-user.target")
           for tier in ("public", "trusted"):
-              m.wait_until_succeeds(unit_ns_and_exe_cmd(f"genie-herdr@{tier}", "/herdr"), timeout=30)
-              m.wait_until_succeeds(unit_ns_and_exe_cmd(f"genie-dispatcher@{tier}", "/genie-dispatcher"), timeout=30)
+              wait_initial_unit(m, f"genie-herdr@{tier}", "/herdr")
+              wait_initial_unit(m, f"genie-dispatcher@{tier}", "/genie-dispatcher")
       for tier in ("public", "trusted"):
           probe.wait_until_succeeds(f"grep -q 'probe done' ${stateDir}/probe-{tier}.log", timeout=30)
           real.wait_until_succeeds(
