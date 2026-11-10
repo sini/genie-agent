@@ -1323,7 +1323,7 @@
                 cp -r . $TMPDIR/mut-bot-id
                 chmod -R u+w $TMPDIR/mut-bot-id
                 substituteInPlace $TMPDIR/mut-bot-id/src/broker/index.ts \
-                  --replace-fail '  if (c.botLogin) {' '  if (false) {'
+                  --replace-fail '  if (token && c.botLogin) {' '  if (false) {'
                 substituteInPlace $TMPDIR/mut-bot-id/src/broker/pr.ts \
                   --replace-fail '    if (botLogin) {' '    if (false) {'
                 substituteInPlace $TMPDIR/mut-bot-id/src/broker/gist.ts \
@@ -1340,6 +1340,11 @@
                   echo "mutant M-propose-bypass-guard-out survived in broker" >&2
                   exit 1
                 fi
+                if (cd $TMPDIR/mut-guard-out && node --test --test-force-exit --test-reporter=tap --test-name-pattern='gist operations: update and comment preserve write guard-out' tests/broker.test.ts >$TMPDIR/new-write-mutant-tap 2>&1); then
+                  echo "mutant M-gist-writes-bypass-guard-out survived in broker" >&2
+                  exit 1
+                fi
+                grep -q '^not ok [0-9]* - gist operations: update and comment preserve write guard-out and partial action maps refuse$' $TMPDIR/new-write-mutant-tap
                 touch $out
               '';
           # The gist action through the broker against a stub GitHub: one POST /gists with the redacted
@@ -1378,6 +1383,36 @@
                   'a 2xx without html_url is not acted on'; do
                   grep -qx "ok [0-9]* - oracle: $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
                 done
+                for cell in \
+                  'oracle B1: an anonymous gist read is complete untrusted data with no credential or raw URL fetch' \
+                  'oracle B1: oversized metadata and incomplete or truncated files are refused without raw fallback' \
+                  'oracle B3: gist updates require the authenticated configured account to own the target' \
+                  'gist comments use a canonical gist link plus the official id-only comment receipt' \
+                  'oracle B4: gist creation is secret unless public is explicitly true' \
+                  'gist reads count chunked bytes and accept exactly the raw-response boundary' \
+                  'gist reads reject oversized Content-Length before parsing and never follow redirects or retry' \
+                  'write metadata has a separate bounded budget and invalid comment receipts are refused' \
+                  'anonymous credentials enable only reads; authenticated reads retain bot identity checks'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
+                cp -r . $TMPDIR/mut-gist-owner
+                chmod -R u+w $TMPDIR/mut-gist-owner
+                substituteInPlace $TMPDIR/mut-gist-owner/src/broker/gist.ts \
+                  --replace-fail 'if (owner === null || owner.toLowerCase() !== login.toLowerCase()) throw new Error("gist_update: target is not owned by the authenticated account");' 'void owner; void login;'
+                if (cd $TMPDIR/mut-gist-owner && node --test --test-force-exit --test-reporter=tap --test-name-pattern='oracle B3:' tests/gist.test.ts >$TMPDIR/owner-mutant-tap 2>&1); then
+                  echo "mutant M-gist-update-skip-owner survived in gist" >&2
+                  exit 1
+                fi
+                grep -q '^not ok [0-9]* - oracle B3: gist updates require the authenticated configured account to own the target$' $TMPDIR/owner-mutant-tap
+                cp -r . $TMPDIR/mut-gist-public
+                chmod -R u+w $TMPDIR/mut-gist-public
+                substituteInPlace $TMPDIR/mut-gist-public/src/broker/gist.ts \
+                  --replace-fail 'public: p.public === true' 'public: true'
+                if (cd $TMPDIR/mut-gist-public && node --test --test-force-exit --test-reporter=tap --test-name-pattern='oracle B4:' tests/gist.test.ts >$TMPDIR/public-mutant-tap 2>&1); then
+                  echo "mutant M-gist-force-public survived in gist" >&2
+                  exit 1
+                fi
+                grep -q '^not ok [0-9]* - oracle B4: gist creation is secret unless public is explicitly true$' $TMPDIR/public-mutant-tap
                 touch $out
               '';
           # The PR action through the broker's kind-dispatching act against a stub GitHub: one PR whose
@@ -1576,6 +1611,8 @@
                     ./skills
                     ./prompts
                     ./tests/root.test.ts
+                    ./tests/root-gist.test.ts
+                    ./tests/gist-model.test.ts
                     ./tests/fixtures/supervisor
                   ];
                 };
@@ -1584,9 +1621,18 @@
                 cd $src
                 export PI=${nixpkgs.lib.getExe pkgs.pi-coding-agent}
                 rc=0
-                node --test --test-force-exit --test-reporter=tap tests/root.test.ts > $TMPDIR/tap || rc=$?
+                node --test --test-force-exit --test-reporter=tap tests/root.test.ts tests/root-gist.test.ts tests/gist-model.test.ts > $TMPDIR/tap || rc=$?
                 cat $TMPDIR/tap
                 [ "$rc" -eq 0 ] && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
+                for cell in \
+                  'gist root: anonymous reads use guard-in despite legacy screening default and retain quota' \
+                  'gist root: rewritten results are scrubbed again and rejected raw reads never enter transcripts' \
+                  'gist root: explicit global guard off preserves redaction and untrusted result marking' \
+                  'gist root: public yes no and omission reach the fake API without changing write guards' \
+                  'gist root: new read transcript provenance passes escalation schema without broadening legacy requests' \
+                  'gist model: existing propose advertises typed gist operations and converts explicit public yes no'; do
+                  grep -qx "ok [0-9]* - $cell" $TMPDIR/tap || { echo "missing cell: $cell"; exit 1; }
+                done
                 for cell in \
                   "one inbound line reaches pi's prompt with its tier observed" \
                   'a guard-in reject never prompts, and the bot posts a refusal' \

@@ -6,7 +6,22 @@
     "HindsightWriteClient: recall and retain serialization over HTTP and fail-closed token enforcement"
   ],
   "tests/broker.test.ts": [
-    "oracle: a proposal that fails guard-out is not acted on"
+    "oracle: a proposal that fails guard-out is not acted on",
+    "gist operations: kinds have independent strict arguments and public survives model conversion",
+    "gist operations: target IDs normalize without fetching caller URLs or revisions",
+    "gist operations: anonymous read skips guard-out but requires an inbound processor",
+    "gist operations: read scrubs before and after screening, bounds output and withholds errors",
+    "gist operations: update and comment preserve write guard-out and partial action maps refuse",
+    "gist operations: anonymous screen failures stay readable and configured identity failures never fall back",
+    "gist operations: redacted target metadata refuses without throwing or invoking an Act"
+  ],
+  "tests/container.test.ts": [
+    "container files: root executes shipped tools with thread confinement, exact edit quota and read-only memory",
+    "container files: disconnected requests abort running work and queued requests cannot write",
+    "container files: running SDK receives cancellation",
+    "container sessions: fixed captured destination, ordered chunks, atomic commit and abandoned cleanup",
+    "container worker: actual packaged pi uses root files and model, persists before settlement and resumes",
+    "container executor: startup failure and forced teardown run explicit stop before socket cleanup"
   ],
   "tests/custody.test.ts": [
     "custody: configured key and destination win over pi headers and destination",
@@ -33,14 +48,6 @@
   "tests/eval-argv.test.ts": [
     "the untrusted argv is E1's, byte for byte, whatever builders are configured"
   ],
-  "tests/container.test.ts": [
-    "container files: root executes shipped tools with thread confinement, exact edit quota and read-only memory",
-    "container files: disconnected requests abort running work and queued requests cannot write",
-    "container files: running SDK receives cancellation",
-    "container sessions: fixed captured destination, ordered chunks, atomic commit and abandoned cleanup",
-    "container worker: actual packaged pi uses root files and model, persists before settlement and resumes",
-    "container executor: startup failure and forced teardown run explicit stop before socket cleanup"
-  ],
   "tests/eval-cache.test.ts": [
     "oracle: eval-result cache keyed (repo, rev, attr, flags) runs 0 evals on second identical request"
   ],
@@ -56,8 +63,20 @@
   "tests/gc.test.ts": [
     "oracle: at 95 h kept, at 97 h archived and gone: state, store and worktrees, whatever the status"
   ],
+  "tests/gist-model.test.ts": [
+    "gist model: existing propose advertises typed gist operations and converts explicit public yes no"
+  ],
   "tests/gist.test.ts": [
-    "oracle: a gist proposal is exactly one POST /gists with the redacted content and the Bearer token"
+    "oracle: a gist proposal is exactly one POST /gists with the redacted content and the Bearer token",
+    "oracle B1: an anonymous gist read is complete untrusted data with no credential or raw URL fetch",
+    "oracle B1: oversized metadata and incomplete or truncated files are refused without raw fallback",
+    "oracle B3: gist updates require the authenticated configured account to own the target",
+    "gist comments use a canonical gist link plus the official id-only comment receipt",
+    "oracle B4: gist creation is secret unless public is explicitly true",
+    "gist reads count chunked bytes and accept exactly the raw-response boundary",
+    "gist reads reject oversized Content-Length before parsing and never follow redirects or retry",
+    "write metadata has a separate bounded budget and invalid comment receipts are refused",
+    "anonymous credentials enable only reads; authenticated reads retain bot identity checks"
   ],
   "tests/guard-out.test.ts": [
     "every valid verdict-out fixture parses to itself"
@@ -86,6 +105,13 @@
   ],
   "tests/redactor.test.ts": [
     "redacts a truncated key block to the end of the text"
+  ],
+  "tests/root-gist.test.ts": [
+    "gist root: anonymous reads use guard-in despite legacy screening default and retain quota",
+    "gist root: rewritten results are scrubbed again and rejected raw reads never enter transcripts",
+    "gist root: explicit global guard off preserves redaction and untrusted result marking",
+    "gist root: public yes no and omission reach the fake API without changing write guards",
+    "gist root: new read transcript provenance passes escalation schema without broadening legacy requests"
   ],
   "tests/root.test.ts": [
     "oracle: one inbound line reaches pi's prompt with its tier observed"
