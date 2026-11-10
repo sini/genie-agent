@@ -64,23 +64,32 @@ test("portable eval uses native paths, a clean home and no false memory enforcem
 test("portable eval timeout terminates its owned process group", async () => {
   const { runEval } = await import("../src/eval/run.ts");
   const { executable } = await import("../src/isolation.ts");
-  const { symlinkSync, mkdirSync, readFileSync } = await import("node:fs");
+  const { existsSync, symlinkSync, mkdirSync, readFileSync } = await import("node:fs");
   const dir = `${tmp}/timeout`, bin = `${dir}/bin`, marker = `${dir}/child-pid`;
   mkdirSync(bin, { recursive: true });
+  const sh = executable("sh")!, sleep = executable("sleep")!, mv = executable("mv")!;
   for (const name of ["chmod", "sh", "env"]) symlinkSync(executable(name)!, `${bin}/${name}`);
-  writeFileSync(`${bin}/nix`, `#!${process.execPath}\nconst c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(c.pid));setInterval(()=>{},1000);\n`);
+  writeFileSync(`${bin}/nix`, `#!${sh}\n${sleep} 60 </dev/null >/dev/null 2>&1 &\nprintf '%s\\n' "$!" > ${JSON.stringify(`${marker}.tmp`)}\n${mv} ${JSON.stringify(`${marker}.tmp`)} ${JSON.stringify(marker)}\nwait\n`);
   chmodSync(`${bin}/nix`, 0o755);
-  const previous = process.env.PATH; process.env.PATH = bin;
+  const previous = process.env.PATH, realSetTimeout = globalThis.setTimeout, timeoutMs = 50;
+  process.env.PATH = bin;
+  globalThis.setTimeout = ((fn: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== timeoutMs) return realSetTimeout(fn, ms, ...args);
+    const t = realSetTimeout(() => { if (existsSync(marker)) fn(...args); else t.refresh(); }, ms);
+    return t;
+  }) as typeof setTimeout;
   let pid: number | undefined;
   try {
-    const result = await runEval({ sender_tier: "public", request: { attr: "x", trusted: "no" } }, { localFlake: dir, timeoutMs: 100, onStatus: () => {} });
+    const result = await runEval({ sender_tier: "public", request: { attr: "x", trusted: "no" } }, { localFlake: dir, timeoutMs, onStatus: () => {} });
+    globalThis.setTimeout = realSetTimeout;
     assert.equal(result.exit, 124); assert.equal(result.limit_hit, "timeout");
-    pid = Number(readFileSync(marker, "utf8"));
+    pid = Number(readFileSync(marker, "utf8").trim());
     let alive = true;
     for (let i = 0; i < 100 && alive; i++) { try { process.kill(pid, 0); } catch { alive = false; } if (alive) await new Promise(r => setTimeout(r, 10)); }
     assert.equal(alive, false, "owned eval descendant remained after timeout");
     pid = undefined;
   } finally {
+    globalThis.setTimeout = realSetTimeout;
     process.env.PATH = previous;
     if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
   }
