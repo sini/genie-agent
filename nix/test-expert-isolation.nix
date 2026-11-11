@@ -2675,7 +2675,7 @@ let
 
     # Evaluate V6.4 (herdr pane read scrollback sweep)
     pane_a = pane_holder.get("pane_id", "w1:p2")
-    scrollback = herdr_cmd("public", ["pane", "read", pane_a], parse_json=False)
+    scrollback = herdr_cmd("public", ["pane", "read", "--source", "recent-unwrapped", pane_a], parse_json=False)
     v64_ctrl = "genie-claude-shim" in scrollback
     v64_tok = (TOK_PUB in scrollback) or (TOK_TRU in scrollback)
     cell("V6.4", v64_ctrl and not v64_tok, f"shim_in_scrollback={v64_ctrl} tok_in_scrollback={v64_tok}")
