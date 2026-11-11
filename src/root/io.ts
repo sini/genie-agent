@@ -710,7 +710,11 @@ export class XmsgIo implements Io {
           if (JSON.parse(m.text)?.error === "not_supported") return;
         } catch {}
       }
-      await this.client.reply(m.id, JSON.stringify({ error: "not_supported" }), `unhandled:${m.id}`);
+      try {
+        await this.client.reply(m.id, JSON.stringify({ error: "not_supported" }), `unhandled:${m.id}`);
+      } catch {
+        this.log(`${this.service}: not_supported reply failed`);
+      }
       return;
     }
     if (parsed.thread && "envelope" in parsed.item) {

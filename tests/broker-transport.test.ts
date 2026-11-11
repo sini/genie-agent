@@ -130,7 +130,8 @@ test("broker transport: timed-out send cannot act late and bridge worker continu
   } finally { guard.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const notice of [false, true]) test(`unhandled inbound logs metadata without content; incoming notice=${notice}`, async () => {
+for (const mode of ["direct", "notice", "reply-fails"]) test(`unhandled inbound logs metadata without content; mode=${mode}`, async () => {
+  const notice = mode === "notice";
   const message = {
     id: "direct-message",
     origin: { service: "gateway", node: "edge" },
@@ -140,16 +141,21 @@ for (const notice of [false, true]) test(`unhandled inbound logs metadata withou
   const logs: string[] = [];
   const replies: { id: string; text: string; key?: string }[] = [];
   let acknowledged = false;
+  let deliveries = 0;
+  let acknowledgements = 0;
   const client = {
     register: async () => ({}), close: () => {}, list: async () => [],
     send: async () => "sent", replies: async () => [],
     poll: async () => {
       await new Promise((resolve) => setTimeout(resolve, 1));
-      return acknowledged ? null : message;
+      if (acknowledged) return null;
+      deliveries++;
+      return message;
     },
-    ack: async (id: string) => { assert.equal(id, message.id); acknowledged = true; },
+    ack: async (id: string) => { assert.equal(id, message.id); acknowledged = true; acknowledgements++; },
     reply: async (id: string, text: string, key?: string) => {
       replies.push({ id, text, key });
+      if (mode === "reply-fails") throw new Error("PRIVATE_ERROR_CANARY");
       return "notice";
     },
   };
@@ -161,7 +167,11 @@ for (const notice of [false, true]) test(`unhandled inbound logs metadata withou
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
     assert.equal(acknowledged, true);
-    assert.equal(logs.length, 1, "one content-free unhandled kind log required");
+    assert.equal(acknowledgements, 1);
+    assert.equal(deliveries, 1, "failed notice must not redeliver the message");
+    assert.equal(logs.length, mode === "reply-fails" ? 2 : 1, "one content-free unhandled kind log required");
+    if (mode === "reply-fails") assert.equal(logs[1], "genie: not_supported reply failed");
+    assert.equal(logs.join("\n").includes("PRIVATE_ERROR_CANARY"), false);
     assert.match(logs[0], /unhandled kind/);
     assert.match(logs[0], /gateway@edge/);
     assert.match(logs[0], /direct-message/);
