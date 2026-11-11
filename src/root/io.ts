@@ -699,7 +699,20 @@ export class XmsgIo implements Io {
     }
 
     const parsed = parseMatrixForward(m.text);
-    if (!parsed) return;
+    if (!parsed) {
+      const origin = m.origin as { service?: unknown; node?: unknown } | null;
+      const sender = typeof origin?.service === "string" && typeof origin.node === "string"
+        ? `${origin.service}@${origin.node}` : "unknown";
+      this.log(`${this.service}: unhandled kind origin=${JSON.stringify(sender)} id=${JSON.stringify(m.id)} bytes=${Buffer.from(m.text).length}`);
+      // Do not bounce unsupported notices between services indefinitely.
+      if (m.inReplyTo) {
+        try {
+          if (JSON.parse(m.text)?.error === "not_supported") return;
+        } catch {}
+      }
+      await this.client.reply(m.id, JSON.stringify({ error: "not_supported" }), `unhandled:${m.id}`);
+      return;
+    }
     if (parsed.thread && "envelope" in parsed.item) {
       this.latestForwardByThread.set(parsed.thread, m.id);
     } else if (parsed.thread && !this.latestForwardByThread.has(parsed.thread)) {

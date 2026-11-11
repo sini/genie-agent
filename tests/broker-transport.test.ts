@@ -129,3 +129,48 @@ test("broker transport: timed-out send cannot act late and bridge worker continu
     await Promise.race([bridge.close(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("bridge close pinned")), 200))]);
   } finally { guard.close(); rmSync(directory, { recursive: true, force: true }); }
 });
+
+for (const notice of [false, true]) test(`unhandled inbound logs metadata without content; incoming notice=${notice}`, async () => {
+  const message = {
+    id: "direct-message",
+    origin: { service: "gateway", node: "edge" },
+    text: notice ? JSON.stringify({ error: "not_supported", detail: "PRIVATE_BODY_CANARY 🐈" }) : "PRIVATE_BODY_CANARY 🐈",
+    ...(notice ? { inReplyTo: "earlier-message" } : {}),
+  };
+  const logs: string[] = [];
+  const replies: { id: string; text: string; key?: string }[] = [];
+  let acknowledged = false;
+  const client = {
+    register: async () => ({}), close: () => {}, list: async () => [],
+    send: async () => "sent", replies: async () => [],
+    poll: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return acknowledged ? null : message;
+    },
+    ack: async (id: string) => { assert.equal(id, message.id); acknowledged = true; },
+    reply: async (id: string, text: string, key?: string) => {
+      replies.push({ id, text, key });
+      return "notice";
+    },
+  };
+  const io = new XmsgIo({ guardEnable: false, log: (line) => logs.push(line) }, client);
+  try {
+    await io.register();
+    const deadline = Date.now() + 1000;
+    while (!acknowledged && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    assert.equal(acknowledged, true);
+    assert.equal(logs.length, 1, "one content-free unhandled kind log required");
+    assert.match(logs[0], /unhandled kind/);
+    assert.match(logs[0], /gateway@edge/);
+    assert.match(logs[0], /direct-message/);
+    assert.match(logs[0], new RegExp(`bytes=${Buffer.byteLength(message.text)}`));
+    assert.equal(logs[0].includes("PRIVATE_BODY_CANARY"), false);
+    assert.equal(replies.length, notice ? 0 : 1);
+    if (notice) return;
+    assert.equal(replies[0].id, message.id);
+    assert.deepEqual(JSON.parse(replies[0].text), { error: "not_supported" });
+    assert.equal(replies[0].key, "unhandled:direct-message");
+  } finally { io.close(); }
+});
