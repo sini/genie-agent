@@ -59,14 +59,17 @@ Kubernetes, and the frontier tier stays on a workstation as the users `genie-pub
 ## 3. Components and flow
 
 ```
-Matrix ─► matrix-xmsg ─► guard-in ─► tier-1 (per thread) ──────────────────────────► guard-out ─► redactor ─► matrix-xmsg ─► Matrix
-          (tier tag)                   │  eval-launcher (clamps trust) → Job (gVisor)        ▲              (backstop)
-                                       │  skills, docs, recall ◄─ guard-in                    │
-                                       └─ escalate (🔍 / forced) ─► guard-in ─► xmsg ─► genie-expert@<tier> ─┘
+Matrix ─► matrix-xmsg ─► guard-in ─► tier-1 (per thread) ─► redactor ─► guard-out ─► matrix-xmsg ─► Matrix
+                                       │  eval-launcher (clamps trust) → Job (gVisor)
+                                       │  skills, docs, curated recall (direct)
+                                       │  archive replay ◄─ guard-in
+                                       └─ escalate (🔍 / forced) ─► guard-in ─► xmsg ─► genie-expert@<tier>
+                                                                                       └─► redactor ─► guard-out ─► reply
 ```
 
-Every answer passes through guard-out and the redactor, tier 1's as well as Opus's. Everything
-that re-enters a model context from storage or from an eval passes guard-in first.
+Every answer passes through the deterministic redactor before the configured guard-out review, tier 1's as
+well as the expert's. Disabling guard-out skips the model review, not redaction. Curated Hindsight recalls
+enter directly; replayed archive transcripts pass guard-in when inbound screening is enabled.
 
 - **genie-agent pod** (k8s, ns `matrix`): the containers `matrix-xmsg`, `xmsg` (leaf mode, X2) and
   `genie-agent`. In the last, the **supervisor** runs three kinds of pi process against ninfer:
@@ -99,8 +102,8 @@ that re-enters a model context from storage or from an eval passes guard-in firs
    returns `{verdict: allow|rewrite|reject, reason, cleaned_text}`. On reject, the bot posts a
    short refusal and tier 1 never sees the text.
 2. **Session.** The supervisor finds or creates the thread's tier-1 session. It seeds the session with skills, a recall from the genie hindsight bank and the
-   cleaned question. The recall passes guard-in before it seeds, because bank content is
-   attacker-derived text re-entering a fresh context.
+   cleaned question. Curated Hindsight banks are trusted recall sources and bypass guard-in;
+   replayed archive transcripts are screened separately before seeding when inbound guards are enabled.
 3. **Work.** Tier 1 may call `eval {repo, rev, attr, trusted}` and receives
    `{exit, stdout_tail, stderr_tail, limit_hit: none|oom|timeout|egress|unknown}`. The `trusted` argument
    is a **request**: the launcher runs a trusted Job only when the request is set **and** the
@@ -113,7 +116,7 @@ that re-enters a model context from storage or from an eval passes guard-in firs
    - the question touches gen/den internals beyond its skills;
    - the user asked for the expert.
      Otherwise a confidence below the threshold (initially conservative) escalates.
-5. **Reply.** guard-out runs, then the redactor, then the bot posts the answer with a confidence
+5. **Reply.** The redactor runs, then guard-out when enabled, then the bot posts the answer with a confidence
    line, its gaps and the controls. The controls are *defaulted, reversible*: reaction ✅
    accept, 🔍 deeper, and a text fallback `!deeper`. Only the asker or a trusted MXID may trigger
    🔍.
@@ -121,7 +124,7 @@ that re-enters a model context from storage or from an eval passes guard-in firs
    in a fresh session, before it leaves the pod: `draft` and `eval_transcript` carry
    attacker-influenced text (eval stdout). The supervisor then sends it over xmsg to the expert
    instance the thread's tier selects, `genie-expert@trusted` or `genie-expert@public`. Its answer
-   returns through guard-out and the redactor and is posted in the thread, marked "expert review".
+   returns through the redactor and then guard-out and is posted in the thread, marked "expert review".
    An expert reply that guard-out blocks is **dropped** from tier 1's context and from the thread
    transcript, and archived with a tier label only. It never enters a later package, draft or
    replay.
@@ -145,7 +148,7 @@ that re-enters a model context from storage or from an eval passes guard-in firs
 - An eval hits a limit: tier 1 reports which limit was hit, as a finding.
 
 **Latency (accepted cost, *defaulted, reversible*).** ninfer's pool is shared (`maxConcurrency = 4`) and prefill is serialized. A request spends three sessions in series (guard-in, tier 1,
-guard-out), plus guard-in passes over recalls and escalation packages, and a full-pool resume is
+guard-out), plus guard-in passes over replayed transcripts and escalation packages, and a full-pool resume is
 ≈138s of prefill at ~1,050 tok/s. Under concurrent threads this is a latency ceiling, not a safety
 issue; the queue in the first failure mode absorbs it.
 
@@ -227,8 +230,8 @@ prose.
      session (row 18). No link joins the two tiers' nodes;
    - no ssh agent, gh, kube, agenix or S3 identity. The expert archive's key is held by the
      archiver alone (§6).
-6. **Output:** guard-out runs, then a deterministic redactor (credential-shaped patterns plus a
-   hash match against known secret files), and only then does anything post. The shapes it
+6. **Output:** a deterministic redactor runs first (credential-shaped patterns plus a
+   hash match against known secret files), followed by guard-out when enabled, and only then does anything post. The shapes it
    matches are those of the credentials in scope: the Matrix access token, every pool token
    (`CLAUDE_CODE_OAUTH_TOKEN`, by shape only: the pod does not hold the pool tokens, so it has no
    hash of them), the `genie-bot` fine-grained PAT (`github_pat_…`), the xmsg leaf
@@ -268,7 +271,7 @@ Cilium CNP admits only `genie-agent → ninfer:8081` within the cluster.
 - **Action broker.** The only holder of a fine-grained token for the GitHub machine account
   `genie-bot`, scoped to gists and to public forks and PRs. No model ever holds it. Models emit a
   typed proposal, `{kind: gist|pr, repo, branch, files, title, body}`. Every proposal passes
-  guard-out and the redactor before the broker acts, and the broker records each action against
+  the redactor and then guard-out before the broker acts, and the broker records each action against
   its thread id.
 - **The PR loop.** The agent describes the fix in the thread and offers to open a PR. The asker's
   yes opens it. **The PR is itself the check**: the user reviews it and can close it if they
@@ -498,7 +501,7 @@ not depend on it (Q1), so the dispatcher does not either.
 - **Permanent archive** (Garage S3, bucket `genie-transcripts`). Every transcript is written on
   close and on GC, together with the guard verdicts, escalation packages and broker actions.
   Purpose: training data, and reviving an expired thread by replaying its transcript into a fresh
-  session. A replayed transcript passes guard-in before it seeds, as a recall does. The users'
+  session. A replayed transcript passes guard-in before it seeds when enabled; curated Hindsight recall does not. The users'
   messages are public and the work is ours, so no retention notice is needed.
 - **Expert transcripts** (gate F6). On bitstream, only the **archiver**, a root-run unit with no
   tier uid, holds an S3 key, and its key is write-only. It collects each tier's expired transcripts
@@ -593,8 +596,8 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 18. **Escalation guard:** an injection carried in `eval_transcript` is rejected or rewritten
     before the package leaves the pod. Mutant: the package sent unguarded.
 
-19. **Seed guard:** an injection in a recalled bank entry or a replayed transcript passes guard-in
-    before it seeds a session. Mutant: seed directly.
+19. **Seed guard:** an injection in a replayed archive transcript passes guard-in
+    before it seeds a session when enabled. Curated Hindsight bank entries bypass guard-in screening. Mutant: seed a transcript directly.
 
 20. **Admission:** nothing enters the genie hindsight bank or the support memory without a human
     approval. A deterministic check can refuse a candidate and cannot admit one, and no model
@@ -716,7 +719,7 @@ Each oracle has a RED-on-mutant run under `timeout`; a hang is not a RED.
 | F3 eval impurity                    | §5.2 layer 4: `--pure-eval`, empty `NIX_PATH` and registry, nothing from the thread state mounted; §6 splits thread state from thread store. Oracles 14, 22, 23; units E9, E10, E11.                                                    |
 | F4 mirror unfenced                  | §6: per-repo fetch-size cap, PVC quota with LRU eviction. Oracle 16; units P6, P7.                                                                                                                                                      |
 | F5 public admission unassigned      | §4 step 1: matrix-xmsg's admission option and per-line tier tag. Oracle 21; units M5c (admission), M5d (per-line tags).                                                                                                                 |
-| F6 bank as injection channel        | §4 steps 2 and 7, §6: admission needs a human approval, and deterministic checks only refuse; recalls and replays pass guard-in. Oracles 19, 20; units S6, H2, H0.                                                                      |
+| F6 bank as injection channel        | §4 steps 2 and 7, §6: admission needs a human approval, and deterministic checks only refuse; curated recalls enter directly, while archive replays pass guard-in when enabled. Oracles 19, 20; units S6, H2, H0.                       |
 | F7 credential shapes                | §5.2 layer 6 enumerates them; oracle 2 runs one case per shape. Unit S7.                                                                                                                                                                |
 | F8 RWO store contention             | §4 step 3, §5.2 layer 4: one eval in flight per thread. Oracle 15; unit E8.                                                                                                                                                             |
 | F9 missing oracles                  | (a) oracle 10; (b) oracle 12, unit S2's history class; (c) oracle 13, unit I3 (shipped by I2); (d) oracle 16.                                                                                                                           |
