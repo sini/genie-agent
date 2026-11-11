@@ -226,6 +226,12 @@ export function tier1Launch(o: {
     const worktreeMask = separateWorktreeRoot ? ["--tmpfs", worktreeRoot] : [];
     const agentDirContainsRoots =
       stateRoot.startsWith(`${agentDir}/`) || worktreeRoot.startsWith(`${agentDir}/`);
+    const modelsJsonPath = `${agentDir}/models.json`;
+    const agentBinds = [
+      "--bind", agentDir, agentDir,
+      ...(existsSync(modelsJsonPath) ? ["--ro-bind", modelsJsonPath, modelsJsonPath] : []),
+      ...(systemPromptPath.startsWith(`${agentDir}/`) && existsSync(systemPromptPath) ? ["--ro-bind", systemPromptPath, systemPromptPath] : []),
+    ];
 
     const bwrapArgs: string[] = [
       "--die-with-parent",
@@ -237,13 +243,13 @@ export function tier1Launch(o: {
       "--bind", "/proc", "/proc",
       "--tmpfs", "/tmp",
       ...(agentDirContainsRoots
-        ? ["--ro-bind", agentDir, agentDir]
+        ? agentBinds
         : []),
       ...(worktreeMaskFirst ? [...worktreeMask, ...stateMask] : [...stateMask, ...worktreeMask]),
       "--bind", sessionDir, sessionDir,
       ...(socketDir ? ["--ro-bind", socketDir, socketDir] : []),
       ...(!agentDirContainsRoots
-        ? ["--ro-bind", agentDir, agentDir]
+        ? agentBinds
         : []),
       "--bind", threadWorktree, threadWorktree,
       ...exports.application.flat(),

@@ -22,6 +22,7 @@ import { DEADLINE_NOTICE, guardIn, type Inbound, main, parseMatrixForward, REFUS
 import { configuredEval } from "../src/root/eval.ts";
 import { parseArgs } from "../src/root/main.ts";
 import { piAiPath } from "../src/tier1/custody.ts";
+import { usableBwrap } from "../src/isolation.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
 import { stubModel } from "./fixtures/supervisor/stub-model.ts";
 
@@ -730,8 +731,27 @@ test("custody: root refuses credential files inside exported read roots", () => 
   cfg.model.keyFile = new URL("../prompts/tier1.md", import.meta.url).pathname;
   writeFileSync(config, JSON.stringify(cfg));
   assert.throws(() => main(config, { intake: { next: async () => null }, post: { post: async () => {} }, guard, xmsg }), /credential file must be outside tier-1 exported roots/, "source exports must not expose a configured credential");
+  const customAgentDir = `${tmp}/custom-agent-dir`;
+  mkdirSync(customAgentDir, { recursive: true });
+  const agentCred = `${customAgentDir}/agent-credential`;
+  writeFileSync(agentCred, "credential-test");
+  cfg.tier1 = { ...cfg.tier1, sandbox: { agentDir: customAgentDir } };
+  cfg.model.keyFile = agentCred;
+  writeFileSync(config, JSON.stringify(cfg));
+  assert.throws(() => main(config, { intake: { next: async () => null }, post: { post: async () => {} }, guard, xmsg }), /credential file must be outside tier-1 exported roots/, "agentDir must not expose a configured credential");
 });
 test("oracle: main launches real pi against a stub model", async () => {
+  const piBin = process.env.PI ?? "pi";
+  const verOut = spawnSync(piBin, ["--version"], { encoding: "utf8" });
+  assert.equal(verOut.status, 0, `pi --version failed: ${verOut.stderr}`);
+  const [maj = 0, min = 0, pat = 0] = verOut.stdout.trim().split(".").map((n) => Number.parseInt(n, 10));
+  assert.ok(
+    maj > 1 || (maj === 1 && (min > 5 || (min === 5 && pat >= 0))),
+    `pi version floor >= 1.5.0 required for trust.json.lock regression check, got ${verOut.stdout.trim()}`,
+  );
+  if (process.platform === "linux") {
+    assert.ok(usableBwrap(), "usable bwrap is required on Linux so real pi runs inside the tier-1 bwrap sandbox");
+  }
   const credential = "root-model-test-canary";
   const model = await stubModel({ apiKey: credential });
   const piTmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-real-pi-test-`);
@@ -777,6 +797,10 @@ test("oracle: main launches real pi against a stub model", async () => {
     assert.ok(model.requests.length >= 2, `expected at least 2 model requests, got ${model.requests.length}`);
     assert.equal(model.requests[0]?.model, "m");
     assert.ok(model.authentications.every((auth) => auth === `Bearer ${credential}`));
+    assert.ok(
+      readdirSync(`${piTmp}/state/real_pi/session`).some((f) => f.endsWith(".jsonl")),
+      "real pi session file must be created",
+    );
     if (process.platform === "linux") {
       const pids = [realRoot.supervisor.pid(thread)!];
       for (const pid of pids) {
@@ -2916,7 +2940,7 @@ linuxHostTest("oracle GS2 (F1): main wraps pi in bwrap with /nix/store ro, /memo
 
   for (const f of ["model", "s3", "token"]) writeFileSync(`${gs2Tmp}/${f}-key`, "secret-credential-value\n");
 
-  const probeSource = `import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
+  const probeSource = `import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
 const arg = (flag) => process.argv[process.argv.indexOf(flag) + 1];
 const sessionDir = arg("--session-dir");
 const sessionId = arg("--session-id");
@@ -2932,6 +2956,15 @@ const tryWrite = (p) => {
   try {
     writeFileSync(p, "probe");
     try { unlinkSync(p); } catch {}
+    return "WRITABLE";
+  } catch (e) {
+    return e.code || "ERR";
+  }
+};
+const tryOpenWrite = (p) => {
+  try {
+    const fd = openSync(p, "w");
+    closeSync(fd);
     return "WRITABLE";
   } catch (e) {
     return e.code || "ERR";
@@ -3036,7 +3069,8 @@ process.stdin.on("data", async (chunk) => {
         clonedRepoWrite: clonedPath ? tryWrite(clonedPath + "/.gs2-probe") : "NO_CLONE",
         sessionWrite: tryWrite(sessionDir + "/probe-write.txt"),
         agentDirRead: modelsJson.ok,
-        agentDirWrite: tryWrite(agentDir + "/.gs2-probe"),
+        agentDirWrite: tryWrite(agentDir + "/trust.json.lock"),
+        agentModelsWrite: tryOpenWrite(agentDir + "/models.json"),
         ownStateRead: tryRead(ownStateFile),
         otherStateRead: tryRead(otherStateFile),
         runCredentials: tryReaddir("/run/credentials"),
@@ -3139,7 +3173,8 @@ process.stdin.on("end", () => process.exit(0));
     assert.equal(rep.clonedRepoWrite, "WRITABLE", "cloned worktree subdir is writable inside pi (GC1 OQ-1)");
     assert.equal(rep.sessionWrite, "WRITABLE", "thread session dir must be writable");
     assert.equal(rep.agentDirRead, true, "agentDir/models.json must be readable");
-    assert.equal(rep.agentDirWrite, "EROFS", "agentDir must be read-only");
+    assert.equal(rep.agentDirWrite, "WRITABLE", "agentDir must be writable for pi trust.json.lock");
+    assert.equal(rep.agentModelsWrite, "EROFS", "agentDir/models.json must be read-only");
     assert.equal(rep.ownStateRead.ok, false, "thread state.json outside session/ must be hidden");
     assert.equal(rep.otherStateRead.ok, false, "other threads' stateRoot entries must be hidden");
     assert.equal(rep.runCredentials.ok, false, "/run/credentials must be hidden");

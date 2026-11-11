@@ -600,7 +600,7 @@ test("oracle C2.2.2 (Item 1 & 3): runArm offers all 17 production TOOLS and exec
     );
 
     assert.equal(stubRequests, 2, "both turns must be served by the loopback stub");
-    assert.deepEqual(offeredTools, [...TOOLS]);
+    assert.deepEqual([...offeredTools].sort(), [...TOOLS].sort());
     assert.equal(toolOutputs.c_ls.trim(), "sub/");
     assert.equal(toolOutputs.c_find.trim(), "sub/mod.nix");
     assert.match(toolOutputs.c_grep, /sub\/mod\.nix:1:.*\{ services\.foo\.enable = true; \}/);

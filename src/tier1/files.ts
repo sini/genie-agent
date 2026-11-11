@@ -1,11 +1,15 @@
-import { accessSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUILTINS, confine, confineWrite, type Config, DEFAULT_MAX_SCRATCH_BYTES, DEFAULT_MAX_SCRATCH_FILES } from "./index.ts";
 import { errors } from "./schema.ts";
 
 export function piToolsPath(piAi: string): string {
-  return resolve(dirname(piAi), "../../../..", "dist/index.js");
+  const monorepo = piAi.includes("/dist/bundle/chunks/")
+    ? resolve(dirname(piAi), "../../..")
+    : resolve(dirname(piAi), "../../../..");
+  const bundled = `${monorepo}/dist/bundle/index.js`;
+  return existsSync(bundled) ? bundled : `${monorepo}/dist/index.js`;
 }
 
 // The SDK does parsing, image handling, search, and edit matching; root owns paths and writes.

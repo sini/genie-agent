@@ -1,5 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { dirname, resolve } from "node:path";
@@ -10,16 +10,33 @@ import type { Host } from "./index.ts";
 import type { PublicModel } from "./socket.ts";
 import type { RootFileService } from "./files.ts";
 
+function bundleVirtualModules(monorepo: string): string | undefined {
+  const chunksDir = `${monorepo}/dist/bundle/chunks`;
+  if (!existsSync(chunksDir)) return undefined;
+  const f = readdirSync(chunksDir).find((name) => name.startsWith("virtual-modules-") && name.endsWith(".js"));
+  return f ? `${chunksDir}/${f}` : undefined;
+}
+
 // Resolve from the configured/shipped pi, never a second ambient pi installation.
 export function piAiPath(pi: string): string {
-  if (process.env.GENIE_PI_AI) return process.env.GENIE_PI_AI;
+  if (process.env.GENIE_PI_AI) {
+    const envPath = process.env.GENIE_PI_AI;
+    if (envPath.endsWith("/node_modules/@earendil-works/pi-ai/dist/compat.js")) {
+      const bundled = bundleVirtualModules(resolve(dirname(envPath), "../../../.."));
+      if (bundled) return bundled;
+    }
+    return envPath;
+  }
   let bin = pi;
   if (!pi.includes("/")) {
     const found = (process.env.PATH ?? "").split(":").map((d) => `${d}/${pi}`).find(existsSync);
     if (found) bin = found;
   }
   try {
-    const p = resolve(dirname(realpathSync(bin)), "../lib/node_modules/pi-monorepo/node_modules/@earendil-works/pi-ai/dist/compat.js");
+    const monorepo = resolve(dirname(realpathSync(bin)), "../lib/node_modules/pi-monorepo");
+    const bundled = bundleVirtualModules(monorepo);
+    if (bundled) return bundled;
+    const p = `${monorepo}/node_modules/@earendil-works/pi-ai/dist/compat.js`;
     if (existsSync(p)) return p;
     return createRequire(pathToFileURL(realpathSync(bin))).resolve("@earendil-works/pi-ai/compat");
   } catch { throw new Error("cannot resolve the configured pi model SDK"); }
@@ -92,7 +109,8 @@ export class Custody {
         socket.end(`${JSON.stringify({ ok: this.session(thread, request) })}\n`);
       } else if (request.method === "model") {
         if (!request.context || !Array.isArray(request.context.messages)) throw new Error("invalid model context");
-        const sdk = await (this.sdk ??= import(pathToFileURL(typeof this.options.sdk === "function" ? this.options.sdk() : this.options.sdk).href));
+        const rawSdk = await (this.sdk ??= import(pathToFileURL(typeof this.options.sdk === "function" ? this.options.sdk() : this.options.sdk).href));
+        const sdk = rawSdk.VIRTUAL_MODULES?.["@earendil-works/pi-ai/compat"] ?? rawSdk;
         const configured = this.options.model;
         const model = {
           id: configured.id, name: configured.id, api: configured.api, provider: "genie", baseUrl: configured.baseUrl,

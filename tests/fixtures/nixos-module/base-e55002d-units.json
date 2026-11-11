@@ -10,22 +10,22 @@
       "environment": {
         "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
         "HOME": "/var/lib/genie-agent",
-        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
-        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
-        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-pi-coding-agent-1.5.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -96,26 +96,26 @@
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@public.service"
@@ -205,26 +205,26 @@
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@trusted.service"
@@ -313,15 +313,15 @@
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -387,27 +387,27 @@
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -455,7 +455,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",
@@ -525,27 +525,27 @@
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -593,7 +593,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",
@@ -667,22 +667,22 @@
       "environment": {
         "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
         "HOME": "/var/lib/genie-agent",
-        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
-        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
-        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-pi-coding-agent-1.5.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -753,15 +753,15 @@
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -831,22 +831,22 @@
       "environment": {
         "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
         "HOME": "/var/lib/genie-agent",
-        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
-        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
-        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-pi-coding-agent-1.5.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -914,26 +914,26 @@
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@public.service"
@@ -1019,26 +1019,26 @@
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@trusted.service"
@@ -1123,15 +1123,15 @@
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1197,27 +1197,27 @@
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1265,7 +1265,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",
@@ -1331,27 +1331,27 @@
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1399,7 +1399,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",
@@ -1468,22 +1468,22 @@
       "environment": {
         "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
         "HOME": "/var/lib/genie-agent",
-        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
-        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
-        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-pi-coding-agent-1.5.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1556,22 +1556,22 @@
       "environment": {
         "GENIE_REPO_ROOT": "/nix/store/<HASH>-genie-root-src-0.1.0/lib/genie-agent",
         "HOME": "/var/lib/genie-agent",
-        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
-        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.0.4/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-pi-coding-agent-1.0.4/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
-        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt",
+        "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
+        "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
+        "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-pi-coding-agent-1.0.4",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-pi-coding-agent-1.5.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1641,26 +1641,26 @@
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@public.service"
@@ -1746,26 +1746,26 @@
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
         "genie-herdr@trusted.service"
@@ -1850,15 +1850,15 @@
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000"
       },
       "path": [
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1924,27 +1924,27 @@
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-public",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -1992,7 +1992,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-public server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",
@@ -2055,27 +2055,27 @@
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
         "HOME": "/var/lib/genie-agent",
-        "PATH": "/nix/store/<HASH>-herdr-0.9.3/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.12.0/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.7/bin:/nix/store/<HASH>-git-2.55.0/bin:/nix/store/<HASH>-nix-2.34.8/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-bash-interactive-5.3p15/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.11/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-261.3/bin:/nix/store/<HASH>-herdr-0.9.3/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.12.0/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.7/sbin:/nix/store/<HASH>-git-2.55.0/sbin:/nix/store/<HASH>-nix-2.34.8/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-bash-interactive-5.3p15/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.11/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-261.3/sbin",
+        "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "ZDOTDIR": "/nix/store/<HASH>-genie-expert-zdotdir"
       },
       "path": [
-        "/nix/store/<HASH>-herdr-0.9.3",
+        "/nix/store/<HASH>-herdr-0.9.5",
         "/nix/store/<HASH>-genie-claude-shim-trusted",
-        "/nix/store/<HASH>-bubblewrap-0.12.0",
+        "/nix/store/<HASH>-bubblewrap-0.13.1",
         "/nix/store/<HASH>-xmsg",
         "/nix/store/<HASH>-ripgrep-15.2.0",
-        "/nix/store/<HASH>-python3-3.14.7",
-        "/nix/store/<HASH>-git-2.55.0",
-        "/nix/store/<HASH>-nix-2.34.8",
-        "/nix/store/<HASH>-coreutils-9.11",
-        "/nix/store/<HASH>-bash-interactive-5.3p15",
+        "/nix/store/<HASH>-python3-3.14.10",
+        "/nix/store/<HASH>-git-2.56.0",
+        "/nix/store/<HASH>-nix-2.34.9",
+        "/nix/store/<HASH>-coreutils-9.12",
+        "/nix/store/<HASH>-bash-interactive-5.3p20",
         "/nix/store/<HASH>-claude",
-        "/nix/store/<HASH>-coreutils-9.11",
+        "/nix/store/<HASH>-coreutils-9.12",
         "/nix/store/<HASH>-findutils-4.11.0",
         "/nix/store/<HASH>-gnugrep-3.12",
         "/nix/store/<HASH>-gnused-4.10",
-        "/nix/store/<HASH>-systemd-261.3"
+        "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [],
       "serviceConfig": {
@@ -2123,7 +2123,7 @@
         "Delegate": false,
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
-        "ExecStart": "/nix/store/<HASH>-herdr-0.9.3/bin/herdr --session genie-trusted server",
+        "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
         "ExecStartPre": null,
         "InaccessiblePaths": [
           "-/run/credentials",

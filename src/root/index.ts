@@ -133,7 +133,7 @@ export interface Config {
   pi: string;
   // Tier 1's configured pi model API.
   model: { baseUrl: string; api: string; id: string; keyFile: string };
-  tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string }; executor?: ContainerExecutor };
+  tier1: Omit<Tier1Config, "root"> & { sandbox?: { bwrap?: string; agentDir?: string }; executor?: ContainerExecutor };
   // Inbound guard-in screening switch (G11; default true).
   guard?: { enable?: boolean };
   // Optional guard-in screening switch for `git` read outputs (GC1 OQ-2; default false).
@@ -363,8 +363,9 @@ export function main(
 ) {
   const c: Config = JSON.parse(readFileSync(configFile, "utf8"));
   const { guardEnable, guardOutEnable } = validateRootConfig(c);
-  const readOnlyBinds = tier1ReadOnlyBinds({ pi: c.pi, memoryRoot: c.tier1.memoryRoot });
-  const exportedRoots = [c.stateRoot, c.mirror.worktreeRoot, ...[...readOnlyBinds.system, ...readOnlyBinds.application].map((bind) => bind[1])].filter((p): p is string => Boolean(p)).map((p) => existsSync(p) ? realpathSync(p) : resolve(p));
+  const agentDir = c.tier1.sandbox?.agentDir ?? mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
+  const readOnlyBinds = tier1ReadOnlyBinds({ pi: c.pi, memoryRoot: c.tier1.memoryRoot, agentDir });
+  const exportedRoots = [c.stateRoot, c.mirror.worktreeRoot, agentDir, c.tier1.sandbox?.agentDir, ...[...readOnlyBinds.system, ...readOnlyBinds.application].map((bind) => bind[1])].filter((p): p is string => Boolean(p)).map((p) => existsSync(p) ? realpathSync(p) : resolve(p));
   const configuredCredentials: Array<string | null | undefined> = [
     c.model.keyFile,
     c.broker?.tokenFile,
@@ -471,7 +472,6 @@ export function main(
     },
   });
 
-  const agentDir = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-pi-`);
   const { baseUrl, api, id, keyFile } = c.model;
   const { executor, sandbox: _sandbox, ...tier1Config } = c.tier1;
   const configForThread = (thread: string) => {

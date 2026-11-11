@@ -546,7 +546,6 @@ let
     b4_ro = {
         "nix_store": check_ro_create("/nix/store/.gv2-probe-w"),
         "memory_dir": check_ro_create("/memory/.gv2-probe-w"),
-        "agent_dir": check_ro_create(f"{agent_dir}/.gv2-probe-w"),
         "agent_models": check_ro_existing(f"{agent_dir}/models.json"),
         "state_root": check_ro_create("/var/lib/genie-agent/state/.gv2-probe-w"),
         "worktrees_root": check_ro_create("/var/lib/genie-agent/worktrees/.gv2-probe-w"),
@@ -554,6 +553,7 @@ let
     b4_wt_rw = (
         check_ro_create(f"/var/lib/genie-agent/worktrees/{tid_a}/.gv2-probe-w") == "WRITABLE"
         and check_ro_existing(f"{clone_path}/README.md") == "WRITABLE"
+        and check_ro_create(f"{agent_dir}/.gv2-probe-w") == "WRITABLE"
     )
     sess_probe = f"/var/lib/genie-agent/state/{tid_a}/session/.gv2-probe-ok"
     try:
@@ -743,8 +743,8 @@ let
         "      command: piBin,\n      args: [...fixed, ...extraArgs, ...apiKeyArgs],";
     m-rw-worktree-or-agentdir =
       mutateRootSrc "m-rw-worktree-or-agentdir" "src/tier1/launch.ts"
-        ''["--ro-bind", agentDir, agentDir]''
-        ''["--bind", agentDir, agentDir]'';
+        ''["--ro-bind", modelsJsonPath, modelsJsonPath]''
+        ''["--bind", modelsJsonPath, modelsJsonPath]'';
     m-expose-state-root =
       mutateRootSrc "m-expose-state-root" "src/tier1/launch.ts"
         ''const stateMask = ["--tmpfs", stateRoot];''

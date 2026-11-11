@@ -24,7 +24,19 @@
         ];
       modelSdk =
         pkgs:
-        "${pkgs.pi-coding-agent}/lib/node_modules/pi-monorepo/node_modules/@earendil-works/pi-ai/dist/compat.js";
+        let
+          monorepo = "${pkgs.pi-coding-agent}/lib/node_modules/pi-monorepo";
+          chunksDir = "${monorepo}/dist/bundle/chunks";
+          chunkFiles =
+            if builtins.pathExists chunksDir then builtins.attrNames (builtins.readDir chunksDir) else [ ];
+          virtualMods = nixpkgs.lib.findFirst (
+            f: nixpkgs.lib.hasPrefix "virtual-modules-" f && nixpkgs.lib.hasSuffix ".js" f
+          ) null chunkFiles;
+        in
+        if virtualMods != null then
+          "${chunksDir}/${virtualMods}"
+        else
+          "${monorepo}/node_modules/@earendil-works/pi-ai/dist/compat.js";
       forAllCheckSystems =
         rootPackages: f:
         forAllSystems (
@@ -1924,11 +1936,25 @@
                 cp -r . $TMPDIR/mut-rw-agentdir
                 chmod -R u+w $TMPDIR/mut-rw-agentdir
                 substituteInPlace $TMPDIR/mut-rw-agentdir/src/tier1/launch.ts \
-                  --replace-fail '["--ro-bind", agentDir, agentDir]' '["--bind", agentDir, agentDir]'
+                  --replace-fail '["--ro-bind", modelsJsonPath, modelsJsonPath]' '["--bind", modelsJsonPath, modelsJsonPath]'
                 if (cd $TMPDIR/mut-rw-agentdir && node --test --test-force-exit --test-name-pattern='oracle GS2 \(F1\)' tests/root.test.ts >/dev/null 2>&1); then
                   echo "mutant M-rw-worktree-or-agentdir survived in root" >&2
                   exit 1
                 fi
+                cp -r . $TMPDIR/mut-ro-agentdir
+                chmod -R u+w $TMPDIR/mut-ro-agentdir
+                substituteInPlace $TMPDIR/mut-ro-agentdir/src/tier1/launch.ts \
+                  --replace-fail '"--bind", agentDir, agentDir,' '"--ro-bind", agentDir, agentDir,'
+                if (cd $TMPDIR/mut-ro-agentdir && node --test --test-force-exit --test-name-pattern='oracle: main launches real pi against a stub model' tests/root.test.ts >$TMPDIR/mut-ro-agentdir.log 2>&1); then
+                  echo "mutant M-ro-agentdir survived in root" >&2
+                  exit 1
+                fi
+                grep -q 'EROFS: read-only file system, mkdir .*trust\.json\.lock' $TMPDIR/mut-ro-agentdir.log || {
+                  echo "mutant M-ro-agentdir did not fail with trust.json.lock EROFS:" >&2
+                  cat $TMPDIR/mut-ro-agentdir.log >&2
+                  exit 1
+                }
+                echo "expected RED (mut-ro-agentdir): $(grep -m1 'EROFS: read-only file system, mkdir .*trust\.json\.lock' $TMPDIR/mut-ro-agentdir.log)"
                 cp -r . $TMPDIR/mut-expose-state
                 chmod -R u+w $TMPDIR/mut-expose-state
                 substituteInPlace $TMPDIR/mut-expose-state/src/tier1/launch.ts \

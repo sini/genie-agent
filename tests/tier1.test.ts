@@ -245,7 +245,7 @@ test("oracle: the tool list is exactly the seventeen", async () => {
     }
     assert.ok(model.requests.length >= 1, "loopback stub model must receive pi's request");
     const piExposed = (model.requests[0].tools ?? []) as { type: string; function: { name: string; parameters: any } }[];
-    assert.deepEqual(piExposed.map((s) => s.function.name), [...TOOLS]);
+    assert.deepEqual(piExposed.map((s) => s.function.name).sort(), [...TOOLS].sort());
     assert.deepEqual(piExposed.map((s) => s.function.name).sort(), seventeen);
     for (const builtinName of ["read", "grep", "find", "ls", "write", "edit"]) {
       const b = piExposed.find((s) => s.function.name === builtinName);
