@@ -512,7 +512,7 @@ not depend on it (Q1), so the dispatcher does not either.
 
 ## 7. Repository
 
-`github:sini/genie-agent`, public, cloned at `~/Documents/repos/sini/genie-agent`.
+`github:json64-dev/genie-agent`, public, cloned at `~/Documents/repos/sini/genie-agent`.
 
 ```
 prompts/   guard-in.md  guard-out.md  tier1.md  distiller.md
@@ -521,7 +521,7 @@ schemas/   verdict.json  draft.json  escalation.json  eval-request.json  eval-re
            proposal.json  thread-state.json
 support-memory/   the curated memory genie-expert@public reads (admitted by merged PR)
 src/       supervisor, eval-launcher, escalation client, redactor   (TypeScript: pi's extension language)
-nix/       package + OCI image (ghcr.io/sini/genie-agent)
+nix/       package + OCI image (ghcr.io/json64-dev/genie-agent)
 ci/        nix-unit + the gen-harness evaluators
 ```
 

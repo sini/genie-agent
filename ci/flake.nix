@@ -6,7 +6,7 @@
     # snapshot of the tree (den-hoag-lbtnv D1). So `outputs` below applies `../flake.nix`'s own
     # `outputs` to the `nixpkgs` declared here, line for line as `../flake.nix` declares it.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-    xmsg.url = "github:sini/xmsg/3aa04570cf9768164bd7c82b8ffca8002591bf87";
+    xmsg.url = "github:json64-dev/xmsg/3aa04570cf9768164bd7c82b8ffca8002591bf87";
     xmsg.inputs.nixpkgs.follows = "nixpkgs";
   };
 

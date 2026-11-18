@@ -59,7 +59,7 @@ the four existing corpora. The live evaluation harness accepts explicit `--model
 normalization and framing. `python3 tests/guard-scope-mutants.py <artifact-directory>` runs
 source mutations against named structural assertions without model inference.
 
-Published as an OCI image at `ghcr.io/sini/genie-guard` (`packages.<linux>.image`).
+Published as an OCI image at `ghcr.io/json64-dev/genie-guard` (`packages.<linux>.image`).
 
 - It accepts message text that is one guard-in envelope, `{source, history, content}`, as
   `prompts/guard-in.md` describes it (`source` in `message`, `eval_stdout`, `recall`, `web`).
@@ -142,7 +142,7 @@ configured failures never select the local fallback.
 
 ## Tier-1 OCI image
 
-`packages.<linux>.root-image` builds `ghcr.io/sini/genie-root`. The existing
+`packages.<linux>.root-image` builds `ghcr.io/json64-dev/genie-root`. The existing
 `packages.<linux>.image` output remains the guard image. Both support the flake's
 Linux architectures.
 

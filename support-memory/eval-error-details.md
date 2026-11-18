@@ -15,4 +15,4 @@ genie reproduces a problem by evaluating `{repo, rev, attr}`, so a question it c
 
 Ask for whichever is missing before guessing.
 
-Source: `github:sini/genie-agent`, `docs/design.md` §4 step 3.
+Source: `github:json64-dev/genie-agent`, `docs/design.md` §4 step 3.

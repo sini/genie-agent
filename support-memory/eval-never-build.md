@@ -13,4 +13,4 @@ evaluation error, but not a build failure, and a configuration that needs import
 (`oom`, `timeout` or `egress`), genie reports which one, as a finding. It never asks a user for a
 secret; where a secret blocks an eval it stubs it or says what it could not check.
 
-Source: `github:sini/genie-agent`, `README.md`; `docs/design.md` §5.2 layer 4 and §5.7.
+Source: `github:json64-dev/genie-agent`, `README.md`; `docs/design.md` §5.2 layer 4 and §5.7.

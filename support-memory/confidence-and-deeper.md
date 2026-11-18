@@ -12,4 +12,4 @@ escalates to the expert, whose reply is marked "expert review". The reactions: �
 answer, and 🔍 (or the text `!deeper`) asks for a deeper look. Only the asker or a trusted user can
 trigger 🔍.
 
-Source: `github:sini/genie-agent`, `docs/design.md` §4 steps 4 to 6.
+Source: `github:json64-dev/genie-agent`, `docs/design.md` §4 steps 4 to 6.

@@ -187,7 +187,7 @@
       guardImage =
         pkgs:
         pkgs.dockerTools.buildLayeredImage {
-          name = "ghcr.io/sini/genie-guard";
+          name = "ghcr.io/json64-dev/genie-guard";
           tag = "latest";
           contents = [
             pkgs.cacert
@@ -216,7 +216,7 @@
           '';
         in
         pkgs.dockerTools.buildLayeredImage {
-          name = "ghcr.io/sini/genie-root";
+          name = "ghcr.io/json64-dev/genie-root";
           tag = "latest";
           contents = [
             root
