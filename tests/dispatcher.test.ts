@@ -23,6 +23,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer as httpServer } from "node:http";
 import { tmpdir } from "node:os";
 import {
   Delivery,
@@ -37,6 +38,7 @@ import {
 } from "../src/dispatcher/index.ts";
 import { CliHerdr, type Herdr, type HerdrAgent, type StartSpec } from "../src/dispatcher/herdr.ts";
 import { config as dispatcherConfig, startDispatcher } from "../src/dispatcher/main.ts";
+import { checkSessionPresence, SocketXmsg } from "../src/dispatcher/xmsg.ts";
 
 // A herdr server that outlives the dispatcher, recording every call.
 class FakeHerdr implements Herdr {
@@ -147,6 +149,42 @@ test("a pane whose session xmsg no longer lists is closed and parked on restart"
   const restarted = await Dispatcher.open(o);
   assert.deepEqual(herdr.closes, [t.pane]);
   assert.equal(restarted.journal.threads.t.state, "parked");
+});
+
+test("a live pane whose session label changed falls back to unfiltered list, stays present, and is not closed", async () => {
+  const { herdr, o } = setup();
+  const t = await (await Dispatcher.open(o)).escalate("t");
+  const dir = mkdtempSync(`${tmpdir()}/xmsg-relabel-`);
+  const urls: string[] = [];
+  const sockets = new Set<any>();
+  const recipients = [{ address: `${t.session}@node`, label: "relabelled-session" }];
+  const http = httpServer((req: any, res: any) => {
+    urls.push(req.url);
+    const parsed = new URL(req.url, "http://localhost");
+    const name = parsed.searchParams.get("name");
+    const filtered = name === null ? recipients : recipients.filter((r) => r.label === name);
+    res.end(JSON.stringify({ recipients: filtered, total: filtered.length, truncated: false }));
+  });
+  http.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => http.listen(`${dir}/http.sock`, r));
+  const socketXmsg = new SocketXmsg(dir, "genie-expert");
+  try {
+    assert.equal(await checkSessionPresence(socketXmsg, t.session, t.name), "present");
+    const restarted = await Dispatcher.open({ ...o, xmsg: socketXmsg });
+    assert.equal(restarted.journal.threads.t.state, "live");
+    assert.deepEqual(herdr.closes, []);
+    assert.deepEqual(urls, [
+      `/v1/recipients?kind=instance&name=${t.name}`,
+      "/v1/recipients?kind=instance",
+      `/v1/recipients?kind=instance&name=${t.name}`,
+      "/v1/recipients?kind=instance",
+    ]);
+  } finally {
+    socketXmsg.close();
+    for (const s of sockets) s.destroy();
+    (http as any).closeAllConnections?.();
+    http.close();
+  }
 });
 
 test("the journal is replaced whole, at 0600, with no temporary left", async () => {

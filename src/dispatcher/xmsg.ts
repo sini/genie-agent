@@ -24,11 +24,17 @@ export async function checkSessionPresence(
   name?: string,
 ): Promise<SessionPresence> {
   if (x.listDetailed) {
-    const { sessions, truncated } = await x.listDetailed(name);
-    if (sessions.includes(sessionId)) return "present";
-    return truncated ? "unknown" : "absent";
+    let truncated = false;
+    if (name !== undefined) {
+      const named = await x.listDetailed(name);
+      if (named.sessions.includes(sessionId)) return "present";
+      truncated = named.truncated;
+    }
+    const all = await x.listDetailed();
+    if (all.sessions.includes(sessionId)) return "present";
+    return all.truncated || truncated ? "unknown" : "absent";
   }
-  const sessions = await x.list(name);
+  const sessions = await x.list();
   return sessions.includes(sessionId) ? "present" : "absent";
 }
 
