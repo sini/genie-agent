@@ -19,6 +19,7 @@ import {
   type Options,
   type XmsgClient,
 } from "../src/dispatcher/index.ts";
+import { checkSessionPresence } from "../src/dispatcher/xmsg.ts";
 import type { Herdr, HerdrAgent, StartSpec } from "../src/dispatcher/herdr.ts";
 import { errors as schemaErrors, load as loadSchema } from "../src/tier1/schema.ts";
 
@@ -484,6 +485,65 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
     c.close();
     for (const s of sockets) s.destroy();
     for (const s of [reg, agent]) s.close();
+    (http as any).closeAllConnections?.();
+    http.close();
+  }
+});
+
+test("SocketXmsg finds a session by name past the 50-item cap among 60 instances", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/xmsg-cap-`);
+  const urls: string[] = [];
+  const targetUuid = "55555555-5555-4555-8555-555555555559";
+  const targetName = "genie-target";
+  const all = Array.from({ length: 60 }, (_, i) =>
+    i === 59
+      ? { address: `${targetUuid}@node`, label: targetName }
+      : { address: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}@node`, label: `inst-${i}` },
+  );
+  const sockets = new Set<any>();
+  const http = httpServer((req: any, res: any) => {
+    urls.push(req.url);
+    const parsed = new URL(req.url, "http://localhost");
+    const name = parsed.searchParams.get("name");
+    const filtered = name === null ? all : all.filter((r) => r.label === name);
+    const capped = filtered.slice(0, 50);
+    res.end(JSON.stringify({ recipients: capped, total: filtered.length, truncated: filtered.length > 50 }));
+  });
+  http.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => http.listen(`${dir}/http.sock`, r));
+  const c = new SocketXmsg(dir, "genie-expert");
+  try {
+    assert.equal(await checkSessionPresence(c, targetUuid, targetName), "present");
+    assert.deepEqual(urls, [`/v1/recipients?kind=instance&name=${targetName}`]);
+  } finally {
+    c.close();
+    for (const s of sockets) s.destroy();
+    (http as any).closeAllConnections?.();
+    http.close();
+  }
+});
+
+test("truncated /v1/recipients response without the session is treated as unknown, never absent", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/xmsg-trunc-`);
+  const targetUuid = "66666666-6666-4666-8666-666666666666";
+  const sockets = new Set<any>();
+  const http = httpServer((_req: any, res: any) => {
+    res.end(
+      JSON.stringify({
+        recipients: [{ address: "00000000-0000-4000-8000-000000000000@node", label: "other" }],
+        total: 60,
+        truncated: true,
+      }),
+    );
+  });
+  http.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => http.listen(`${dir}/http.sock`, r));
+  const c = new SocketXmsg(dir, "genie-expert");
+  try {
+    assert.equal(await checkSessionPresence(c, targetUuid, "genie-missing"), "unknown");
+  } finally {
+    c.close();
+    for (const s of sockets) s.destroy();
     (http as any).closeAllConnections?.();
     http.close();
   }

@@ -51,7 +51,7 @@ export {
   type XmsgClient,
   type XmsgSessions,
 } from "./xmsg.ts";
-import type { XmsgSessions } from "./xmsg.ts";
+import { checkSessionPresence, type XmsgSessions } from "./xmsg.ts";
 
 export interface TokenRef {
   id: string;
@@ -120,11 +120,13 @@ export class Dispatcher {
       }
     }
     const panes = new Set((await o.herdr.list()).map((a) => a.pane));
-    const sessions = new Set(await o.xmsg.list());
     for (const t of Object.values(d.journal.threads)) {
       if (t.state !== "live") continue;
-      if (t.pane !== null && panes.has(t.pane) && sessions.has(t.session)) continue;
-      if (t.pane !== null && panes.has(t.pane)) await o.herdr.close(t.pane);
+      if (t.pane !== null && panes.has(t.pane)) {
+        const presence = await checkSessionPresence(o.xmsg, t.session, t.name);
+        if (presence !== "absent") continue;
+        await o.herdr.close(t.pane);
+      }
       t.state = "parked";
       t.pane = null;
     }

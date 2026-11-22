@@ -5,9 +5,31 @@ import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import process from "node:process";
 
+export type SessionPresence = "present" | "absent" | "unknown";
+
+export interface XmsgRecipientList {
+  sessions: string[];
+  truncated: boolean;
+}
+
 // The live Claude sessions on the tier's xmsg instance, by sessionId.
 export interface XmsgSessions {
-  list(): Promise<string[]>;
+  list(name?: string): Promise<string[]>;
+  listDetailed?(name?: string): Promise<XmsgRecipientList>;
+}
+
+export async function checkSessionPresence(
+  x: XmsgSessions,
+  sessionId: string,
+  name?: string,
+): Promise<SessionPresence> {
+  if (x.listDetailed) {
+    const { sessions, truncated } = await x.listDetailed(name);
+    if (sessions.includes(sessionId)) return "present";
+    return truncated ? "unknown" : "absent";
+  }
+  const sessions = await x.list(name);
+  return sessions.includes(sessionId) ? "present" : "absent";
 }
 
 export interface Inbound {
@@ -176,13 +198,19 @@ export class SocketXmsg implements XmsgClient {
     });
   }
 
-  async list(): Promise<string[]> {
-    const r = await this.http("/v1/recipients?kind=instance");
+  async listDetailed(name?: string): Promise<XmsgRecipientList> {
+    const query = name === undefined ? "kind=instance" : `kind=instance&name=${encodeURIComponent(name)}`;
+    const r = await this.http(`/v1/recipients?${query}`);
     const recipients: { address: string }[] = r.recipients ?? [];
-    return recipients.flatMap((s) => {
+    const sessions = recipients.flatMap((s) => {
       const bare = s.address.split("@")[0];
       return bare === s.address ? [s.address] : [s.address, bare];
     });
+    return { sessions, truncated: r.truncated === true };
+  }
+
+  async list(name?: string): Promise<string[]> {
+    return (await this.listDetailed(name)).sessions;
   }
 
   async replies(id: string, waitMs: number): Promise<string[]> {

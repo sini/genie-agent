@@ -4,7 +4,7 @@
 // reply, relayed as the dispatcher's own, ends the turn. Under D1b's park predicate, pane close
 // parks idle threads, and 96h GC hands expired transcripts to the archiver (D3).
 import type { Dispatcher } from "./index.ts";
-import { XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
+import { checkSessionPresence, XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
 import { THREAD_ID_RE, type Outstanding, type Thread } from "./journal.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import { DispatcherGc } from "./gc.ts";
@@ -254,7 +254,7 @@ export class Delivery {
     const until = this.o.now() + this.o.readyTimeoutMs;
     const maxPolls = Math.max(1, Math.ceil(this.o.readyTimeoutMs / Math.max(1, this.o.readyPollMs)));
     for (let polls = 0; !this.stopped && polls <= maxPolls; polls++) {
-      if ((await this.x.list()).includes(t.session)) return true;
+      if ((await checkSessionPresence(this.x, t.session, t.name)) !== "absent") return true;
       if (this.o.now() >= until) return false;
       await sleep(this.o.readyPollMs);
     }
