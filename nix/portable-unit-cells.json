@@ -51,13 +51,23 @@
     "custody: actual packaged pi streams and round-trips a Host tool through root"
   ],
   "tests/delivery.test.ts": [
-    "oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered"
+    "oracle 28: a message to a parked thread is buffered, delivered once xmsg lists the resumed uuid, and answered",
+    "xmsg endpoints: per-socket precedence and explicit directory compatibility",
+    "xmsg endpoints: one bounded doctor probe caches usable nonzero-health JSON",
+    "xmsg endpoints: missing CLI falls back once without leaking errors",
+    "xmsg endpoints: old doctor legacy fallback retains higher-priority pins",
+    "xmsg endpoints: refusal and unsafe reports never route to legacy",
+    "xmsg endpoints: bounded probe failures are cached and do not expose output",
+    "xmsg endpoints: leaf registration uses its reported path without sibling guessing",
+    "xmsg endpoints: unsafe explicit pins and absent legacy runtime refuse",
+    "the socket client speaks X9 on register.sock, attested sends on agent.sock and http.sock reads"
   ],
   "tests/dispatcher-gc.test.ts": [
     "oracle 26: never parked with a message outstanding or in buffer"
   ],
   "tests/dispatcher.test.ts": [
-    "a first escalation launches a minted uuid under its token's config directory"
+    "a first escalation launches a minted uuid under its token's config directory",
+    "dispatcher socket flags do not require XDG runtime"
   ],
   "tests/distiller.test.ts": [
     "Oracle 20 cell 1: the genie root's bank client has no retain (recall-only)"
@@ -102,7 +112,8 @@
     "every valid verdict-out fixture parses to itself"
   ],
   "tests/guard-service.test.ts": [
-    "a garbage model reply is relayed as a reject with the parse-failure reason"
+    "a garbage model reply is relayed as a reject with the parse-failure reason",
+    "guard socket flags do not require XDG runtime"
   ],
   "tests/guard.test.ts": [
     "every valid verdict fixture parses to itself"

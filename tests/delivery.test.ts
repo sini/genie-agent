@@ -1,3 +1,4 @@
+import { createXmsgEndpointResolver, XmsgEndpointError } from "../src/xmsg-endpoints.ts";
 // Dispatcher delivery's gating oracle (design oracle 28), against an xmsg fake with X9's
 // at-least-once queue and X10's idempotency keys, and a herdr fake whose session xmsg lists only
 // after a delay. Run with `node --test tests/delivery.test.ts`.
@@ -430,7 +431,11 @@ cell("a message that is not a package is answered expert unavailable, acknowledg
 
 // The real client, by its frames, against a socket server per xmsg socket.
 test("the socket client speaks X9 on register.sock, attested sends on agent.sock and http.sock reads", async () => {
+  for (const split of [false, true]) {
   const dir = mkdtempSync(`${tmpdir()}/xm-`);
+  const paths = { agentSocket: `${split ? mkdtempSync(`${tmpdir()}/xm-a-`) : dir}/agent.sock`,
+    registerSocket: `${split ? mkdtempSync(`${tmpdir()}/xm-r-`) : dir}/register.sock`,
+    httpSocket: `${split ? mkdtempSync(`${tmpdir()}/xm-h-`) : dir}/http.sock` };
   const frames: any[] = [];
   const sockets = new Set<any>();
   const lines = (answer: (f: any) => object) => (c: any) => {
@@ -459,8 +464,8 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
     res.end(JSON.stringify(req.url === "/v1/recipients?kind=instance" ? { recipients: [{ address: "u-1@node" }] } : [{ seq: 1, text: "r" }]));
   });
   await Promise.all([[reg, "register"], [agent, "agent"], [http, "http"]].map(
-    ([s, n]: any) => new Promise((r) => s.listen(`${dir}/${n}.sock`, r))));
-  const c = new SocketXmsg(dir, "genie-expert");
+    ([s, n]: any) => new Promise((r) => s.listen(paths[`${n}Socket` as keyof typeof paths], r))));
+  const c = new SocketXmsg(split ? paths : dir, "genie-expert");
   try {
     const regRes = await c.register();
     assert.deepEqual(regRes, { address: "genie-expert@node", node: "node" });
@@ -487,6 +492,7 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
     for (const s of [reg, agent]) s.close();
     (http as any).closeAllConnections?.();
     http.close();
+  }
   }
 });
 
@@ -579,4 +585,126 @@ test("truncated /v1/recipients response without the session is treated as unknow
     (http as any).closeAllConnections?.();
     http.close();
   }
+});
+
+const doctorPaths = {
+  endpoints_usable: true,
+  agent_socket: "/doctor/agent.sock",
+  register_socket: "/doctor/register.sock",
+  http_socket: "/doctor/http.sock",
+};
+
+test("xmsg endpoints: per-socket precedence and explicit directory compatibility", async () => {
+  let calls = 0;
+  const resolve = createXmsgEndpointResolver({
+    env: { XMSG_AGENT_SOCK: "/env/agent.sock", XMSG_REGISTER_SOCK: "/env/register.sock", XDG_RUNTIME_DIR: "/legacy" },
+    probe: async () => { calls++; return { stdout: JSON.stringify(doctorPaths) }; },
+  });
+  assert.deepEqual(await resolve({ agentSocket: "/explicit/agent.sock" }), {
+    agentSocket: "/explicit/agent.sock", registerSocket: "/env/register.sock", httpSocket: "/doctor/http.sock",
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(await resolve({ xmsgDir: "/compat", httpSocket: "/separate/http.sock" }), {
+    agentSocket: "/compat/agent.sock", registerSocket: "/compat/register.sock", httpSocket: "/separate/http.sock",
+  });
+  assert.equal(calls, 1, "fully explicit paths must not invoke doctor");
+  let unused = 0;
+  const explicit = createXmsgEndpointResolver({ env: {}, probe: async () => { unused++; throw new Error("unexpected probe"); } });
+  await explicit({ xmsgDir: "/compat" });
+  assert.equal(unused, 0);
+  const pinned = createXmsgEndpointResolver({ env: { XMSG_AGENT_SOCK: "/a", XMSG_REGISTER_SOCK: "/r", XMSG_HTTP_SOCK: "/h" },
+    probe: async () => { throw new Error("all environment pins must skip doctor"); } });
+  assert.deepEqual(await pinned(), { agentSocket: "/a", registerSocket: "/r", httpSocket: "/h" });
+});
+
+test("xmsg endpoints: one bounded doctor probe caches usable nonzero-health JSON", async () => {
+  const environment = { XMSG_DB_PATH: "/selected/state.db", XDG_RUNTIME_DIR: "/selected/runtime" };
+  const calls: any[] = [];
+  const resolve = createXmsgEndpointResolver({ env: environment, probe: async (file, args, options) => {
+    calls.push({ file, args, options });
+    return { stdout: JSON.stringify(doctorPaths), error: Object.assign(new Error("PRIVATE_STDERR"), { code: 1 }) };
+  } });
+  environment.XMSG_DB_PATH = "/later/state.db";
+  const [a, b] = await Promise.all([resolve(), resolve()]);
+  assert.deepEqual(a, b);
+  assert.equal(a.agentSocket, "/doctor/agent.sock");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "xmsg");
+  assert.deepEqual(calls[0].args, ["doctor", "--json"]);
+  assert.equal(calls[0].options.timeout, 3000);
+  assert.equal(calls[0].options.killSignal, "SIGKILL");
+  assert.equal(calls[0].options.maxBuffer, 65536);
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[0].options.env.XMSG_DB_PATH, "/selected/state.db");
+  assert.equal(calls[0].options.env.XDG_RUNTIME_DIR, "/selected/runtime");
+});
+
+test("xmsg endpoints: missing CLI falls back once without leaking errors", async () => {
+  const logs: string[] = [];
+  let calls = 0;
+  const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/runtime" }, log: (s) => logs.push(s),
+    probe: async () => { calls++; return { stdout: "PRIVATE_STDOUT", error: Object.assign(new Error("PRIVATE_STDERR"), { code: "ENOENT" }) }; } });
+  const expected = { agentSocket: "/runtime/xmsg/agent.sock", registerSocket: "/runtime/xmsg/register.sock", httpSocket: "/runtime/xmsg/http.sock" };
+  assert.deepEqual(await resolve(), expected);
+  assert.deepEqual(await resolve(), expected);
+  assert.equal(calls, 1);
+  assert.deepEqual(logs, ["genie: xmsg legacy socket fallback (CLI unavailable)"]);
+});
+
+test("xmsg endpoints: old doctor legacy fallback retains higher-priority pins", async () => {
+  const logs: string[] = [];
+  const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/runtime", XMSG_AGENT_SOCK: "/pinned/agent" },
+    log: (s) => logs.push(s), probe: async () => ({ stdout: JSON.stringify({ checks: [] }) }) });
+  assert.deepEqual(await resolve({ registerSocket: "/explicit/register" }), {
+    agentSocket: "/pinned/agent", registerSocket: "/explicit/register", httpSocket: "/runtime/xmsg/http.sock",
+  });
+  assert.equal(logs.length, 1);
+});
+
+test("xmsg endpoints: refusal and unsafe reports never route to legacy", async () => {
+  for (const report of [
+    { endpoints_usable: false }, { ...doctorPaths, agent_socket: "relative.sock" },
+    { ...doctorPaths, register_socket: "/bad\0sock" }, { ...doctorPaths, http_socket: null },
+    { endpoints_usable: "true" }, [], null,
+  ]) {
+    const logs: string[] = [];
+    const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/legacy" }, log: (s) => logs.push(s),
+      probe: async () => ({ stdout: JSON.stringify(report) }) });
+    await assert.rejects(resolve(), XmsgEndpointError);
+    assert.deepEqual(logs, []);
+  }
+  const invalid = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/legacy" }, probe: async () => ({ stdout: "PRIVATE_OUTPUT" }) });
+  await assert.rejects(invalid(), (e: Error) => e instanceof XmsgEndpointError && !e.message.includes("PRIVATE_OUTPUT"));
+  const thrown = createXmsgEndpointResolver({ probe: async () => { throw new Error("PRIVATE_ERROR"); } });
+  await assert.rejects(thrown(), (e: Error) => e instanceof XmsgEndpointError && !e.message.includes("PRIVATE"));
+});
+
+test("xmsg endpoints: bounded probe failures are cached and do not expose output", async () => {
+  for (const error of [Object.assign(new Error("PRIVATE_ERROR"), { killed: true }),
+    Object.assign(new Error("PRIVATE_ERROR"), { code: "ETIMEDOUT" }),
+    Object.assign(new Error("PRIVATE_ERROR"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })]) {
+    let calls = 0;
+    const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/legacy" }, probe: async () => {
+      calls++; return { stdout: JSON.stringify(doctorPaths), error };
+    } });
+    for (let i = 0; i < 2; i++) await assert.rejects(resolve(), (e: Error) => e instanceof XmsgEndpointError && !e.message.includes("PRIVATE"));
+    assert.equal(calls, 1);
+  }
+});
+
+test("xmsg endpoints: leaf registration uses its reported path without sibling guessing", async () => {
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => ({ stdout: JSON.stringify({ ...doctorPaths,
+    register_socket: null, leaf_register_socket: "/separate/leaf.sock" }) }) });
+  assert.deepEqual(await resolve(), { agentSocket: "/doctor/agent.sock", registerSocket: "/separate/leaf.sock", httpSocket: "/doctor/http.sock" });
+});
+
+test("xmsg endpoints: unsafe explicit pins and absent legacy runtime refuse", async () => {
+  let calls = 0;
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => { calls++; return { stdout: "", error: Object.assign(new Error(), { code: "ENOENT" }) }; } });
+  await assert.rejects(resolve({ agentSocket: "relative" }), XmsgEndpointError);
+  await assert.rejects(resolve({ agentSocket: null } as any), XmsgEndpointError);
+  assert.equal(calls, 0);
+  await assert.rejects(resolve(), /XDG_RUNTIME_DIR/);
+  const bad = createXmsgEndpointResolver({ env: { XMSG_HTTP_SOCK: "relative", XDG_RUNTIME_DIR: "/legacy" }, probe: async () => { throw new Error("unsafe env must not probe"); } });
+  await assert.rejects(bad(), XmsgEndpointError);
 });

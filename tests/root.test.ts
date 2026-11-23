@@ -1710,12 +1710,11 @@ test("oracle (GI-2): parseMatrixForward, XmsgIo solicited/control routing, and m
   const validCfg = `${tmp}/config.json`;
   assert.deepEqual(parseArgs(["--config", validCfg], { XDG_RUNTIME_DIR: "/run/user/1000" }), {
     configPath: validCfg,
-    xmsgDir: "/run/user/1000/xmsg",
   });
   assert.deepEqual(parseArgs([`--config=${validCfg}`], {}), {
     configPath: validCfg,
-    xmsgDir: "/run/xmsg",
   });
+  assert.deepEqual(parseArgs(["--config", validCfg, "--agent-sock", "/a", "--register-sock", "/r", "--http-sock", "/h"], {}), { configPath: validCfg, agentSocket: "/a", registerSocket: "/r", httpSocket: "/h" });
   assert.throws(() => parseArgs([], {}), /--config \(or GENIE_CONFIG\) is required/);
 
   // 2. parseMatrixForward for <request> and fail-open <request screened="false" note="…"> envelopes

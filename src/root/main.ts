@@ -5,19 +5,24 @@ import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { type Config as RootConfig, main, validateRootConfig } from "./index.ts";
 import { XmsgIo } from "./io.ts";
+import { explicitXmsgEndpoints, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
 
 export class ConfigError extends Error {}
 
-export interface CliOptions {
+export interface CliOptions extends XmsgEndpointOverrides {
   configPath: string;
-  xmsgDir: string;
 }
 
 export function parseArgs(argv: string[], env: Record<string, string | undefined> = {}): CliOptions {
   let configPath: string | undefined;
+  const endpoints: XmsgEndpointOverrides = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--config") {
+    if (Object.hasOwn(xmsgEndpointFlags, arg)) {
+      const value = argv[++i];
+      if (value === undefined || value === "") throw new ConfigError(`${arg} needs a value`);
+      endpoints[xmsgEndpointFlags[arg as keyof typeof xmsgEndpointFlags]] = value;
+    } else if (arg === "--config") {
       const value = argv[++i];
       if (value === undefined || value === "") throw new ConfigError("--config needs a value");
       configPath = value;
@@ -32,15 +37,15 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   configPath = configPath ?? env.GENIE_CONFIG;
   if (!configPath) throw new ConfigError("--config (or GENIE_CONFIG) is required");
   if (!existsSync(configPath)) throw new ConfigError(`--config: file not found: ${configPath}`);
-  const xmsgDir = env.XDG_RUNTIME_DIR ? `${env.XDG_RUNTIME_DIR}/xmsg` : "/run/xmsg";
-  return { configPath, xmsgDir };
+  return { configPath, ...endpoints };
 }
 
 async function run(opts: CliOptions): Promise<void> {
   const raw: RootConfig = JSON.parse(readFileSync(opts.configPath, "utf8"));
   const { guardEnable } = validateRootConfig(raw);
   const io = new XmsgIo({
-    xmsgDir: raw.xmsg?.xmsgDir ?? opts.xmsgDir,
+    ...explicitXmsgEndpoints(raw.xmsg ?? {}),
+    ...explicitXmsgEndpoints(opts),
     service: raw.xmsg?.service ?? "genie",
     pollWaitMs: raw.xmsg?.pollWaitMs,
     guard: guardEnable ? raw.xmsg?.guard : null,
