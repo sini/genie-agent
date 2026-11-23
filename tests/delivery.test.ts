@@ -496,6 +496,48 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
   }
 });
 
+// An xmsg restart mid-run closes the registration: run() re-registers in-process and keeps
+// delivering, where the dispatcher used to exit 1 and wait on a systemd restart.
+cell("a lost xmsg connection re-registers in-process and run() keeps delivering", async (s) => {
+  const { del } = await s.boot();
+  const x = s.x as FakeXmsg & { register?: () => Promise<unknown> };
+  let registers = 0;
+  x.register = async () => {
+    registers++;
+  };
+  const realPoll = x.poll.bind(x);
+  let failed = false;
+  x.poll = async () => {
+    if (!failed) {
+      failed = true;
+      throw new Error("/run/user/1000/xmsg/register.sock: connection closed");
+    }
+    await sleep(5); // a real poll long-polls; an instant one would starve the timers
+    return realPoll();
+  };
+  const logs: string[] = [];
+  s.msg("m1", "t1:hello");
+  const running = del.run({ wait: async () => {}, log: (l) => logs.push(l) });
+  await until("m1 acknowledged after the reconnect", () => !x.queue.some((m) => m.id === "m1"));
+  del.stop();
+  await running;
+  assert.equal(registers, 1, "re-registered once");
+  assert.ok(logs.includes("genie-dispatcher: re-registered on xmsg"));
+});
+
+test("run() still throws a non-connection error", async () => {
+  const s = setup();
+  try {
+    const { del } = await s.boot();
+    s.x.poll = async () => {
+      throw new Error("xmsg poll: unexpected {}");
+    };
+    await assert.rejects(del.run({ wait: async () => {} }), /unexpected/);
+  } finally {
+    s.stop();
+  }
+});
+
 // A register.sock that accepts and never answers (an xmsg daemon swapped out under a live
 // connection) must fail the call, so awaitRegister backs off and retries on a fresh connection.
 test("a register call with no reply fails as a connection error and awaitRegister retries", async () => {

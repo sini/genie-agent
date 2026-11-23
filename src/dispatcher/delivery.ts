@@ -4,7 +4,7 @@
 // reply, relayed as the dispatcher's own, ends the turn. Under D1b's park predicate, pane close
 // parks idle threads, and 96h GC hands expired transcripts to the archiver (D3).
 import type { Dispatcher } from "./index.ts";
-import { checkSessionPresence, XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
+import { awaitRegister, checkSessionPresence, isConnectionError, XmsgError, type Inbound, type XmsgClient } from "./xmsg.ts";
 import { THREAD_ID_RE, type Outstanding, type Thread } from "./journal.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import { DispatcherGc } from "./gc.ts";
@@ -175,8 +175,22 @@ export class Delivery {
     return true;
   }
 
-  async run(): Promise<void> {
-    while (!this.stopped) await this.pump();
+  // A lost xmsg connection (a daemon restart) re-registers in-process with backoff rather than
+  // exiting; an unacknowledged message stays at the head of the queue and comes back.
+  async run(reconnect: { wait?: (ms: number) => Promise<void>; log?: (line: string) => void } = {}): Promise<void> {
+    while (!this.stopped) {
+      try {
+        await this.pump();
+      } catch (e) {
+        const x = this.x as XmsgClient & { register?: () => Promise<unknown> };
+        if (this.stopped || !isConnectionError(e) || typeof x.register !== "function") throw e;
+        await awaitRegister({ register: () => x.register!() }, reconnect.wait, reconnect.log, undefined, {
+          service: "genie-dispatcher",
+          initialError: e,
+        });
+        reconnect.log?.("genie-dispatcher: re-registered on xmsg");
+      }
+    }
   }
 
   private async receive(m: Inbound): Promise<void> {

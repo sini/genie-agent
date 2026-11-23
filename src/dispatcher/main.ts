@@ -1,4 +1,4 @@
-import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "./xmsg.ts";
+import { awaitRegister, xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "./xmsg.ts";
 // The dispatcher's entrypoint (design §5.8, D1c; GI-3): registers as `serviceName` (default
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
@@ -84,7 +84,7 @@ export async function startDispatcher(
   const x = new SocketXmsg(c, c.serviceName);
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
-  await x.register();
+  await awaitRegister(x, undefined, undefined, undefined, { service: "genie-dispatcher" });
   const credentialsDir = c.tokenCredentialFile
     ? c.tokenCredentialFile.replace(/\/[^/]+$/, "")
     : process.env.CREDENTIALS_DIRECTORY;
@@ -117,7 +117,7 @@ export async function startDispatcher(
 
 export async function main(c: Config): Promise<void> {
   const { del } = await startDispatcher(c);
-  await del.run();
+  await del.run({ log: (line) => process.stderr.write(`${line}\n`) });
 }
 
 const isTestRunner = Boolean(process.env.NODE_TEST_CONTEXT);
