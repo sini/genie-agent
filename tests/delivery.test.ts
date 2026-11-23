@@ -19,7 +19,7 @@ import {
   type Options,
   type XmsgClient,
 } from "../src/dispatcher/index.ts";
-import { checkSessionPresence } from "../src/dispatcher/xmsg.ts";
+import { awaitRegister, checkSessionPresence } from "../src/dispatcher/xmsg.ts";
 import type { Herdr, HerdrAgent, StartSpec } from "../src/dispatcher/herdr.ts";
 import { errors as schemaErrors, load as loadSchema } from "../src/tier1/schema.ts";
 
@@ -487,6 +487,38 @@ test("the socket client speaks X9 on register.sock, attested sends on agent.sock
     for (const s of [reg, agent]) s.close();
     (http as any).closeAllConnections?.();
     http.close();
+  }
+});
+
+// A register.sock that accepts and never answers (an xmsg daemon swapped out under a live
+// connection) must fail the call, so awaitRegister backs off and retries on a fresh connection.
+test("a register call with no reply fails as a connection error and awaitRegister retries", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/xm-`);
+  let connections = 0;
+  const reg = netServer((c: any) => {
+    connections++;
+    const n = connections;
+    let buf = "";
+    c.setEncoding("utf8");
+    c.on("data", (d: string) => {
+      for (buf += d; buf.includes("\n"); buf = buf.slice(buf.indexOf("\n") + 1)) {
+        if (n > 1) c.write(`${JSON.stringify({ status: "ok", address: "genie-expert@node", node: "node" })}\n`);
+      }
+    });
+  });
+  await new Promise((r) => reg.listen(`${dir}/register.sock`, r));
+  const c = new SocketXmsg(dir, "genie-expert", 100);
+  const waits: string[] = [];
+  try {
+    const started = Date.now();
+    await awaitRegister(c, async () => {}, (l) => waits.push(l), undefined, { service: "genie-expert" });
+    assert.ok(Date.now() - started < 2000, "the silent connection is abandoned at the deadline");
+    assert.equal(connections, 2, "the retry opens a fresh connection");
+    assert.equal(c.address, "genie-expert@node");
+    assert.match(waits[0] ?? "", /waiting for xmsg: .*register\.sock: no reply within 100 ms/);
+  } finally {
+    c.close();
+    reg.close();
   }
 });
 

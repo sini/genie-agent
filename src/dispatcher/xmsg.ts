@@ -70,14 +70,24 @@ export interface XmsgClient extends XmsgSessions {
 
 const secs = (ms: number) => Math.min(60, Math.ceil(ms / 1000));
 
+// How long past a frame's own long-poll wait a reply may take before the connection counts as
+// dead. A socket that accepts but never answers (a daemon swapped out from under it) otherwise
+// hangs the caller forever, and no reconnect backoff ever runs.
+export const REPLY_GRACE_MS = 15_000;
+
 // Writes one JSON line and resolves with each JSON line read back, in order.
 class Lines {
   private readonly sock: Socket;
+  private readonly path: string;
   private buf = "";
   private readonly waiting: ((v: any) => void)[] = [];
   private failed: Error | null = null;
+  private readonly fail: (e: Error) => void;
+  private readonly graceMs: number;
 
-  constructor(path: string) {
+  constructor(path: string, graceMs = REPLY_GRACE_MS) {
+    this.path = path;
+    this.graceMs = graceMs;
     this.sock = createConnection(path);
     this.sock.setEncoding("utf8");
     this.sock.on("data", (chunk: string) => {
@@ -88,20 +98,29 @@ class Lines {
         this.waiting.shift()?.(JSON.parse(line));
       }
     });
-    const fail = (e: Error) => {
+    this.fail = (e: Error) => {
       if (!this.failed) this.failed = e;
       for (const w of this.waiting.splice(0)) w(e);
     };
-    this.sock.on("error", fail);
-    this.sock.on("close", () => fail(new Error(`${path}: connection closed`)));
+    this.sock.on("error", this.fail);
+    this.sock.on("close", () => this.fail(new Error(`${path}: connection closed`)));
   }
 
   async call(frame: object): Promise<any> {
     if (this.failed) throw this.failed;
+    const waitSecs = (frame as { waitSecs?: unknown }).waitSecs;
+    const deadlineMs = (typeof waitSecs === "number" ? waitSecs * 1000 : 0) + this.graceMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const r = await new Promise((resolve) => {
       this.waiting.push(resolve);
+      // Replies are matched by order, so a late one can't be told apart: drop the connection.
+      timer = setTimeout(() => {
+        const e = Object.assign(new Error(`${this.path}: no reply within ${deadlineMs} ms`), { code: "ETIMEDOUT" });
+        this.fail(e);
+        this.sock.destroy();
+      }, deadlineMs);
       this.sock.write(`${JSON.stringify(frame)}\n`);
-    });
+    }).finally(() => clearTimeout(timer));
     if (r instanceof Error) throw r;
     if ((r as any).status === "error") throw new XmsgError((r as any).error ?? "error", (r as any).detail);
     return r;
@@ -121,15 +140,18 @@ export class SocketXmsg implements XmsgClient {
   node?: string;
   registrationLimits: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number } = {};
 
-  constructor(dir: string, name: string) {
+  private readonly graceMs: number;
+
+  constructor(dir: string, name: string, graceMs = REPLY_GRACE_MS) {
     this.dir = dir;
     this.name = name;
+    this.graceMs = graceMs;
   }
 
   // The registration lives as long as this connection; xmsg refuses a second live one.
   async register(): Promise<{ address: string; node: string }> {
     this.reg?.close();
-    this.reg = new Lines(`${this.dir}/register.sock`);
+    this.reg = new Lines(`${this.dir}/register.sock`, this.graceMs);
     const r = await this.reg.call({ harness: "svc", name: this.name });
     this.address = r.address;
     this.node = r.node;
@@ -163,7 +185,7 @@ export class SocketXmsg implements XmsgClient {
 
   // One attested call: the server reads the caller's identity off this connection's peer.
   private async agent(frame: object): Promise<any> {
-    const c = new Lines(`${this.dir}/agent.sock`);
+    const c = new Lines(`${this.dir}/agent.sock`, this.graceMs);
     try {
       return await c.call(frame);
     } finally {
@@ -263,12 +285,12 @@ export async function backoff<T>(
   }
 }
 
-// Whether an error is an xmsg connection failure (absent, refused, or closed): waiting may fix it.
+// Whether an error is an xmsg connection failure (absent, refused, closed, or silent): waiting may fix it.
 export function isConnectionError(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   if (e instanceof XmsgError) return false;
   const code = (e as any).code;
-  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE") return true;
+  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "ETIMEDOUT") return true;
   return e.message.includes("connection closed") || e.message === "xmsg: poll before register";
 }
 
