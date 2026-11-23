@@ -2147,6 +2147,12 @@
               inherit packages nixosModules;
             };
           };
+          hm-module = import ./nix/test-hm-module.nix {
+            inherit pkgs nixpkgs;
+            self = {
+              inherit homeManagerModules;
+            };
+          };
           # GI-13: the tier sandbox and the tier token, in a VM.
           expert-isolation = import ./nix/test-expert-isolation.nix {
             inherit pkgs nixpkgs;
@@ -2183,6 +2189,11 @@
       nixosModules = rec {
         default = import ./nix/module.nix { inherit packages; };
         genie-agent = default;
+      };
+
+      homeManagerModules = rec {
+        default = import ./nix/hm-module.nix { inherit packages; };
+        genie-guard = default;
       };
 
       devShells = forAllSystems (pkgs: {

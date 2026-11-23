@@ -240,6 +240,29 @@ Curated Hindsight banks (`genie` and `genie-memory`) are trusted recall sources 
 - **`guard.enable = false`** (`services.genie-agent.guard.enable = false`, with `guardRef = null` allowed): Disables `genie-guard` inbound model screening for the input-screening paths — inbound Matrix requests (`guardIn`), web results (`webScreen`; `G10` 32 KiB paging and per-thread caching still apply), replayed archive transcripts (`seedGuard`), and escalation packages (`escalationGuard`). No `XmsgGuardClient` is constructed and no `xmsg` guard target is required. Tier 1 receives `UNSCREENED_PROMPT` via `--append-system-prompt` and `prompts/tier1.md` frames all inputs and tool outputs as untrusted data, but **gives up separate model-level prompt-injection filtering (`allow`/`rewrite`/`reject`) before untrusted text enters Tier 1 or an expert escalation package**.
 - **`broker.guardOut.enable = false`** (`services.genie-agent.broker.guardOut.enable = false`): Skips the outbound `guard-out` model review on Tier 1 draft replies, deadline notices, expert replies, and broker write proposals (gist create/update/comment and PRs). Read requests do not invoke guard-out; fetched gist data uses the global inbound guard setting. **The deterministic credential redactor (`src/redactor/index.ts`) always runs unconditionally before any outbound post or broker action**, so shaped credentials and hashed secret lines are still scrubbed to `[redacted:<kind>]`, but turning `broker.guardOut.enable` off **gives up semantic model-level review for unshaped private context leaks or off-policy outbound text**.
 
+## Home-manager user service (`homeManagerModules.genie-guard`)
+
+`flake.nix` also exports `homeManagerModules.genie-guard` (aliased as `homeManagerModules.default`), which runs genie-guard as a hardened `systemd.user.services.genie-guard` unit. It is Linux-only and does not need the NixOS module.
+
+- `services.genie-guard.enable`: Render the user service.
+- `services.genie-guard.package`: The guard executable; defaults to `packages.<system>.genie-guard`.
+- `services.genie-guard.ninferUrl`: Base URL of the OpenAI-compatible model endpoint.
+- `services.genie-guard.apiKeyFile`: Runtime path of the API key (systemd specifiers such as `%h` work). A Nix store path fails evaluation.
+- `services.genie-guard.xmsgSocket`: Optional xmsg socket directory; sets `XMSG_HTTP_SOCK`, `XMSG_AGENT_SOCK` and `XMSG_REGISTER_SOCK`.
+- `services.genie-guard.extraArgs`: Extra command-line arguments.
+
+```nix
+{
+  imports = [ genie-agent.homeManagerModules.genie-guard ];
+  services.genie-guard = {
+    enable = true;
+    ninferUrl = "http://model.example:8000/v1";
+    apiKeyFile = "%h/.config/model/api-key";
+    xmsgSocket = "/run/user/1000/xmsg";
+  };
+}
+```
+
 ## Tests
 
 ```sh
