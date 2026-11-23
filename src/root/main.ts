@@ -44,8 +44,7 @@ async function run(opts: CliOptions): Promise<void> {
   const raw: RootConfig = JSON.parse(readFileSync(opts.configPath, "utf8"));
   const { guardEnable } = validateRootConfig(raw);
   const io = new XmsgIo({
-    ...explicitXmsgEndpoints(raw.xmsg ?? {}),
-    ...explicitXmsgEndpoints(opts),
+    ...explicitXmsgEndpoints({ ...(opts.xmsgDir === undefined ? raw.xmsg ?? {} : {}), ...opts }),
     service: raw.xmsg?.service ?? "genie",
     pollWaitMs: raw.xmsg?.pollWaitMs,
     guard: guardEnable ? raw.xmsg?.guard : null,
