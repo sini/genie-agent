@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import process from "node:process";
 import { test } from "node:test";
 
@@ -760,7 +765,7 @@ test("units that talk to xmsg get XMSG_{HTTP,AGENT,REGISTER}_SOCK under xmsgSock
 // The xmsg socket directory lives under the owner's runtime dir, so its lifetime unit,
 // user-runtime-dir@<uid>, is the trigger. Requisite= (never BindsTo=/Requires=, which would
 // start it) keeps a logged-out start from creating /run/user/<uid> or looping.
-test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit hang off user-runtime-dir@<uid> only", () => {
+test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit hang off user-runtime-dir@<uid> only", async () => {
   const trigger = "user-runtime-dir@1000.service";
   const prep = "genie-xmsg-socket-dir.service";
   const r = summary.xmsgRuntime;
@@ -822,6 +827,18 @@ test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit 
     assert.ok(readyScript.includes("genie-xmsg-ready: timeout:"), "typed timeout message");
     assert.ok(readyScript.includes("time.monotonic() >= deadline"), "bounded wait");
   }
+
+  // The wait itself: exit 0 once the socket accepts, a typed exit 75 once the bound passes.
+  const readyBin = r.units["genie-agent"].serviceConfig.ExecStartPre[0].split(" ")[0];
+  const dir = mkdtempSync(join(tmpdir(), "ready-"));
+  const missing = spawnSync(readyBin, [join(dir, "agent.sock"), "1"], { encoding: "utf8" });
+  assert.equal(missing.status, 75, missing.stderr);
+  assert.match(missing.stderr, /^genie-xmsg-ready: timeout: .*agent\.sock did not accept within 1s/);
+  const server = createServer().listen(join(dir, "agent.sock"));
+  await once(server, "listening");
+  const up = spawnSync(readyBin, [join(dir, "agent.sock"), "1"], { encoding: "utf8" });
+  server.close();
+  assert.equal(up.status, 0, up.stderr);
 
   // null opts out: plain multi-user.target units with no preparation unit and no wait.
   const n = summary.xmsgRuntimeNoTrigger;

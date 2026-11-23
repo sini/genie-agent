@@ -52,6 +52,41 @@ Only a missing CLI or the narrowly recognized old CLI unsupported-command reply 
 `XDG_RUNTIME_DIR` and emits one generic legacy-fallback notice. Doctor stdout, stderr and
 configuration contents are never included in that notice.
 
+### The NixOS units and the socket directory
+
+`nixosModules.default` takes one directory, `services.genie-agent.xmsgSocket`, holding
+`http.sock`, `agent.sock` and `register.sock`. Each unit that talks to xmsg bind-mounts it and
+gets `XMSG_{HTTP,AGENT,REGISTER}_SOCK` under it. Pin the xmsg daemon's three sockets to the
+same directory, so both sides render one value. A directory of its own under the owner's
+runtime dir, such as `/run/user/1000/xmsg-sockets`, is the usual choice.
+
+A bind mount fails when its source is missing, and `/run/user/<uid>` exists only while
+`user-runtime-dir@<uid>.service` is active: from the owner's first login, or from boot with
+linger. So when `xmsgSocket` is under `/run/user/<uid>/`, `xmsgSocketTrigger` defaults to that
+unit and the module wires every consumer to it:
+
+- **Trigger.** Each consumer, and the preparation unit below, is `WantedBy=`, `Requisite=`,
+  `After=` and `PartOf=` `user-runtime-dir@<uid>.service`, and nothing else wants it. Nothing
+  starts at boot without linger. When the runtime dir is set up the units start, and when it
+  goes they stop. A manual `systemctl start` while the owner is logged out fails at once with a
+  dependency error. It creates no `/run/user/<uid>` and enters no restart loop. The wiring is
+  only in the genie units: the module generates no unit and no drop-in for
+  `user-runtime-dir@<uid>`.
+- **Preparation.** `genie-xmsg-socket-dir.service`, a oneshot that runs as `user`, creates the
+  directory at 0700 if it is absent. The consumers require it. Nothing runs as root against the
+  directory.
+- **Readiness.** Each consumer first waits, unprivileged and inside its sandbox, for
+  `agent.sock` to accept, for up to `xmsgReadinessTimeoutSec` (30 s by default). On timeout it
+  exits 75 with a `genie-xmsg-ready: timeout:` line. `Restart=on-failure` retries within a
+  bounded start limit, and past it the unit stays failed and visible.
+
+On a linger host the runtime dir persists across logouts, so the units keep running until
+reboot. On a live switch the runtime dir is already active and does not fire the trigger
+again: start `genie-xmsg-socket-dir` and the consumers directly, and never stop or restart
+`user-runtime-dir@<uid>` on a live host, because that ends every session of the user. Set
+`xmsgSocketTrigger = null` for a directory that exists from boot. The units then stay on
+`multi-user.target`, with no preparation unit and no readiness wait.
+
 ## genie-guard
 
 `packages.<linux>.genie-guard` is guard-in as a service: a Node single executable, built like

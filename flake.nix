@@ -2153,6 +2153,12 @@
               inherit homeManagerModules;
             };
           };
+          xmsg-runtime = import ./nix/test-xmsg-runtime.nix {
+            inherit pkgs nixpkgs;
+            self = {
+              inherit packages nixosModules;
+            };
+          };
           # GI-13: the tier sandbox and the tier token, in a VM.
           expert-isolation = import ./nix/test-expert-isolation.nix {
             inherit pkgs nixpkgs;
