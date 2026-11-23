@@ -30,10 +30,14 @@ legacy filenames when an individual flag is absent. ROOT also accepts `agentSock
 CLI settings override that object. Existing directory-based client construction remains supported.
 
 Next come `XMSG_AGENT_SOCK`, `XMSG_REGISTER_SOCK` and `XMSG_HTTP_SOCK`, then the resolved
-paths from `xmsg doctor --json`. The doctor runs at most once per process startup, with
-a three-second limit, forced termination and bounded output; its result is cached across
-messages and reconnects. The child receives a snapshot of the startup environment, including
-selected `XMSG_DB_PATH` and XDG values. Fully pinned required endpoints need no CLI invocation. Guard requires only registration;
+paths from `xmsg doctor --json`. Doctor discovery runs within initial registration or a
+reconnect attempt, with a three-second limit, forced termination and bounded output. Its
+result stays cached until the registration transport disconnects. Concurrent reconnects
+share one replacement probe; late failures from an older connection cannot discard newer
+discovery. Healthy messages never probe. Guard and ROOT feed the observed disconnect through their
+existing reconnect backoff before replacement discovery; aborted waits start no probe. The child receives a snapshot of the startup
+environment, including selected `XMSG_DB_PATH` and XDG values; explicit and environment
+pins stay fixed across reconnects. Fully pinned required endpoints need no CLI invocation. Guard requires only registration;
 ROOT and dispatcher also require agent and HTTP endpoints. Absent unused endpoints remain
 absent, and calling an unused operation fails without discovery or fallback.
 Genie does not derive the daemon's namespace hash.

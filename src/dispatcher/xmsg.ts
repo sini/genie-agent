@@ -39,8 +39,11 @@ export function xmsgEndpointArguments(flags: Map<string, string>): XmsgEndpointO
 }
 
 export type XmsgEndpointName = keyof XmsgEndpoints;
-export type XmsgEndpointResolver = (overrides?: XmsgEndpointOverrides,
-  required?: readonly XmsgEndpointName[]) => Promise<Partial<XmsgEndpoints>>;
+export type XmsgEndpointResolver = {
+  (overrides?: XmsgEndpointOverrides, required?: readonly XmsgEndpointName[]): Promise<Partial<XmsgEndpoints>>;
+  fixed?(overrides?: XmsgEndpointOverrides, required?: readonly XmsgEndpointName[]): Partial<XmsgEndpoints> | undefined;
+  invalidate?(paths: Partial<XmsgEndpoints>): void;
+};
 type ProbeError = Error & { code?: string | number; killed?: boolean; signal?: string | null };
 export interface DoctorResult { stdout: string; error?: ProbeError | null }
 export interface DoctorOptions {
@@ -98,7 +101,8 @@ export function createXmsgEndpointResolver(options: {
   const env = { ...(options.env ?? process.env) };
   const probe = options.probe ?? probeDoctor;
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
-  let doctor: Promise<Partial<XmsgEndpoints> | string> | undefined;
+  let doctor: { epoch: object; result: Promise<Partial<XmsgEndpoints> | string> } | undefined;
+  const epochs = new WeakMap<Partial<XmsgEndpoints>, object>();
   let loggedFallback = false;
   async function discover(): Promise<Partial<XmsgEndpoints> | string> {
     let result: DoctorResult;
@@ -134,13 +138,18 @@ export function createXmsgEndpointResolver(options: {
     }
     return resultPaths;
   }
-  return async (overrides = {}, required = names) => {
+  function selected(overrides: XmsgEndpointOverrides, required: readonly XmsgEndpointName[]) {
     const result = explicitXmsgEndpoints(overrides);
     for (const name of required) if (result[name] === undefined && env[environmentNames[name]] !== undefined) {
       result[name] = socket(env[environmentNames[name]], environmentNames[name]);
     }
+    return result;
+  }
+  const resolve: XmsgEndpointResolver = async (overrides = {}, required = names) => {
+    const result = selected(overrides, required);
     if (required.some((name) => result[name] === undefined)) {
-      const discovered = await (doctor ??= discover());
+      const entry = doctor ??= { epoch: {}, result: discover() };
+      const discovered = await entry.result;
       if (typeof discovered !== "string") {
         for (const name of names) if (result[name] === undefined && discovered[name] !== undefined) result[name] = discovered[name];
         if (required.some((name) => result[name] === undefined)) {
@@ -151,14 +160,29 @@ export function createXmsgEndpointResolver(options: {
         for (const name of names) result[name] ??= legacy[name];
         if (!loggedFallback) { log(`genie: xmsg legacy socket fallback (${discovered})`); loggedFallback = true; }
       }
+      epochs.set(result, entry.epoch);
     }
     return result;
   };
+  resolve.fixed = (overrides = {}, required = names) => {
+    const result = selected(overrides, required);
+    return required.every((name) => result[name] !== undefined) ? result : undefined;
+  };
+  resolve.invalidate = (paths) => {
+    if (doctor && epochs.get(paths) === doctor.epoch) doctor = undefined;
+  };
+  return resolve;
 }
 
 let processResolver: XmsgEndpointResolver | undefined;
-export const resolveXmsgEndpoints: XmsgEndpointResolver = (overrides, required) =>
-  (processResolver ??= createXmsgEndpointResolver())(overrides, required);
+const currentResolver = () => processResolver ??= createXmsgEndpointResolver();
+export const resolveXmsgEndpoints: XmsgEndpointResolver = Object.assign(
+  (overrides?: XmsgEndpointOverrides, required?: readonly XmsgEndpointName[]) => currentResolver()(overrides, required),
+  {
+    fixed: (overrides?: XmsgEndpointOverrides, required?: readonly XmsgEndpointName[]) => currentResolver().fixed!(overrides, required),
+    invalidate: (paths: Partial<XmsgEndpoints>) => processResolver?.invalidate?.(paths),
+  },
+);
 
 // The live Claude sessions on the tier's xmsg instance, by sessionId.
 export interface XmsgSessions {
@@ -280,7 +304,12 @@ class Lines {
 }
 
 export class SocketXmsg implements XmsgClient {
-  private readonly endpoints: Promise<Partial<XmsgEndpoints>>;
+  private endpoints?: Promise<Partial<XmsgEndpoints>>;
+  private currentPaths?: Partial<XmsgEndpoints>;
+  private readonly resolve: XmsgEndpointResolver;
+  private readonly overrides: XmsgEndpointOverrides;
+  private readonly required: readonly XmsgEndpointName[];
+  private registering?: Promise<{ address: string; node: string }>;
   private readonly name: string;
   private reg: Lines | null = null;
   address?: string;
@@ -292,25 +321,50 @@ export class SocketXmsg implements XmsgClient {
   constructor(paths: string | XmsgEndpointOverrides, name: string,
     optionsOrGrace: number | { resolve?: XmsgEndpointResolver; required?: readonly XmsgEndpointName[]; graceMs?: number } = REPLY_GRACE_MS) {
     const options = typeof optionsOrGrace === "number" ? { graceMs: optionsOrGrace } : optionsOrGrace;
-    this.endpoints = (options.resolve ?? resolveXmsgEndpoints)(typeof paths === "string" ? { xmsgDir: paths } : paths, options.required);
-    // Guard can wait for its model before awaiting registration; retain the original failure.
-    void this.endpoints.catch(() => {});
+    this.resolve = options.resolve ?? resolveXmsgEndpoints;
+    this.overrides = typeof paths === "string" ? { xmsgDir: paths } : { ...paths };
+    this.required = [...(options.required ?? names)];
+    // Discovery belongs to registration/backoff, not construction or messages.
+    const fixed = this.resolve.fixed?.(this.overrides, this.required);
+    if (fixed !== undefined) { this.currentPaths = fixed; this.endpoints = Promise.resolve(fixed); }
     this.name = name;
     this.graceMs = options.graceMs ?? REPLY_GRACE_MS;
   }
 
   private async socketPath(name: XmsgEndpointName): Promise<string> {
-    const value = (await this.endpoints)[name];
+    const value = (await this.endpoints)?.[name];
     if (value === undefined) throw new XmsgEndpointError(`xmsg: ${name} is unavailable for this client`);
     return value;
   }
 
+  private disconnected(connection: Lines, paths: Partial<XmsgEndpoints>): void {
+    if (this.reg !== connection) return;
+    this.resolve.invalidate?.(paths);
+    this.endpoints = undefined;
+    this.currentPaths = undefined;
+  }
+
   // The registration lives as long as this connection; xmsg refuses a second live one.
-  async register(): Promise<{ address: string; node: string }> {
-    const registerSocket = await this.socketPath("registerSocket");
-    this.reg?.close();
-    this.reg = new Lines(registerSocket, this.graceMs);
-    const r = await this.reg.call({ harness: "svc", name: this.name });
+  register(): Promise<{ address: string; node: string }> {
+    if (this.registering) return this.registering;
+    const pending = this.registerAttempt().finally(() => { if (this.registering === pending) this.registering = undefined; });
+    this.registering = pending;
+    return pending;
+  }
+
+  private async registerAttempt(): Promise<{ address: string; node: string }> {
+    const previous = this.reg;
+    this.reg = null;
+    previous?.close();
+    const paths = await (this.endpoints ??= this.resolve(this.overrides, this.required));
+    this.currentPaths = paths;
+    const registerSocket = paths.registerSocket;
+    if (registerSocket === undefined) throw new XmsgEndpointError("xmsg: registerSocket is unavailable for this client");
+    const connection = new Lines(registerSocket, this.graceMs);
+    this.reg = connection;
+    let r: any;
+    try { r = await connection.call({ harness: "svc", name: this.name }); }
+    catch (error) { if (isConnectionError(error)) this.disconnected(connection, paths); throw error; }
     this.address = r.address;
     this.node = r.node;
     this.registrationLimits = { max_body_bytes: r.max_body_bytes, reply_ttl_secs: r.reply_ttl_secs, idempotency_ttl_secs: r.idempotency_ttl_secs };
@@ -318,13 +372,17 @@ export class SocketXmsg implements XmsgClient {
   }
 
   close(): void {
-    this.reg?.close();
+    const previous = this.reg;
     this.reg = null;
+    previous?.close();
   }
 
   private async registered(frame: object): Promise<any> {
-    if (!this.reg) throw new Error("xmsg: poll before register");
-    return this.reg.call(frame);
+    const connection = this.reg;
+    const paths = this.currentPaths;
+    if (!connection) throw new Error("xmsg: poll before register");
+    try { return await connection.call(frame); }
+    catch (error) { if (paths && isConnectionError(error)) this.disconnected(connection, paths); throw error; }
   }
 
   async poll(waitMs: number): Promise<Inbound | null> {
@@ -460,12 +518,18 @@ export async function awaitRegister(
   sleep?: (ms: number) => Promise<void>,
   log?: (line: string) => void,
   signal?: AbortSignal,
-  opts?: { service?: string; startMs?: number; maxMs?: number },
+  opts?: { service?: string; startMs?: number; maxMs?: number; initialError?: unknown },
 ): Promise<void> {
   const service = opts?.service ?? "genie-guard";
   const l = log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  let initialError = opts?.initialError;
   await backoff(
     async () => {
+      if (initialError !== undefined) {
+        const error = initialError;
+        initialError = undefined;
+        throw error;
+      }
       await x.register();
     },
     {

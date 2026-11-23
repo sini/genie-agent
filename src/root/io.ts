@@ -599,6 +599,7 @@ export class XmsgIo implements Io {
     await awaitRegister(this.client, this.wait, () => {}, this.closeAbort.signal, {
       service: this.service,
       startMs: this.reconnectStartMs,
+      initialError: e,
     });
     this.log(`${this.service}: re-registered on xmsg`);
   }

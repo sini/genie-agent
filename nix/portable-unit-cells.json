@@ -64,7 +64,10 @@
     "xmsg endpoints: registration-only client skips CLI and unused HTTP refuses without retry",
     "xmsg endpoints: delayed registration retains discovery refusal without unhandled rejection",
     "a register call with no reply fails as a connection error and awaitRegister retries",
-    "xmsg endpoints: options grace deadline also applies after doctor discovery"
+    "xmsg endpoints: options grace deadline also applies after doctor discovery",
+    "xmsg endpoints: stale invalidation cannot discard a concurrent reconnect probe",
+    "xmsg endpoints: disconnect reconnects once to the changed path while pins stay fixed",
+    "xmsg endpoints: startup is immediate and failed registrations retain exponential backoff"
   ],
   "tests/dispatcher-gc.test.ts": [
     "oracle 26: never parked with a message outstanding or in buffer"

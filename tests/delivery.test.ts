@@ -750,6 +750,7 @@ test("xmsg endpoints: delayed registration retains discovery refusal without unh
   } });
   const client = new SocketXmsg({}, "guard", { resolve, required: ["registerSocket"] });
   await new Promise<void>((done) => setImmediate(done));
+  assert.equal(calls, 0, "constructor must not start discovery before registration");
   await assert.rejects(client.register(), /doctor refused endpoint resolution/);
   await assert.rejects(client.register(), /doctor refused endpoint resolution/);
   assert.equal(calls, 1);
@@ -771,4 +772,134 @@ test("xmsg endpoints: options grace deadline also applies after doctor discovery
     await assert.rejects(client.register(), (error: Error) => isConnectionError(error) && error.message.includes("no reply within 100 ms"));
     assert.equal(probes, 1);
   } finally { client.close(); for (const socket of sockets) socket.destroy(); server.close(); }
+});
+
+test("xmsg endpoints: stale invalidation cannot discard a concurrent reconnect probe", async () => {
+  let probes = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => {
+    probes++;
+    if (probes > 1) await held;
+    return { stdout: JSON.stringify({ ...doctorPaths, register_socket: probes === 1 ? "/old/register" : "/new/register" }) };
+  } });
+  const first = await resolve();
+  const stale = await resolve();
+  assert.equal(probes, 1);
+  resolve.invalidate!(first);
+  const reconnects = Array.from({ length: 32 }, () => resolve());
+  assert.equal(probes, 2, "one replacement probe starts for concurrent attempts");
+  resolve.invalidate!(stale);
+  resolve.invalidate!(first);
+  const extra = resolve();
+  assert.equal(probes, 2, "old transport failures must not discard the new in-flight probe");
+  release();
+  for (const paths of await Promise.all([...reconnects, extra])) assert.equal(paths.registerSocket, "/new/register");
+  resolve.invalidate!(stale);
+  assert.equal((await resolve()).registerSocket, "/new/register");
+  assert.equal(probes, 2, "no disconnect means no additional probe");
+});
+
+test("xmsg endpoints: disconnect reconnects once to the changed path while pins stay fixed", async () => {
+  const firstPath = `${mkdtempSync(`${tmpdir()}/xm-old-`)}/register.sock`;
+  const nextPath = `${mkdtempSync(`${tmpdir()}/xm-new-`)}/register.sock`;
+  const sockets = new Set<any>();
+  let dropOld = false;
+  let holdOldPoll: (() => void) | undefined;
+  let newConnections = 0;
+  const server = (address: string) => netServer((socket) => {
+    sockets.add(socket);
+    if (address === "new@node") newConnections++;
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (data) => {
+      buffer += data;
+      while (buffer.includes("\n")) {
+        const end = buffer.indexOf("\n");
+        const frame = JSON.parse(buffer.slice(0, end));
+        buffer = buffer.slice(end + 1);
+        if (frame.harness) socket.write(JSON.stringify({ status: "ok", address, node: "node" }) + "\n");
+        else if (holdOldPoll && address === "old@node") { const held = holdOldPoll; holdOldPoll = undefined; held(); }
+        else if (dropOld && address === "old@node") socket.destroy();
+        else socket.write(JSON.stringify({ action: "timeout" }) + "\n");
+      }
+    });
+  });
+  const old = server("old@node"), next = server("new@node");
+  await Promise.all([new Promise<void>((done) => old.listen(firstPath, done)), new Promise<void>((done) => next.listen(nextPath, done))]);
+  let target = firstPath, probes = 0;
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => {
+    probes++; return { stdout: JSON.stringify({ endpoints_usable: true, register_socket: target, http_socket: null }) };
+  } });
+  const client = new SocketXmsg({}, "guard", { resolve, required: ["registerSocket"] });
+  const pinnedOptions = { registerSocket: firstPath };
+  const pinned = new SocketXmsg(pinnedOptions, "pinned", { resolve, required: ["registerSocket"] });
+  pinnedOptions.registerSocket = nextPath;
+  try {
+    assert.equal(probes, 0, "construction must not probe");
+    await awaitRegister(client, async () => { throw new Error("startup must not wait"); }, () => {});
+    assert.equal(client.address, "old@node");
+    const pollSeen = new Promise<void>((done) => { holdOldPoll = done; });
+    const abandonedPoll = client.poll(1);
+    await pollSeen;
+    client.close();
+    await assert.rejects(abandonedPoll, isConnectionError);
+    assert.equal((await client.register()).address, "old@node");
+    assert.equal(probes, 1, "intentional close must retain discovery");
+    for (let i = 0; i < 3; i++) assert.equal(await client.poll(1), null);
+    assert.equal(probes, 1, "messages must not probe");
+    dropOld = true;
+    const disconnect = await client.poll(1).then(() => undefined, (error) => error);
+    assert.ok(isConnectionError(disconnect));
+    target = nextPath;
+    let waitStarted!: () => void, releaseAbort!: () => void;
+    const startedAbort = new Promise<void>((done) => { waitStarted = done; });
+    const heldAbort = new Promise<void>((done) => { releaseAbort = done; });
+    const controller = new AbortController();
+    const aborted = awaitRegister(client, async (ms) => { assert.equal(ms, 1000); waitStarted(); await heldAbort; }, () => {}, controller.signal, { initialError: disconnect });
+    await startedAbort;
+    assert.equal(probes, 1, "replacement probe must wait for reconnect backoff");
+    controller.abort(); releaseAbort();
+    await assert.rejects(aborted, /aborted/);
+    assert.equal(probes, 1, "abort during backoff must execute zero replacement probes");
+    let waited = 0, allWaiting!: () => void, releaseReconnect!: () => void;
+    const waiting = new Promise<void>((done) => { allWaiting = done; });
+    const heldReconnect = new Promise<void>((done) => { releaseReconnect = done; });
+    const reconnects = Array.from({ length: 32 }, () => awaitRegister(client, async (ms) => {
+      assert.equal(ms, 1000); if (++waited === 32) allWaiting(); await heldReconnect;
+    }, () => {}, undefined, { initialError: disconnect }));
+    await waiting;
+    assert.equal(probes, 1, "all concurrent reconnects wait before discovery");
+    releaseReconnect();
+    await Promise.all(reconnects);
+    assert.equal(client.address, "new@node");
+    assert.equal(probes, 2, "concurrent reconnects execute one replacement probe");
+    assert.equal(newConnections, 1, "concurrent registration is single-flight too");
+    assert.equal(await client.poll(1), null);
+    assert.equal(probes, 2);
+    assert.equal((await pinned.register()).address, "old@node", "explicit startup pin is snapshotted");
+    await assert.rejects(pinned.poll(1), isConnectionError);
+    assert.equal((await pinned.register()).address, "old@node");
+    assert.equal((await resolve({}, ["registerSocket"])).registerSocket, nextPath);
+    assert.equal(probes, 2, "pinned disconnect must not invalidate another doctor's cache");
+  } finally {
+    client.close(); pinned.close();
+    for (const socket of sockets) socket.destroy();
+    old.close(); next.close();
+  }
+});
+
+
+test("xmsg endpoints: startup is immediate and failed registrations retain exponential backoff", async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  await awaitRegister({ register: async () => { calls++; } }, async (ms) => { waits.push(ms); }, () => {});
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+  calls = 0;
+  await awaitRegister({ register: async () => {
+    if (++calls < 4) throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+  } }, async (ms) => { waits.push(ms); }, () => {}, undefined, { startMs: 3, maxMs: 5 });
+  assert.equal(calls, 4);
+  assert.deepEqual(waits, [3, 5, 5]);
 });

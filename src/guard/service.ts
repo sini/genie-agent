@@ -391,7 +391,7 @@ export async function serve(
     } catch (e) {
       if (opts?.signal?.aborted) break;
       if (!isConnectionError(e)) throw e;
-      await awaitRegister(x, opts?.wait, opts?.log, opts?.signal);
+      await awaitRegister(x, opts?.wait, opts?.log, opts?.signal, { initialError: e });
     }
   }
 }
