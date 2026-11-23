@@ -60,7 +60,9 @@
     "xmsg endpoints: bounded probe failures are cached and do not expose output",
     "xmsg endpoints: leaf registration uses its reported path without sibling guessing",
     "xmsg endpoints: unsafe explicit pins and absent legacy runtime refuse",
-    "the socket client speaks X9 on register.sock, attested sends on agent.sock and http.sock reads"
+    "the socket client speaks X9 on register.sock, attested sends on agent.sock and http.sock reads",
+    "xmsg endpoints: registration-only client skips CLI and unused HTTP refuses without retry",
+    "xmsg endpoints: delayed registration retains discovery refusal without unhandled rejection"
   ],
   "tests/dispatcher-gc.test.ts": [
     "oracle 26: never parked with a message outstanding or in buffer"
