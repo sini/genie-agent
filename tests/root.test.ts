@@ -20,7 +20,7 @@ import { CHECKIN_MS, type Clock, defaultCheckinPrompt, QUESTION_TIMEOUT_MS } fro
 import { git } from "../src/mirror/index.ts";
 import { DEADLINE_NOTICE, guardIn, type Inbound, main, parseMatrixForward, REFUSAL, validateRootConfig, WITHHELD, XmsgIo } from "../src/root/index.ts";
 import { configuredEval } from "../src/root/eval.ts";
-import { parseArgs } from "../src/root/main.ts";
+import { parseArgs, rootXmsgEndpoints } from "../src/root/main.ts";
 import { piAiPath } from "../src/tier1/custody.ts";
 import { usableBwrap } from "../src/isolation.ts";
 import { BRIDGE } from "../src/supervisor/index.ts";
@@ -1715,6 +1715,8 @@ test("oracle (GI-2): parseMatrixForward, XmsgIo solicited/control routing, and m
     configPath: validCfg,
   });
   assert.deepEqual(parseArgs(["--config", validCfg, "--agent-sock", "/a", "--register-sock", "/r", "--http-sock", "/h"], {}), { configPath: validCfg, agentSocket: "/a", registerSocket: "/r", httpSocket: "/h" });
+  assert.deepEqual(rootXmsgEndpoints({ xmsgDir: "/configured", agentSocket: "/configured-special" }, { agentSocket: "/cli-agent" }), { agentSocket: "/cli-agent", registerSocket: "/configured/register.sock", httpSocket: "/configured/http.sock" });
+  assert.deepEqual(rootXmsgEndpoints({ xmsgDir: "invalid-relative", agentSocket: "also-relative" }, { xmsgDir: "/cli", httpSocket: "/cli-special-http" }), { agentSocket: "/cli/agent.sock", registerSocket: "/cli/register.sock", httpSocket: "/cli-special-http" });
   assert.throws(() => parseArgs([], {}), /--config \(or GENIE_CONFIG\) is required/);
 
   // 2. parseMatrixForward for <request> and fail-open <request screened="false" note="…"> envelopes

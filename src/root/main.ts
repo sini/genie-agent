@@ -40,11 +40,15 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   return { configPath, ...endpoints };
 }
 
+export function rootXmsgEndpoints(config: XmsgEndpointOverrides, cli: XmsgEndpointOverrides) {
+  return explicitXmsgEndpoints({ ...(cli.xmsgDir === undefined ? config : {}), ...cli });
+}
+
 async function run(opts: CliOptions): Promise<void> {
   const raw: RootConfig = JSON.parse(readFileSync(opts.configPath, "utf8"));
   const { guardEnable } = validateRootConfig(raw);
   const io = new XmsgIo({
-    ...explicitXmsgEndpoints({ ...(opts.xmsgDir === undefined ? raw.xmsg ?? {} : {}), ...opts }),
+    ...rootXmsgEndpoints(raw.xmsg ?? {}, opts),
     service: raw.xmsg?.service ?? "genie",
     pollWaitMs: raw.xmsg?.pollWaitMs,
     guard: guardEnable ? raw.xmsg?.guard : null,
