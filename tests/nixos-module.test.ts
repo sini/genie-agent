@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -839,6 +839,16 @@ test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit 
   const up = spawnSync(readyBin, [join(dir, "agent.sock"), "1"], { encoding: "utf8" });
   server.close();
   assert.equal(up.status, 0, up.stderr);
+  // A stop during the wait: the script's own TERM handler exits 0 (death by the signal would
+  // mean no handler, which as PID 1 under PrivatePIDs= is an ignored TERM).
+  const waiting = spawn(readyBin, [join(dir, "absent.sock"), "30"]);
+  const ended = once(waiting, "exit");
+  await new Promise((r) => setTimeout(r, 500));
+  waiting.kill("SIGTERM");
+  const timer = setTimeout(() => waiting.kill("SIGKILL"), 5000);
+  const [code, signal] = await ended;
+  clearTimeout(timer);
+  assert.deepEqual({ code, signal }, { code: 0, signal: null }, "readiness wait must end on TERM by its handler");
 
   // null opts out: plain multi-user.target units with no preparation unit and no wait.
   const n = summary.xmsgRuntimeNoTrigger;

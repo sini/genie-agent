@@ -54,13 +54,23 @@ async function run(opts: CliOptions): Promise<void> {
     guard: guardEnable ? raw.xmsg?.guard : null,
     guardEnable,
   });
-  await io.register(false);
-  const root = main(opts.configPath, io);
+  let stopping = false;
   const shutdown = () => {
+    stopping = true;
     io.close();
   };
+  // Before registering, which can wait on xmsg indefinitely: as PID 1 (the unit's PrivatePIDs=)
+  // an unhandled TERM is ignored and a stop waits out TimeoutStopSec.
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
+  try {
+    await io.register(false);
+  } catch (e) {
+    if (stopping) return;
+    throw e;
+  }
+  if (stopping) return;
+  const root = main(opts.configPath, io);
   io.resume();
   await root.start();
   try {

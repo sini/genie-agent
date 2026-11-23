@@ -47,3 +47,26 @@ test("root startup: shutdown handlers precede intake while startup readiness is 
     assert.deepEqual(order, ["registered", "poll", "closed", "starting", "ready", "run", "stopped"]);
   }
 });
+
+test("root startup: shutdown handlers precede registration, which may wait on xmsg indefinitely", async () => {
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    const signals = new EventEmitter();
+    const order: string[] = [];
+    class Io {
+      closed = false;
+      // Registration still waiting on xmsg when the stop arrives; close aborts it.
+      async register() {
+        signals.emit(signal);
+        if (this.closed) throw new Error("aborted");
+        order.push("registered");
+      }
+      close() { this.closed = true; order.push("closed"); }
+      resume() { order.push("poll"); }
+    }
+    const run = new Function("readFileSync", "validateRootConfig", "XmsgIo", "main", "process", "rootXmsgEndpoints", `${declaration}\nreturn run;`)(
+      () => JSON.stringify({ xmsg: {} }), () => ({ guardEnable: false }), Io, () => { order.push("main"); }, signals, rootXmsgEndpoints,
+    );
+    await run({ configPath: "fixture", xmsgDir: "/fixture" });
+    assert.deepEqual(order, ["closed"], `${signal} during registration must stop cleanly`);
+  }
+});

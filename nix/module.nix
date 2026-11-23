@@ -35,8 +35,11 @@ let
   };
   xmsgReady = pkgs.writeScript "genie-xmsg-ready" ''
     #!${pkgs.python3}/bin/python3 -I
-    import socket, sys, time
+    import signal, socket, sys, time
 
+    # Under PrivatePIDs= this is PID 1, which ignores an unhandled TERM: a stop during the wait
+    # must end it cleanly rather than wait out TimeoutStopSec.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     path, timeout = sys.argv[1], float(sys.argv[2])
     deadline = time.monotonic() + timeout
     while True:

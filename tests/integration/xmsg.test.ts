@@ -2325,3 +2325,79 @@ test("socket discovery: unpinned old CLI selects the fixture once", async () => 
     assert.deepEqual(logs, ["genie: xmsg legacy socket fallback (CLI does not support doctor)"]);
   } finally { client.close(); await node.stop(); }
 });
+
+// -----------------------------------------------------------------------------
+// Oracle: genie-root ends on SIGTERM by its own handler, promptly
+// - Under PrivatePIDs=true genie-root is PID 1 in its namespace, where an unhandled SIGTERM is
+//   ignored and a stop waits out TimeoutStopSec. A handled TERM exits with code 0; the default
+//   disposition dies by the signal instead, so `signal === null && code === 0` tells them apart
+//   without a PID namespace.
+// - Two cells, for either order of a logout's stop: xmsg still up, and xmsg already gone (root in
+//   its reconnect backoff), plus xmsg absent from the start (root still in its first registration).
+// - Mutants: drop `process.once("SIGTERM", shutdown)` from src/root/main.ts => the child dies by
+//   SIGTERM in every cell => RED; install it after registration => the "absent" cell is RED.
+// -----------------------------------------------------------------------------
+test("genie-root exits 0 within 5s of SIGTERM, with xmsg up, gone, and absent", { timeout: 90_000 }, async () => {
+  const GENIE_ROOT_BIN = process.env.GENIE_ROOT_BIN;
+  assert.ok(GENIE_ROOT_BIN && existsSync(GENIE_ROOT_BIN), "GENIE_ROOT_BIN is required");
+  const piBin = process.env.PI;
+  assert.ok(piBin && existsSync(piBin), "PI is required");
+
+  for (const mode of ["up", "gone", "absent"] as const) {
+    const node = await startXmsg({ genie: GENIE_ROOT_BIN });
+    let rootProc: ChildProcess | null = null;
+    try {
+      const modelKey = join(node.dir, "model-key");
+      writeFileSync(modelKey, "term-test");
+      const cfgPath = join(node.dir, "root-config.json");
+      writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          stateRoot: join(node.dir, "state"),
+          storeRoot: join(node.dir, "store"),
+          mirror: { mirrorRoot: join(node.dir, "mirrors"), worktreeRoot: join(node.dir, "worktrees") },
+          pi: piBin,
+          model: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", id: "m", keyFile: modelKey },
+          tier1: { searxngUrl: "http://127.0.0.1:1", cluster: [] },
+          guard: { enable: false },
+          broker: { guardOut: { enable: false } },
+        }),
+      );
+      if (mode === "absent") await node.killServer();
+      const childEnv: Record<string, string | undefined> = { ...process.env, XDG_RUNTIME_DIR: node.runDir, HOME: node.dir, GENIE_REPO_ROOT: process.cwd() };
+      delete childEnv.NODE_TEST_CONTEXT;
+      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath, "--xmsg-dir", node.xmsgDir], { env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+      let rootStderr = "";
+      rootProc.stderr?.setEncoding("utf8");
+      rootProc.stderr?.on("data", (c: string) => { rootStderr += c; });
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((r) =>
+        rootProc!.once("exit", (code, signal) => r({ code, signal })),
+      );
+
+      let registered = mode === "absent";
+      for (let i = 0; i < 200 && !registered; i++) {
+        const res = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+        registered = (res.json?.recipients ?? []).some((r: any) => r.address === "genie" || r.address.startsWith("genie@"));
+        if (rootProc.exitCode !== null) throw new Error(`genie-root exited early (${rootProc.exitCode}): ${rootStderr}`);
+        if (!registered) await sleep(25);
+      }
+      assert.equal(registered, true, `genie-root did not register: ${rootStderr}`);
+      await sleep(1000);
+      if (mode === "gone") {
+        await node.killServer();
+        await sleep(500);
+      }
+      if (mode === "absent") assert.match(rootStderr, /waiting for xmsg/, "control: root is still registering");
+
+      const sent = Date.now();
+      rootProc.kill("SIGTERM");
+      const result = await Promise.race([exited, sleep(5000).then(() => null)]);
+      const label = `xmsg ${mode}`;
+      assert.ok(result, `${label}: genie-root still running 5s after SIGTERM: ${rootStderr}`);
+      assert.deepEqual(result, { code: 0, signal: null }, `${label}: genie-root must exit 0 from its handler, after ${Date.now() - sent}ms: ${rootStderr}`);
+    } finally {
+      await stopChild(rootProc);
+      await node.stop();
+    }
+  }
+});
