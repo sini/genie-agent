@@ -24,7 +24,9 @@ export function xmsgEndpointArguments(flags: Map<string, string>): XmsgEndpointO
   return result;
 }
 
-export type XmsgEndpointResolver = (overrides?: XmsgEndpointOverrides) => Promise<XmsgEndpoints>;
+export type XmsgEndpointName = keyof XmsgEndpoints;
+export type XmsgEndpointResolver = (overrides?: XmsgEndpointOverrides,
+  required?: readonly XmsgEndpointName[]) => Promise<Partial<XmsgEndpoints>>;
 type ProbeError = Error & { code?: string | number; killed?: boolean; signal?: string | null };
 export interface DoctorResult { stdout: string; error?: ProbeError | null }
 export interface DoctorOptions {
@@ -118,16 +120,16 @@ export function createXmsgEndpointResolver(options: {
     }
     return resultPaths;
   }
-  return async (overrides = {}) => {
+  return async (overrides = {}, required = names) => {
     const result = explicitXmsgEndpoints(overrides);
-    for (const name of names) if (result[name] === undefined && env[environmentNames[name]] !== undefined) {
+    for (const name of required) if (result[name] === undefined && env[environmentNames[name]] !== undefined) {
       result[name] = socket(env[environmentNames[name]], environmentNames[name]);
     }
-    if (names.some((name) => result[name] === undefined)) {
+    if (required.some((name) => result[name] === undefined)) {
       const discovered = await (doctor ??= discover());
       if (typeof discovered !== "string") {
-        for (const name of names) result[name] ??= discovered[name];
-        if (names.some((name) => result[name] === undefined)) {
+        for (const name of names) if (result[name] === undefined && discovered[name] !== undefined) result[name] = discovered[name];
+        if (required.some((name) => result[name] === undefined)) {
           throw new XmsgEndpointError("xmsg: doctor omitted a required endpoint");
         }
       } else {
@@ -136,10 +138,10 @@ export function createXmsgEndpointResolver(options: {
         if (!loggedFallback) { log(`genie: xmsg legacy socket fallback (${discovered})`); loggedFallback = true; }
       }
     }
-    return result as XmsgEndpoints;
+    return result;
   };
 }
 
 let processResolver: XmsgEndpointResolver | undefined;
-export const resolveXmsgEndpoints: XmsgEndpointResolver = (overrides) =>
-  (processResolver ??= createXmsgEndpointResolver())(overrides);
+export const resolveXmsgEndpoints: XmsgEndpointResolver = (overrides, required) =>
+  (processResolver ??= createXmsgEndpointResolver())(overrides, required);

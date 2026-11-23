@@ -662,8 +662,9 @@ test("xmsg endpoints: bounded probe failures are cached and do not expose output
 
 test("xmsg endpoints: leaf registration uses its reported path without sibling guessing", async () => {
   const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => ({ stdout: JSON.stringify({ ...doctorPaths,
-    register_socket: null, leaf_register_socket: "/separate/leaf.sock" }) }) });
-  assert.deepEqual(await resolve(), { agentSocket: "/doctor/agent.sock", registerSocket: "/separate/leaf.sock", httpSocket: "/doctor/http.sock" });
+    register_socket: null, leaf_register_socket: "/separate/leaf.sock", http_socket: null }) }) });
+  assert.deepEqual(await resolve({}, ["registerSocket"]), { agentSocket: "/doctor/agent.sock", registerSocket: "/separate/leaf.sock" });
+  await assert.rejects(resolve(), /omitted a required endpoint/);
 });
 
 test("xmsg endpoints: unsafe explicit pins and absent legacy runtime refuse", async () => {
@@ -675,4 +676,50 @@ test("xmsg endpoints: unsafe explicit pins and absent legacy runtime refuse", as
   await assert.rejects(resolve(), /XDG_RUNTIME_DIR/);
   const bad = createXmsgEndpointResolver({ env: { XMSG_HTTP_SOCK: "relative", XDG_RUNTIME_DIR: "/legacy" }, probe: async () => { throw new Error("unsafe env must not probe"); } });
   await assert.rejects(bad(), XmsgEndpointError);
+});
+
+
+test("xmsg endpoints: registration-only client skips CLI and unused HTTP refuses without retry", async () => {
+  const directory = mkdtempSync(`${tmpdir()}/xm-reg-`);
+  const registerSocket = `${directory}/register.sock`;
+  let calls = 0;
+  const sockets = new Set<any>();
+  const server = netServer((socket) => {
+    sockets.add(socket);
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (data) => {
+      buffer += data;
+      while (buffer.includes("\n")) {
+        const end = buffer.indexOf("\n");
+        const frame = JSON.parse(buffer.slice(0, end));
+        buffer = buffer.slice(end + 1);
+        socket.write(JSON.stringify(frame.harness ? { status: "ok", address: "guard@node", node: "node" } : { action: "timeout" }) + "\n");
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(registerSocket, resolve));
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => { calls++; throw new Error("unexpected CLI probe"); } });
+  const client = new SocketXmsg({ registerSocket }, "guard", { resolve, required: ["registerSocket"] });
+  try {
+    await client.register();
+    assert.equal(await client.poll(1), null);
+    await client.register();
+    await assert.rejects(client.list(), /httpSocket is unavailable/);
+    await assert.rejects(client.send("target", "text", "key"), /agentSocket is unavailable/);
+    assert.equal(calls, 0, "unused operations and reconnect must not discover endpoints");
+  } finally { client.close(); for (const socket of sockets) socket.destroy(); server.close(); }
+});
+
+test("xmsg endpoints: delayed registration retains discovery refusal without unhandled rejection", async () => {
+  let calls = 0;
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => {
+    calls++; return { stdout: JSON.stringify({ endpoints_usable: false }) };
+  } });
+  const client = new SocketXmsg({}, "guard", { resolve, required: ["registerSocket"] });
+  await new Promise<void>((done) => setImmediate(done));
+  await assert.rejects(client.register(), /doctor refused endpoint resolution/);
+  await assert.rejects(client.register(), /doctor refused endpoint resolution/);
+  assert.equal(calls, 1);
+  client.close();
 });

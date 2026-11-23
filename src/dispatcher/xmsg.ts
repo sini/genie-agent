@@ -4,7 +4,7 @@
 import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import process from "node:process";
-import { resolveXmsgEndpoints, type XmsgEndpointOverrides, type XmsgEndpointResolver, type XmsgEndpoints } from "../xmsg-endpoints.ts";
+import { resolveXmsgEndpoints, XmsgEndpointError, type XmsgEndpointName, type XmsgEndpointOverrides, type XmsgEndpointResolver, type XmsgEndpoints } from "../xmsg-endpoints.ts";
 
 export type SessionPresence = "present" | "absent" | "unknown";
 
@@ -114,23 +114,32 @@ class Lines {
 }
 
 export class SocketXmsg implements XmsgClient {
-  private readonly endpoints: Promise<XmsgEndpoints>;
+  private readonly endpoints: Promise<Partial<XmsgEndpoints>>;
   private readonly name: string;
   private reg: Lines | null = null;
   address?: string;
   node?: string;
   registrationLimits: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number } = {};
 
-  constructor(paths: string | XmsgEndpointOverrides, name: string, resolve: XmsgEndpointResolver = resolveXmsgEndpoints) {
-    this.endpoints = resolve(typeof paths === "string" ? { xmsgDir: paths } : paths);
+  constructor(paths: string | XmsgEndpointOverrides, name: string,
+    options: { resolve?: XmsgEndpointResolver; required?: readonly XmsgEndpointName[] } = {}) {
+    this.endpoints = (options.resolve ?? resolveXmsgEndpoints)(typeof paths === "string" ? { xmsgDir: paths } : paths, options.required);
+    // Guard can wait for its model before awaiting registration; retain the original failure.
+    void this.endpoints.catch(() => {});
     this.name = name;
+  }
+
+  private async socketPath(name: XmsgEndpointName): Promise<string> {
+    const value = (await this.endpoints)[name];
+    if (value === undefined) throw new XmsgEndpointError(`xmsg: ${name} is unavailable for this client`);
+    return value;
   }
 
   // The registration lives as long as this connection; xmsg refuses a second live one.
   async register(): Promise<{ address: string; node: string }> {
-    const paths = await this.endpoints;
+    const registerSocket = await this.socketPath("registerSocket");
     this.reg?.close();
-    this.reg = new Lines(paths.registerSocket);
+    this.reg = new Lines(registerSocket);
     const r = await this.reg.call({ harness: "svc", name: this.name });
     this.address = r.address;
     this.node = r.node;
@@ -164,7 +173,7 @@ export class SocketXmsg implements XmsgClient {
 
   // One attested call: the server reads the caller's identity off this connection's peer.
   private async agent(frame: object): Promise<any> {
-    const c = new Lines((await this.endpoints).agentSocket);
+    const c = new Lines(await this.socketPath("agentSocket"));
     try {
       return await c.call(frame);
     } finally {
@@ -185,9 +194,9 @@ export class SocketXmsg implements XmsgClient {
   }
 
   private async http(path: string): Promise<any> {
-    const paths = await this.endpoints;
+    const httpSocket = await this.socketPath("httpSocket");
     return new Promise((resolve, reject) => {
-      const req = request({ socketPath: paths.httpSocket, path, agent: false }, (res) => {
+      const req = request({ socketPath: httpSocket, path, agent: false }, (res) => {
         let body = "";
         res.setEncoding("utf8");
         res.on("data", (c: string) => (body += c));

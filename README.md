@@ -33,7 +33,9 @@ Next come `XMSG_AGENT_SOCK`, `XMSG_REGISTER_SOCK` and `XMSG_HTTP_SOCK`, then the
 paths from `xmsg doctor --json`. The doctor runs at most once per process startup, with
 a three-second limit, forced termination and bounded output; its result is cached across
 messages and reconnects. The child receives a snapshot of the startup environment, including
-selected `XMSG_DB_PATH` and XDG values. Fully pinned endpoints need no CLI invocation.
+selected `XMSG_DB_PATH` and XDG values. Fully pinned required endpoints need no CLI invocation. Guard requires only registration;
+ROOT and dispatcher also require agent and HTTP endpoints. Absent unused endpoints remain
+absent, and calling an unused operation fails without discovery or fallback.
 Genie does not derive the daemon's namespace hash.
 
 A usable doctor report is accepted even when unrelated health checks make its exit status
