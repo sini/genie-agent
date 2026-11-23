@@ -20,7 +20,7 @@ import {
   type Options,
   type XmsgClient,
 } from "../src/dispatcher/index.ts";
-import { awaitRegister, checkSessionPresence } from "../src/dispatcher/xmsg.ts";
+import { awaitRegister, checkSessionPresence, isConnectionError } from "../src/dispatcher/xmsg.ts";
 import type { Herdr, HerdrAgent, StartSpec } from "../src/dispatcher/herdr.ts";
 import { errors as schemaErrors, load as loadSchema } from "../src/tier1/schema.ts";
 
@@ -754,4 +754,21 @@ test("xmsg endpoints: delayed registration retains discovery refusal without unh
   await assert.rejects(client.register(), /doctor refused endpoint resolution/);
   assert.equal(calls, 1);
   client.close();
+});
+
+test("xmsg endpoints: options grace deadline also applies after doctor discovery", async () => {
+  const directory = mkdtempSync(`${tmpdir()}/xm-grace-`);
+  const registerSocket = `${directory}/register.sock`;
+  const sockets = new Set<any>();
+  const server = netServer((socket) => { sockets.add(socket); });
+  await new Promise<void>((resolve) => server.listen(registerSocket, resolve));
+  let probes = 0;
+  const resolve = createXmsgEndpointResolver({ env: {}, probe: async () => {
+    probes++; return { stdout: JSON.stringify({ endpoints_usable: true, register_socket: registerSocket }) };
+  } });
+  const client = new SocketXmsg({}, "guard", { resolve, required: ["registerSocket"], graceMs: 100 });
+  try {
+    await assert.rejects(client.register(), (error: Error) => isConnectionError(error) && error.message.includes("no reply within 100 ms"));
+    assert.equal(probes, 1);
+  } finally { client.close(); for (const socket of sockets) socket.destroy(); server.close(); }
 });

@@ -235,7 +235,7 @@ class Lines {
 
   constructor(path: string, graceMs = REPLY_GRACE_MS) {
     this.path = path;
-    this.graceMs = options.graceMs ?? REPLY_GRACE_MS;
+    this.graceMs = graceMs;
     this.sock = createConnection(path);
     this.sock.setEncoding("utf8");
     this.sock.on("data", (chunk: string) => {
