@@ -10,7 +10,7 @@ import { type Config, config, ConfigError } from "./config.ts";
 import { serve, Unauthorized } from "./service.ts";
 
 async function main(c: Config): Promise<void> {
-  const x = new SocketXmsg(c.xmsgDir, "genie-guard");
+  const x = new SocketXmsg(c, "genie-guard");
   await serve(c, x, system, systemWeb);
 }
 

@@ -1,3 +1,4 @@
+import type { XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
 // Real xmsg-backed Io adapters for the composition root (GI-2, genie-local-deploy-plan-v0.md):
 // - XmsgGuardClient: sends guard envelopes over SocketXmsg with a FIFO concurrency limit
 //   (maxConcurrency, default 1) and a timeout that fails closed to { unavailable }.
@@ -371,8 +372,7 @@ export function parseMatrixForward(
   return null;
 }
 
-export interface XmsgIoOptions {
-  xmsgDir?: string;
+export interface XmsgIoOptions extends XmsgEndpointOverrides {
   service?: string;
   pollWaitMs?: number;
   requestTimeoutMs?: number;
@@ -425,14 +425,13 @@ export class XmsgIo implements Io {
     opts: XmsgIoOptions = {},
     client?: XmsgClient & { register(): Promise<unknown>; close(): void },
   ) {
-    const dir = opts.xmsgDir ?? `${process.env.XDG_RUNTIME_DIR ?? "/run"}/xmsg`;
     const service = opts.service ?? "genie";
     const guardEnable = opts.guardEnable ?? (opts.guard !== null);
     if (guardEnable && opts.guard !== undefined && (opts.guard === null || ("target" in opts.guard && !opts.guard.target))) {
       throw new Error("xmsg.guard.target is required when guard.enable is true");
     }
     this.service = service;
-    this.client = client ?? new SocketXmsg(dir, service);
+    this.client = client ?? new SocketXmsg(opts, service);
     this.pollWaitMs = opts.pollWaitMs ?? 1_000;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
     this.store = opts.store;

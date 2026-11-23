@@ -4,6 +4,7 @@
 import { request } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import process from "node:process";
+import { resolveXmsgEndpoints, type XmsgEndpointOverrides, type XmsgEndpointResolver, type XmsgEndpoints } from "../xmsg-endpoints.ts";
 
 export type SessionPresence = "present" | "absent" | "unknown";
 
@@ -113,23 +114,23 @@ class Lines {
 }
 
 export class SocketXmsg implements XmsgClient {
-  // `dir` is `$XDG_RUNTIME_DIR/xmsg`; `name` the service's, without `svc:`.
-  private readonly dir: string;
+  private readonly endpoints: Promise<XmsgEndpoints>;
   private readonly name: string;
   private reg: Lines | null = null;
   address?: string;
   node?: string;
   registrationLimits: { max_body_bytes?: number; reply_ttl_secs?: number; idempotency_ttl_secs?: number } = {};
 
-  constructor(dir: string, name: string) {
-    this.dir = dir;
+  constructor(paths: string | XmsgEndpointOverrides, name: string, resolve: XmsgEndpointResolver = resolveXmsgEndpoints) {
+    this.endpoints = resolve(typeof paths === "string" ? { xmsgDir: paths } : paths);
     this.name = name;
   }
 
   // The registration lives as long as this connection; xmsg refuses a second live one.
   async register(): Promise<{ address: string; node: string }> {
+    const paths = await this.endpoints;
     this.reg?.close();
-    this.reg = new Lines(`${this.dir}/register.sock`);
+    this.reg = new Lines(paths.registerSocket);
     const r = await this.reg.call({ harness: "svc", name: this.name });
     this.address = r.address;
     this.node = r.node;
@@ -163,7 +164,7 @@ export class SocketXmsg implements XmsgClient {
 
   // One attested call: the server reads the caller's identity off this connection's peer.
   private async agent(frame: object): Promise<any> {
-    const c = new Lines(`${this.dir}/agent.sock`);
+    const c = new Lines((await this.endpoints).agentSocket);
     try {
       return await c.call(frame);
     } finally {
@@ -183,9 +184,10 @@ export class SocketXmsg implements XmsgClient {
     return typeof r?.messageId === "string" ? r.messageId : undefined;
   }
 
-  private http(path: string): Promise<any> {
+  private async http(path: string): Promise<any> {
+    const paths = await this.endpoints;
     return new Promise((resolve, reject) => {
-      const req = request({ socketPath: `${this.dir}/http.sock`, path, agent: false }, (res) => {
+      const req = request({ socketPath: paths.httpSocket, path, agent: false }, (res) => {
         let body = "";
         res.setEncoding("utf8");
         res.on("data", (c: string) => (body += c));

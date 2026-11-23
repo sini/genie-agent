@@ -1098,3 +1098,11 @@ for (const source of ["message", "eval_stdout", "recall", "web"] as const) {
     } finally { console.log(`SCOPE_REQUEST_COUNT=${requests.length}`); await close(); }
   });
 }
+
+
+test("guard socket flags do not require XDG runtime", () => {
+  const c = config(["--ninfer-url", "http://example.org/v1", "--agent-sock", "/selected/agent", "--register-sock", "/other/register", "--http-sock", "/third/http"], {});
+  assert.equal(c.agentSocket, "/selected/agent");
+  assert.equal(c.registerSocket, "/other/register");
+  assert.equal(c.httpSocket, "/third/http");
+});

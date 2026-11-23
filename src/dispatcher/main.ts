@@ -1,3 +1,4 @@
+import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
 // The dispatcher's entrypoint (design §5.8, D1c; GI-3): registers as `serviceName` (default
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`
@@ -23,7 +24,7 @@ const settings = {
 
 const OPTIONAL_SETTINGS = new Set(["tokenCredentialFile", "model", "serviceName", "claudeBin"]);
 
-export interface Config {
+export interface Config extends XmsgEndpointOverrides {
   stateDir: string;
   session: string;
   cwd: string;
@@ -32,8 +33,6 @@ export interface Config {
   model?: string;
   serviceName: string;
   claudeBin?: string;
-  // `$XDG_RUNTIME_DIR/xmsg`, the tier's xmsg instance.
-  xmsgDir: string;
 }
 
 export class ConfigError extends Error {}
@@ -42,7 +41,7 @@ export function config(argv: string[], env: Record<string, string | undefined>):
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 2) {
     const [flag, value] = [argv[i], argv[i + 1]];
-    if (!Object.values(settings).some(([f]) => f === flag)) throw new ConfigError(`unknown argument ${flag}`);
+    if (!Object.hasOwn(xmsgEndpointFlags, flag) && !Object.values(settings).some(([f]) => f === flag)) throw new ConfigError(`unknown argument ${flag}`);
     if (value === undefined || value === "") throw new ConfigError(`${flag} needs a value`);
     flags.set(flag, value);
   }
@@ -52,11 +51,10 @@ export function config(argv: string[], env: Record<string, string | undefined>):
     if (!OPTIONAL_SETTINGS.has(k) && !v) throw new ConfigError(`${flag} (or ${name}) is required`);
     c[k] = v || undefined;
   }
-  if (!env.XDG_RUNTIME_DIR) throw new ConfigError("XDG_RUNTIME_DIR is required: the tier's xmsg lives under it");
   return {
     ...(c as Omit<Config, "xmsgDir" | "serviceName">),
     serviceName: c.serviceName ?? "genie-expert",
-    xmsgDir: `${env.XDG_RUNTIME_DIR}/xmsg`,
+    ...xmsgEndpointArguments(flags),
   };
 }
 
@@ -83,7 +81,7 @@ export async function startDispatcher(
       throw new Error(`credential file is empty: ${c.tokenCredentialFile}`);
     }
   }
-  const x = new SocketXmsg(c.xmsgDir, c.serviceName);
+  const x = new SocketXmsg(c, c.serviceName);
   // Registered first: xmsg refuses a second live registration, so a second dispatcher stops here
   // before it reconciles anything.
   await x.register();

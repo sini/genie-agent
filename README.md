@@ -21,11 +21,36 @@ The deployment lives in nix-config; this repository owns the agent.
 - `support-memory/`: the curated memory `genie-expert@public` reads, admitted only by a merged PR
   (see its README).
 
+## xmsg socket discovery (planned)
+
+Guard, dispatcher and ROOT resolve each endpoint independently. Explicit `--agent-sock`,
+`--register-sock` and `--http-sock` paths take precedence; `--xmsg-dir` supplies all three
+legacy filenames when an individual flag is absent. ROOT also accepts `agentSocket`,
+`registerSocket`, `httpSocket` and the existing `xmsgDir` under its JSON `xmsg` object;
+CLI settings override that object. Existing directory-based client construction remains supported.
+
+Next come `XMSG_AGENT_SOCK`, `XMSG_REGISTER_SOCK` and `XMSG_HTTP_SOCK`, then the resolved
+paths from `xmsg doctor --json`. The doctor runs at most once per process startup, with
+a three-second limit, forced termination and bounded output; its result is cached across
+messages and reconnects. The child receives a snapshot of the startup environment, including
+selected `XMSG_DB_PATH` and XDG values. Fully pinned endpoints need no CLI invocation.
+Genie does not derive the daemon's namespace hash.
+
+A usable doctor report is accepted even when unrelated health checks make its exit status
+nonzero. A leaf's `leaf_register_socket` is used when `register_socket` is null. Explicit
+refusal, malformed or unsafe paths, timeouts and oversized output refuse startup rather
+than selecting another daemon. Socket paths must be absolute; resolution creates no files.
+
+Only a missing CLI or an old doctor with no endpoint information uses the final
+`$XDG_RUNTIME_DIR/xmsg/{agent,register,http}.sock` fallback. This needs an absolute
+`XDG_RUNTIME_DIR` and emits one generic legacy-fallback notice. Doctor stdout, stderr and
+configuration contents are never included in that notice.
+
 ## genie-guard
 
 `packages.<linux>.genie-guard` is guard-in as a service: a Node single executable, built like
 `genie-dispatcher`, with `prompts/guard-in.md` bundled in. It registers on the owner's xmsg
-(`$XDG_RUNTIME_DIR/xmsg`) as `genie-guard` and answers each message with one reply, then
+using the shared socket discovery below as `genie-guard` and answers each message with one reply, then
 acknowledges it. It reviews through the same `review` (`src/guard/service.ts`) as
 `tests/guard-eval.ts`.
 
@@ -80,7 +105,7 @@ Settings, each a flag or the environment variable beside it: `--ninfer-url` /
 once at start and trimmed, sent as `Authorization: Bearer <key>` on `/v1/models` and
 `/v1/chat/completions`; the key is never in argv, the environment or a log, and a file that is
 unreadable or empty exits 2; unset sends no header). `tests/guard-eval.ts` takes the same
-`--api-key-file`. `XDG_RUNTIME_DIR` is required. A bad setting exits 2 and names it.
+`--api-key-file`. A bad model setting exits 2 and names it. Socket discovery can succeed without `XDG_RUNTIME_DIR`.
 
 ## Support Memory & Review Queue (Unit H2, Oracle 20)
 

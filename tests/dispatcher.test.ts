@@ -1506,3 +1506,9 @@ expertHostTest(
     }
   },
 );
+
+test("dispatcher socket flags do not require XDG runtime", () => {
+  const c = dispatcherConfig(["--state-dir", "/state", "--herdr-session", "public", "--cwd", "/work", "--token-config-dir", "/tokens", "--xmsg-dir", "/compat", "--agent-sock", "/other/agent"], {});
+  assert.equal(c.xmsgDir, "/compat");
+  assert.equal(c.agentSocket, "/other/agent");
+});

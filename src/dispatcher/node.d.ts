@@ -17,7 +17,7 @@ declare module "node:child_process" {
   export function execFile(
     file: string,
     args: string[],
-    options: { env: Record<string, string | undefined> },
+    options: { env: Record<string, string | undefined>; timeout?: number; maxBuffer?: number; encoding?: "utf8"; shell?: false; killSignal?: "SIGKILL" },
     callback: (err: Error | null, stdout: string, stderr: string) => void,
   ): void;
 }

@@ -1,3 +1,4 @@
+import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
 // genie-guard's settings: each a flag, or the environment variable beside it.
 import { readFileSync } from "node:fs";
 
@@ -10,7 +11,7 @@ const settings = {
   apiKeyFile: ["--api-key-file", "GENIE_GUARD_API_KEY_FILE"],
 } as const;
 
-export interface Config {
+export interface Config extends XmsgEndpointOverrides {
   base: string;
   // Absent: ninfer's first model, read once at start.
   model?: string;
@@ -18,8 +19,6 @@ export interface Config {
   timeoutMs: number;
   // The bearer key read from --api-key-file; absent: no Authorization header.
   apiKey?: string;
-  // `$XDG_RUNTIME_DIR/xmsg`, the owner's xmsg instance.
-  xmsgDir: string;
 }
 
 export class ConfigError extends Error {}
@@ -28,7 +27,7 @@ export function config(argv: string[], env: Record<string, string | undefined>):
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 2) {
     const [flag, value] = [argv[i], argv[i + 1]];
-    if (!Object.values(settings).some(([f]) => f === flag)) throw new ConfigError(`unknown argument ${flag}`);
+    if (!Object.hasOwn(xmsgEndpointFlags, flag) && !Object.values(settings).some(([f]) => f === flag)) throw new ConfigError(`unknown argument ${flag}`);
     if (value === undefined || value === "") throw new ConfigError(`${flag} needs a value`);
     flags.set(flag, value);
   }
@@ -47,7 +46,6 @@ export function config(argv: string[], env: Record<string, string | undefined>):
     throw new ConfigError("--scope-producer: expected service@node");
   const timeout = get(settings.timeoutMs) ?? "120000";
   if (!/^[1-9][0-9]*$/.test(timeout)) throw new ConfigError(`${settings.timeoutMs[0]}: not a positive integer: ${timeout}`);
-  if (!env.XDG_RUNTIME_DIR) throw new ConfigError("XDG_RUNTIME_DIR is required: the owner's xmsg lives under it");
   let apiKey: string | undefined;
   const keyFile = get(settings.apiKeyFile);
   if (keyFile !== undefined) {
@@ -64,6 +62,6 @@ export function config(argv: string[], env: Record<string, string | undefined>):
     scopeProducer,
     timeoutMs: Number(timeout),
     apiKey,
-    xmsgDir: `${env.XDG_RUNTIME_DIR}/xmsg`,
+    ...xmsgEndpointArguments(flags),
   };
 }
