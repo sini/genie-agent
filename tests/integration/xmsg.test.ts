@@ -7,18 +7,19 @@
 //   Mutant: in src/dispatcher/delivery.ts:132, matching any outstanding turn (|| true) => RED.
 // Run with:
 //   XMSG_BIN=<path> GENIE_GUARD_BIN=<path> node --test tests/xmsg-integration.test.ts
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { stubModel } from "../fixtures/supervisor/stub-model.ts";
 import { Delivery, Dispatcher, SocketXmsg, type Inbound } from "../../src/dispatcher/index.ts";
+import { createXmsgEndpointResolver, type DoctorResult } from "../../src/dispatcher/xmsg.ts";
 
 const XMSG_BIN = process.env.XMSG_BIN;
 if (!XMSG_BIN || !existsSync(XMSG_BIN)) {
@@ -271,7 +272,7 @@ test("oracle 1: guard round trip relays verdict and refuses svc: prefix", { time
     const ninferUrl = `http://127.0.0.1:${ninferPort}/v1`;
 
     // Spawn genie-guard process
-    guardProc = spawn(GENIE_GUARD_BIN, ["--ninfer-url", ninferUrl], {
+    guardProc = spawn(GENIE_GUARD_BIN, ["--ninfer-url", ninferUrl, "--register-sock", node.registerSock], {
       env: { ...process.env, XDG_RUNTIME_DIR: node.runDir },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -835,7 +836,7 @@ test(
       const ninferUrl = `http://127.0.0.1:${ninferPort}/v1`;
 
       // Spawn real genie-guard process in its own PID
-      guardProc = spawn(GENIE_GUARD_BIN, ["--ninfer-url", ninferUrl], {
+      guardProc = spawn(GENIE_GUARD_BIN, ["--ninfer-url", ninferUrl, "--register-sock", node.registerSock], {
         env: { ...process.env, XDG_RUNTIME_DIR: node.runDir },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1206,6 +1207,7 @@ test(
         "--cwd", node.dir,
         "--token-config-dir", tokTrusted,
         "--service-name", "genie-expert-trusted",
+        "--xmsg-dir", node.xmsgDir,
       ],
       {
         env: childEnv,
@@ -1265,6 +1267,7 @@ test(
         "--cwd", node.dir,
         "--token-config-dir", tokPublic,
         "--service-name", "genie-expert-public",
+        "--xmsg-dir", node.xmsgDir,
       ],
       { XDG_RUNTIME_DIR: node.runDir },
     );
@@ -1495,6 +1498,7 @@ test(
           "--cwd", tierCwd,
           "--token-config-dir", tokPublic,
           "--service-name", "genie-expert-public",
+          "--xmsg-dir", node.xmsgDir,
         ],
         { XDG_RUNTIME_DIR: node.runDir },
       );
@@ -1919,7 +1923,7 @@ test(
       };
       delete childEnv.NODE_TEST_CONTEXT;
 
-      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath], {
+      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath, "--xmsg-dir", node.xmsgDir], {
         env: childEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -2054,7 +2058,7 @@ process.stdin.on("end", () => process.exit(0));
       };
       delete childEnv.NODE_TEST_CONTEXT;
 
-      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath], {
+      rootProc = spawn(GENIE_ROOT_BIN, ["--config", cfgPath, "--xmsg-dir", node.xmsgDir], {
         env: childEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -2223,7 +2227,7 @@ test("scope wire: service origin enables scope while display and ancestor claims
   try {
     const registration = await producer.register();
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
-    guard = spawn(GENIE_GUARD_BIN!, ["--ninfer-url", `http://127.0.0.1:${(server.address() as any).port}/v1`, "--scope-producer", `scope-producer@${registration.node}`], { env: { ...process.env, XDG_RUNTIME_DIR: node.runDir }, stdio: ["ignore", "pipe", "pipe"] });
+    guard = spawn(GENIE_GUARD_BIN!, ["--ninfer-url", `http://127.0.0.1:${(server.address() as any).port}/v1`, "--scope-producer", `scope-producer@${registration.node}`, "--register-sock", node.registerSock], { env: { ...process.env, XDG_RUNTIME_DIR: node.runDir }, stdio: ["ignore", "pipe", "pipe"] });
     for (let i = 0; i < 200; i++) {
       const r = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
       if (r.json?.recipients?.some((entry: any) => entry.address.startsWith("genie-guard@"))) break;
@@ -2290,4 +2294,34 @@ test("scope wire: service origin enables scope while display and ancestor claims
     await stopChild(guard);
     producer.close(); server.close(); server.closeAllConnections(); await node.stop();
   }
+});
+
+
+test("socket discovery: unpinned old CLI selects the fixture once", async () => {
+  const node = await startXmsg({ "doctor-legacy": process.execPath });
+  let probes = 0;
+  let observed: DoctorResult | undefined;
+  const logs: string[] = [];
+  const resolve = createXmsgEndpointResolver({
+    env: { PATH: dirname(XMSG_BIN!), HOME: node.dir, XDG_RUNTIME_DIR: node.runDir },
+    log: (line) => logs.push(line),
+    probe: async (file, args, options) => {
+      probes++;
+      observed = await new Promise<DoctorResult>((done) => execFile(file, args, options, (error, stdout, stderr) => done({ error, stdout, stderr })));
+      return observed;
+    },
+  });
+  const client = new SocketXmsg({}, "doctor-legacy", { resolve });
+  try {
+    await client.register();
+    const services = await unixHttp(node.httpSock, "GET", "/v1/recipients?kind=service");
+    assert.ok(services.json.recipients.some((entry: any) => entry.address === client.address));
+    await client.list();
+    await client.list();
+    assert.equal(probes, 1, "healthy calls must not repeat the bounded CLI probe");
+    assert.equal(observed?.error?.code, 2);
+    assert.equal(observed?.stdout, "");
+    assert.equal(observed?.stderr, "error: unrecognized subcommand 'doctor'\n\nUsage: xmsg <COMMAND>\n\nFor more information, try '--help'.\n");
+    assert.deepEqual(logs, ["genie: xmsg legacy socket fallback (CLI does not support doctor)"]);
+  } finally { client.close(); await node.stop(); }
 });

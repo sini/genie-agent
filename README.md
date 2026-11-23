@@ -47,7 +47,7 @@ nonzero. A leaf's `leaf_register_socket` is used when `register_socket` is null.
 refusal, malformed or unsafe paths, timeouts and oversized output refuse startup rather
 than selecting another daemon. Socket paths must be absolute; resolution creates no files.
 
-Only a missing CLI or an old doctor with no endpoint information uses the final
+Only a missing CLI or the narrowly recognized old CLI unsupported-command reply uses the final
 `$XDG_RUNTIME_DIR/xmsg/{agent,register,http}.sock` fallback. This needs an absolute
 `XDG_RUNTIME_DIR` and emits one generic legacy-fallback notice. Doctor stdout, stderr and
 configuration contents are never included in that notice.

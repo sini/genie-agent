@@ -651,14 +651,12 @@ test("xmsg endpoints: missing CLI falls back once without leaking errors", async
   assert.deepEqual(logs, ["genie: xmsg legacy socket fallback (CLI unavailable)"]);
 });
 
-test("xmsg endpoints: old doctor legacy fallback retains higher-priority pins", async () => {
+test("xmsg endpoints: answered JSON without an endpoint contract refuses legacy fallback", async () => {
   const logs: string[] = [];
   const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/runtime", XMSG_AGENT_SOCK: "/pinned/agent" },
-    log: (s) => logs.push(s), probe: async () => ({ stdout: JSON.stringify({ checks: [] }) }) });
-  assert.deepEqual(await resolve({ registerSocket: "/explicit/register" }), {
-    agentSocket: "/pinned/agent", registerSocket: "/explicit/register", httpSocket: "/runtime/xmsg/http.sock",
-  });
-  assert.equal(logs.length, 1);
+    log: (line) => logs.push(line), probe: async () => ({ stdout: JSON.stringify({ checks: [] }) }) });
+  await assert.rejects(resolve({ registerSocket: "/explicit/register" }), /invalid endpoint report/);
+  assert.deepEqual(logs, []);
 });
 
 test("xmsg endpoints: refusal and unsafe reports never route to legacy", async () => {
@@ -902,4 +900,30 @@ test("xmsg endpoints: startup is immediate and failed registrations retain expon
   } }, async (ms) => { waits.push(ms); }, () => {}, undefined, { startMs: 3, maxMs: 5 });
   assert.equal(calls, 4);
   assert.deepEqual(waits, [3, 5, 5]);
+});
+
+test("xmsg endpoints: only the exact unsupported-command reply permits old CLI fallback", async () => {
+  const stderr = "error: unrecognized subcommand 'doctor'\n\nUsage: xmsg <COMMAND>\n\nFor more information, try '--help'.\n";
+  const logs: string[] = [];
+  let probes = 0;
+  const resolve = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/runtime" }, log: (line) => logs.push(line), probe: async () => {
+    probes++; return { stdout: "", stderr, error: Object.assign(new Error("PRIVATE_ERROR"), { code: 2 }) };
+  } });
+  assert.equal((await resolve()).registerSocket, "/runtime/xmsg/register.sock");
+  await resolve();
+  assert.equal(probes, 1);
+  assert.deepEqual(logs, ["genie: xmsg legacy socket fallback (CLI does not support doctor)"]);
+  for (const result of [
+    { stdout: "", stderr, error: Object.assign(new Error(), { code: 1 }) },
+    { stdout: "", stderr: `PRIVATE_PREFIX\n${stderr}`, error: Object.assign(new Error(), { code: 2 }) },
+    { stdout: "PRIVATE_OUTPUT", stderr, error: Object.assign(new Error(), { code: 2 }) },
+    { stdout: "", stderr: stderr.replace("'doctor'", "'other'"), error: Object.assign(new Error(), { code: 2 }) },
+    { stdout: "", stderr, error: Object.assign(new Error(), { code: 2, killed: true }) },
+    { stdout: JSON.stringify({ endpoints_usable: false }), stderr, error: Object.assign(new Error(), { code: 2 }) },
+  ]) {
+    const unsafeLogs: string[] = [];
+    const unsafe = createXmsgEndpointResolver({ env: { XDG_RUNTIME_DIR: "/runtime" }, log: (line) => unsafeLogs.push(line), probe: async () => result });
+    await assert.rejects(unsafe(), XmsgEndpointError);
+    assert.deepEqual(unsafeLogs, []);
+  }
 });

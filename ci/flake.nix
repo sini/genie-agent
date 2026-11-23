@@ -118,6 +118,7 @@
                         && grep -q '^ok [0-9]* - oracle 10 (GI-9): with svcExe.genie set to genie-root SEA binary, genie-root registers as genie and a plain node process is refused$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - scope wire: service origin enables scope while display and ancestor claims do not$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - socket discovery: unpinned old CLI selects the fixture once$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       cp -r . $TMPDIR/mut-go6-source-obj
                       chmod -R u+w $TMPDIR/mut-go6-source-obj

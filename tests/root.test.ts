@@ -2470,7 +2470,8 @@ test("oracle (GI-10): XmsgIo re-registers with exponential backoff when poll dro
     const batch = await xio.intake.next();
     assert.deepEqual(batch, [{ thread: "$t_gi10", envelope: fwdAfterReconnect }]);
     assert.equal(regAttempts, 4, "must have registered initially (1) and retried 3 times on drop (2, 3, 4)");
-    assert.deepEqual(waits, [1000, 2000], "exponential backoff must double from 1000ms to 2000ms");
+    // The first wait is the observed disconnect backoff, before registration retries.
+    assert.deepEqual(waits, [1000, 2000, 4000], "disconnect and failed registration backoff must remain exponential");
     assert.deepEqual(logs, [
       "genie: xmsg connection lost: /run/xmsg/register.sock: connection closed",
       "genie: re-registered on xmsg",

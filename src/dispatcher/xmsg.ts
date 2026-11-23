@@ -45,7 +45,7 @@ export type XmsgEndpointResolver = {
   invalidate?(paths: Partial<XmsgEndpoints>): void;
 };
 type ProbeError = Error & { code?: string | number; killed?: boolean; signal?: string | null };
-export interface DoctorResult { stdout: string; error?: ProbeError | null }
+export interface DoctorResult { stdout: string; stderr?: string; error?: ProbeError | null }
 export interface DoctorOptions {
   env: Record<string, string | undefined>;
   timeout: number;
@@ -65,6 +65,7 @@ const environmentNames = {
   httpSocket: "XMSG_HTTP_SOCK",
 } as const;
 const fileNames = { agentSocket: "agent.sock", registerSocket: "register.sock", httpSocket: "http.sock" } as const;
+const unsupportedDoctorStderr = "error: unrecognized subcommand 'doctor'\n\nUsage: xmsg <COMMAND>\n\nFor more information, try '--help'.\n";
 
 function socket(value: unknown, field: string): string {
   if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0")) {
@@ -90,7 +91,7 @@ function legacyEndpoints(env: Record<string, string | undefined>): XmsgEndpoints
 }
 
 const probeDoctor: DoctorProbe = (file, args, options) => new Promise((resolve) => {
-  execFile(file, args, options, (error, stdout) => resolve({ stdout, error }));
+  execFile(file, args, options, (error, stdout, stderr) => resolve({ stdout, stderr, error }));
 });
 
 export function createXmsgEndpointResolver(options: {
@@ -111,10 +112,14 @@ export function createXmsgEndpointResolver(options: {
         env, timeout: 3000, maxBuffer: 64 * 1024, encoding: "utf8", shell: false, killSignal: "SIGKILL",
       });
     } catch { throw new XmsgEndpointError("xmsg: doctor invocation failed"); }
-    if (result.error?.code === "ENOENT") return "CLI unavailable";
     if (result.error?.killed || result.error?.signal || result.error?.code === "ETIMEDOUT" ||
         result.error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       throw new XmsgEndpointError("xmsg: doctor exceeded its execution or output bound");
+    }
+    if (result.error?.code === "ENOENT") return "CLI unavailable";
+    // Only the old CLI's exact clap parse error is an availability fallback.
+    if (result.error?.code === 2 && result.stdout === "" && result.stderr === unsupportedDoctorStderr) {
+      return "CLI does not support doctor";
     }
     let report: unknown;
     try { report = JSON.parse(result.stdout); } catch {
@@ -126,9 +131,7 @@ export function createXmsgEndpointResolver(options: {
     const value = report as Record<string, unknown>;
     if (value.endpoints_usable === false) throw new XmsgEndpointError("xmsg: doctor refused endpoint resolution");
     if (value.endpoints_usable !== true) {
-      if (["agent_socket", "register_socket", "leaf_register_socket", "http_socket", "endpoints_usable"]
-        .some((key) => key in value)) throw new XmsgEndpointError("xmsg: doctor returned an invalid endpoint report");
-      return "doctor has no endpoint information";
+      throw new XmsgEndpointError("xmsg: doctor returned an invalid endpoint report");
     }
     const resultPaths: Partial<XmsgEndpoints> = {};
     const fields = { agentSocket: value.agent_socket,

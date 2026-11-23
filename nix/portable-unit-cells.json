@@ -55,7 +55,7 @@
     "xmsg endpoints: per-socket precedence and explicit directory compatibility",
     "xmsg endpoints: one bounded doctor probe caches usable nonzero-health JSON",
     "xmsg endpoints: missing CLI falls back once without leaking errors",
-    "xmsg endpoints: old doctor legacy fallback retains higher-priority pins",
+    "xmsg endpoints: answered JSON without an endpoint contract refuses legacy fallback",
     "xmsg endpoints: refusal and unsafe reports never route to legacy",
     "xmsg endpoints: bounded probe failures are cached and do not expose output",
     "xmsg endpoints: leaf registration uses its reported path without sibling guessing",
@@ -67,7 +67,8 @@
     "xmsg endpoints: options grace deadline also applies after doctor discovery",
     "xmsg endpoints: stale invalidation cannot discard a concurrent reconnect probe",
     "xmsg endpoints: disconnect reconnects once to the changed path while pins stay fixed",
-    "xmsg endpoints: startup is immediate and failed registrations retain exponential backoff"
+    "xmsg endpoints: startup is immediate and failed registrations retain exponential backoff",
+    "xmsg endpoints: only the exact unsupported-command reply permits old CLI fallback"
   ],
   "tests/dispatcher-gc.test.ts": [
     "oracle 26: never parked with a message outstanding or in buffer"

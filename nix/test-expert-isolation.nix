@@ -4742,6 +4742,17 @@ pkgs.testers.runNixOSTest {
           NIX_SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";
           SSL_CERT_FILE = lib.mkForce "/etc/ssl/certs/ca-certificates.crt";
         };
+        # The xmsg package here is an idle MCP stub; the fixture owns these real sockets.
+        systemd.services."genie-dispatcher@public".environment = {
+          XMSG_AGENT_SOCK = "/run/user/1000/xmsg/agent.sock";
+          XMSG_REGISTER_SOCK = "/run/user/1000/xmsg/register.sock";
+          XMSG_HTTP_SOCK = "/run/user/1000/xmsg/http.sock";
+        };
+        systemd.services."genie-dispatcher@trusted".environment = {
+          XMSG_AGENT_SOCK = "/run/user/1000/xmsg/agent.sock";
+          XMSG_REGISTER_SOCK = "/run/user/1000/xmsg/register.sock";
+          XMSG_HTTP_SOCK = "/run/user/1000/xmsg/http.sock";
+        };
         environment.etc."genie-gi15-test/stub_api.py".source = "${gi15TestScripts}/stub_api.py";
         environment.etc."genie-gi15-test/jail_suite.py".source = jailSuitePy;
         environment.etc."genie-gi15-test/setup_v610_repo.py".source = setupV610RepoPy;
