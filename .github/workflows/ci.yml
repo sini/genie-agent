@@ -36,6 +36,7 @@ env:
     gc
     gist
     guard
+    hm-module
     lifecycle
     mirror
     nixos-module
