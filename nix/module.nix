@@ -15,6 +15,14 @@ let
   runtimeDir =
     if cfg.xmsgSocket != null then builtins.dirOf (toString cfg.xmsgSocket) else "/run/genie-agent";
 
+  # The sandbox binds only xmsgSocket, so neither `xmsg doctor` nor xmsg's managed namespace is
+  # visible inside it; name each socket under the bound directory instead of discovering it.
+  xmsgSocketEnv = lib.optionalAttrs (cfg.xmsgSocket != null) {
+    XMSG_HTTP_SOCK = "${toString cfg.xmsgSocket}/http.sock";
+    XMSG_AGENT_SOCK = "${toString cfg.xmsgSocket}/agent.sock";
+    XMSG_REGISTER_SOCK = "${toString cfg.xmsgSocket}/register.sock";
+  };
+
   credDir = "/run/credentials/genie-agent.service";
   modelKeyRuntime = if cfg.loadCredential then "${credDir}/model-key" else toString cfg.model.keyFile;
   guardOutKeyRuntime =
@@ -561,7 +569,8 @@ let
         environment = {
           HOME = toString cfg.stateDir;
           XDG_RUNTIME_DIR = runtimeDir;
-        };
+        }
+        // xmsgSocketEnv;
         serviceConfig =
           commonHardening
           // {
@@ -750,6 +759,7 @@ in
           NIX_SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
         }
+        // xmsgSocketEnv
         // lib.optionalAttrs (cfg.package ? rootSrc) {
           GENIE_REPO_ROOT = "${cfg.package.rootSrc}/lib/genie-agent";
         };
@@ -838,7 +848,8 @@ in
           environment = {
             HOME = toString cfg.stateDir;
             XDG_RUNTIME_DIR = runtimeDir;
-          };
+          }
+          // xmsgSocketEnv;
 
           serviceConfig =
             commonHardening

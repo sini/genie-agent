@@ -13,7 +13,10 @@
         "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-pi-coding-agent-1.5.0",
@@ -97,7 +100,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -206,7 +212,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -314,7 +323,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-coreutils-9.12",
@@ -670,7 +682,10 @@
         "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-pi-coding-agent-1.5.0",
@@ -754,7 +769,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-coreutils-9.12",
@@ -834,7 +852,10 @@
         "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-pi-coding-agent-1.5.0",
@@ -915,7 +936,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -1020,7 +1044,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -1124,7 +1151,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-coreutils-9.12",
@@ -1471,7 +1501,10 @@
         "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-pi-coding-agent-1.5.0",
@@ -1559,7 +1592,10 @@
         "NIX_SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
         "PATH": "/nix/store/<HASH>-pi-coding-agent-1.5.0/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-pi-coding-agent-1.5.0/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
         "SSL_CERT_FILE": "/nix/store/<HASH>-nss-cacert-3.131.1/etc/ssl/certs/ca-bundle.crt",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-pi-coding-agent-1.5.0",
@@ -1642,7 +1678,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-public/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-public/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -1747,7 +1786,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-herdr-0.9.5/bin:/nix/store/<HASH>-genie-claude-shim-trusted/bin:/nix/store/<HASH>-bubblewrap-0.13.1/bin:/nix/store/<HASH>-xmsg/bin:/nix/store/<HASH>-ripgrep-15.2.0/bin:/nix/store/<HASH>-python3-3.14.10/bin:/nix/store/<HASH>-git-2.56.0/bin:/nix/store/<HASH>-nix-2.34.9/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-bash-interactive-5.3p20/bin:/nix/store/<HASH>-claude/bin:/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-herdr-0.9.5/sbin:/nix/store/<HASH>-genie-claude-shim-trusted/sbin:/nix/store/<HASH>-bubblewrap-0.13.1/sbin:/nix/store/<HASH>-xmsg/sbin:/nix/store/<HASH>-ripgrep-15.2.0/sbin:/nix/store/<HASH>-python3-3.14.10/sbin:/nix/store/<HASH>-git-2.56.0/sbin:/nix/store/<HASH>-nix-2.34.9/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-bash-interactive-5.3p20/sbin:/nix/store/<HASH>-claude/sbin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-herdr-0.9.5",
@@ -1851,7 +1893,10 @@
       "environment": {
         "HOME": "/var/lib/genie-agent",
         "PATH": "/nix/store/<HASH>-coreutils-9.12/bin:/nix/store/<HASH>-findutils-4.11.0/bin:/nix/store/<HASH>-gnugrep-3.12/bin:/nix/store/<HASH>-gnused-4.10/bin:/nix/store/<HASH>-systemd-262/bin:/nix/store/<HASH>-coreutils-9.12/sbin:/nix/store/<HASH>-findutils-4.11.0/sbin:/nix/store/<HASH>-gnugrep-3.12/sbin:/nix/store/<HASH>-gnused-4.10/sbin:/nix/store/<HASH>-systemd-262/sbin",
-        "XDG_RUNTIME_DIR": "/run/user/1000"
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XMSG_HTTP_SOCK": "/run/user/1000/xmsg/http.sock",
+        "XMSG_AGENT_SOCK": "/run/user/1000/xmsg/agent.sock",
+        "XMSG_REGISTER_SOCK": "/run/user/1000/xmsg/register.sock"
       },
       "path": [
         "/nix/store/<HASH>-coreutils-9.12",

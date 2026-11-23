@@ -733,3 +733,15 @@ test("oracle: deployed-host default units are unchanged modulo store hashes comp
   assert.deepEqual(normalizeStoreHashes(summary.credsDirAdapterOffUnits), baseRender.credsDirAdapterOffUnits);
   assert.deepEqual(normalizeStoreHashes(summary.noGuardUnits), baseRender.noGuardUnits);
 });
+
+// The sandbox binds only xmsgSocket, so the units name each socket under it rather than
+// discovering xmsg's managed namespace, which they can't see.
+test("units that talk to xmsg get XMSG_{HTTP,AGENT,REGISTER}_SOCK under xmsgSocket", () => {
+  const units = ["genie-agent", "genie-guard", "genie-dispatcher@public", "genie-dispatcher@trusted"];
+  for (const name of units) {
+    const env = summary.units[name].environment;
+    assert.equal(env.XMSG_HTTP_SOCK, "/run/user/1000/xmsg/http.sock", name);
+    assert.equal(env.XMSG_AGENT_SOCK, "/run/user/1000/xmsg/agent.sock", name);
+    assert.equal(env.XMSG_REGISTER_SOCK, "/run/user/1000/xmsg/register.sock", name);
+  }
+});
