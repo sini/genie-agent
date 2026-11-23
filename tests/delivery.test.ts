@@ -1,4 +1,4 @@
-import { createXmsgEndpointResolver, XmsgEndpointError } from "../src/xmsg-endpoints.ts";
+import { createXmsgEndpointResolver, XmsgEndpointError } from "../src/dispatcher/xmsg.ts";
 // Dispatcher delivery's gating oracle (design oracle 28), against an xmsg fake with X9's
 // at-least-once queue and X10's idempotency keys, and a herdr fake whose session xmsg lists only
 // after a delay. Run with `node --test tests/delivery.test.ts`.

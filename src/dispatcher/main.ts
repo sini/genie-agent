@@ -1,4 +1,4 @@
-import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
+import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "./xmsg.ts";
 // The dispatcher's entrypoint (design §5.8, D1c; GI-3): registers as `serviceName` (default
 // `genie-expert`) on the tier's xmsg, reconciles the journal, and delivers until killed. The
 // journal is what a kill leaves, so no signal is handled. Built into the `genie-dispatcher`

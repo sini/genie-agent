@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { test } from "node:test";
+import { rootXmsgEndpoints } from "../src/root/main.ts";
 
 // Exercise the real entrypoint with gated dependencies, without exporting a test-only API.
 const source = readFileSync(new URL("../src/root/main.ts", import.meta.url), "utf8");
@@ -30,10 +31,10 @@ test("root startup: shutdown handlers precede intake while startup readiness is 
       async run() { order.push("run"); },
       async stop() { order.push("stopped"); },
     };
-    const run = new Function("readFileSync", "validateRootConfig", "XmsgIo", "main", "process", `${declaration}\nreturn run;`)(
-      () => JSON.stringify({ xmsg: {} }), () => ({ guardEnable: false }), Io, () => root, signals,
+    const run = new Function("readFileSync", "validateRootConfig", "XmsgIo", "main", "process", "rootXmsgEndpoints", `${declaration}\nreturn run;`)(
+      () => JSON.stringify({ xmsg: {} }), () => ({ guardEnable: false }), Io, () => root, signals, rootXmsgEndpoints,
     );
-    const running = run({ configPath: "fixture", xmsgDir: "fixture" });
+    const running = run({ configPath: "fixture", xmsgDir: "/fixture" });
     try {
       await active;
       assert.ok(order.includes("starting"), "control did not hold startup readiness");

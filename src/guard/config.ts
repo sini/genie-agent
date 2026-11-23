@@ -1,4 +1,4 @@
-import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
+import { xmsgEndpointArguments, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../dispatcher/xmsg.ts";
 // genie-guard's settings: each a flag, or the environment variable beside it.
 import { readFileSync } from "node:fs";
 

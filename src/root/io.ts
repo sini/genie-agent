@@ -1,4 +1,4 @@
-import type { XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
+import type { XmsgEndpointOverrides } from "../dispatcher/xmsg.ts";
 // Real xmsg-backed Io adapters for the composition root (GI-2, genie-local-deploy-plan-v0.md):
 // - XmsgGuardClient: sends guard envelopes over SocketXmsg with a FIFO concurrency limit
 //   (maxConcurrency, default 1) and a timeout that fails closed to { unavailable }.
