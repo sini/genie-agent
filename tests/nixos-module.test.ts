@@ -781,13 +781,13 @@ test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit 
 
   for (const name of [...consumers, "genie-xmsg-socket-dir"]) {
     const u = r.units[name];
+    // BindsTo= and Requires= would start the trigger, creating /run/user/<uid> while logged out.
+    assert.ok(!u.bindsTo.includes(trigger), `${name} must not BindsTo= ${trigger}`);
+    assert.ok(!u.requires.includes(trigger), `${name} must not Requires= ${trigger}`);
     assert.deepEqual(u.wantedBy, [trigger], `${name} WantedBy= the trigger only`);
     assert.deepEqual(u.requisite, [trigger], `${name} Requisite=`);
     assert.deepEqual(u.partOf, [trigger], `${name} PartOf=`);
     assert.ok(u.after.includes(trigger), `${name} After=`);
-    assert.ok(!u.bindsTo.includes(trigger), `${name} must not BindsTo= ${trigger}`);
-    assert.deepEqual(u.bindsTo, [], `${name} BindsTo=`);
-    assert.ok(!u.requires.includes(trigger), `${name} must not Requires= ${trigger}`);
     // Nothing runs as root against the directory: no +/! prefix, no PermissionsStartOnly.
     for (const cmd of [u.serviceConfig.ExecStart, ...u.serviceConfig.ExecStartPre]) {
       assert.doesNotMatch(cmd, /^[+!@-]/, `${name}: ${cmd}`);
