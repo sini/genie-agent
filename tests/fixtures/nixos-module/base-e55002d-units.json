@@ -4,7 +4,9 @@
     "genie-agent": {
       "after": [
         "network.target",
-        "genie-guard.service"
+        "genie-guard.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent Tier-1 composition root service",
       "environment": {
@@ -30,7 +32,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -48,7 +52,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [],
@@ -88,13 +94,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@public": {
       "after": [
         "network.target",
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
@@ -124,7 +132,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -142,7 +151,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /var/credentials/genie/expert-public-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-public-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@trusted.service",
           "-/run/agenix",
@@ -200,13 +212,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@trusted": {
       "after": [
         "network.target",
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
@@ -236,7 +250,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -254,7 +269,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /var/custom-secrets/trusted-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-trusted-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@public.service",
           "-/run/agenix",
@@ -312,12 +330,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-guard": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
@@ -335,7 +355,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -349,7 +371,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /var/credentials/genie/model-key",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [],
@@ -389,12 +413,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@public": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
@@ -421,7 +447,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -468,7 +496,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -527,12 +557,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@trusted": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
@@ -559,7 +591,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -606,7 +640,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -665,7 +701,7 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     }
   },
@@ -673,7 +709,9 @@
     "genie-agent": {
       "after": [
         "network.target",
-        "genie-guard.service"
+        "genie-guard.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent Tier-1 composition root service",
       "environment": {
@@ -699,7 +737,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -713,7 +753,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [
@@ -758,12 +800,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-guard": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
@@ -781,7 +825,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -793,7 +839,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --api-key-file /run/credentials/genie-guard.service/api-key",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [
@@ -835,7 +883,7 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     }
   },
@@ -843,7 +891,9 @@
     "genie-agent": {
       "after": [
         "network.target",
-        "genie-guard.service"
+        "genie-guard.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent Tier-1 composition root service",
       "environment": {
@@ -869,7 +919,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -884,7 +936,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [],
@@ -924,13 +978,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@public": {
       "after": [
         "network.target",
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
@@ -960,7 +1016,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -978,7 +1035,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /run/agenix/genie-expert-public-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-public-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@trusted.service",
           "-/run/agenix.d",
@@ -1032,13 +1092,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@trusted": {
       "after": [
         "network.target",
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
@@ -1068,7 +1130,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -1086,7 +1149,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /run/agenix/genie-expert-trusted-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-trusted-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@public.service",
           "-/run/agenix.d",
@@ -1140,12 +1206,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-guard": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
@@ -1163,7 +1231,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1177,7 +1247,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /home/sini/.config/hyperqwen/api-key",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [],
@@ -1217,12 +1289,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@public": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
@@ -1249,7 +1323,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1296,7 +1372,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -1351,12 +1429,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@trusted": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
@@ -1383,7 +1463,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1430,7 +1512,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -1485,14 +1569,16 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     }
   },
   "noGuardUnits": {
     "genieAgent": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent Tier-1 composition root service",
       "environment": {
@@ -1518,7 +1604,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1532,7 +1620,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [
@@ -1574,7 +1664,7 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "hasGenieGuard": false
@@ -1583,7 +1673,9 @@
     "genie-agent": {
       "after": [
         "network.target",
-        "genie-guard.service"
+        "genie-guard.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent Tier-1 composition root service",
       "environment": {
@@ -1609,7 +1701,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1623,7 +1717,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-root-0.1.0/bin/genie-root --config /nix/store/<HASH>-genie-root-config.json",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [
@@ -1666,13 +1762,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@public": {
       "after": [
         "network.target",
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (public tier)",
       "environment": {
@@ -1702,7 +1800,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@public.service"
+        "genie-herdr@public.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -1719,7 +1818,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-public --herdr-session genie-public --cwd /var/lib/genie-agent/cwd-public --token-config-dir /var/lib/genie-agent/claude-public --service-name genie-expert-public --claude-bin /nix/store/<HASH>-genie-claude-shim-public/bin/genie-claude-shim --token-credential-file /run/credentials/genie-dispatcher@public.service/tier-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-public-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-public-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@trusted.service",
           "-/run/agenix",
@@ -1774,13 +1876,15 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-dispatcher@trusted": {
       "after": [
         "network.target",
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent expert dispatcher (trusted tier)",
       "environment": {
@@ -1810,7 +1914,8 @@
         "/nix/store/<HASH>-systemd-262"
       ],
       "requires": [
-        "genie-herdr@trusted.service"
+        "genie-herdr@trusted.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "serviceConfig": {
         "AmbientCapabilities": "",
@@ -1827,7 +1932,10 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-dispatcher-0.1.0/bin/genie-dispatcher --state-dir /var/lib/genie-agent/dispatcher-trusted --herdr-session genie-trusted --cwd /var/lib/genie-agent/cwd-trusted --token-config-dir /var/lib/genie-agent/claude-trusted --service-name genie-expert-trusted --claude-bin /nix/store/<HASH>-genie-claude-shim-trusted/bin/genie-claude-shim --token-credential-file /run/credentials/genie-dispatcher@trusted.service/tier-token",
-        "ExecStartPre": "/nix/store/<HASH>-genie-expert-trusted-bootstrap",
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30",
+          "/nix/store/<HASH>-genie-expert-trusted-bootstrap"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials/genie-dispatcher@public.service",
           "-/run/agenix",
@@ -1882,12 +1990,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-guard": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-guard inbound prompt-injection screening service",
       "environment": {
@@ -1905,7 +2015,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -1917,7 +2029,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-genie-guard-0.1.0/bin/genie-guard --ninfer-url http://10.9.2.2:18020/v1 --timeout-ms 120000 --scope-producer matrix-xmsg@example.node --api-key-file /run/credentials/genie-guard.service/api-key",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [],
         "LimitCORE": null,
         "LoadCredential": [
@@ -1959,12 +2073,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@public": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (public tier)",
       "environment": {
@@ -1991,7 +2107,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -2038,7 +2156,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-public server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -2090,12 +2210,14 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     },
     "genie-herdr@trusted": {
       "after": [
-        "network.target"
+        "network.target",
+        "user-runtime-dir@1000.service",
+        "genie-xmsg-socket-dir.service"
       ],
       "description": "genie-agent headless herdr server (trusted tier)",
       "environment": {
@@ -2122,7 +2244,9 @@
         "/nix/store/<HASH>-gnused-4.10",
         "/nix/store/<HASH>-systemd-262"
       ],
-      "requires": [],
+      "requires": [
+        "genie-xmsg-socket-dir.service"
+      ],
       "serviceConfig": {
         "AmbientCapabilities": "",
         "BindPaths": [
@@ -2169,7 +2293,9 @@
         "DevicePolicy": "closed",
         "EnvironmentFile": null,
         "ExecStart": "/nix/store/<HASH>-herdr-0.9.5/bin/herdr --session genie-trusted server",
-        "ExecStartPre": null,
+        "ExecStartPre": [
+          "/nix/store/<HASH>-genie-xmsg-ready /run/user/1000/xmsg/agent.sock 30"
+        ],
         "InaccessiblePaths": [
           "-/run/credentials",
           "-/run/agenix",
@@ -2221,7 +2347,7 @@
         "WorkingDirectory": "/var/lib/genie-agent"
       },
       "wantedBy": [
-        "multi-user.target"
+        "user-runtime-dir@1000.service"
       ]
     }
   }

@@ -23,6 +23,64 @@ let
     XMSG_REGISTER_SOCK = "${toString cfg.xmsgSocket}/register.sock";
   };
 
+  # The bind source lives exactly as long as this unit (normally user-runtime-dir@<uid>); see
+  # the xmsgSocketTrigger option. Wired only through each genie unit's own dependency lists:
+  # an override or drop-in on that unit could get it restarted by a switch, ending every session.
+  xmsgTrigger = if cfg.xmsgSocket != null then cfg.xmsgSocketTrigger else null;
+  xmsgPrepUnit = "genie-xmsg-socket-dir.service";
+  xmsgTriggerDeps = {
+    wantedBy = [ xmsgTrigger ];
+    requisite = [ xmsgTrigger ];
+    partOf = [ xmsgTrigger ];
+  };
+  xmsgReady = pkgs.writeScript "genie-xmsg-ready" ''
+    #!${pkgs.python3}/bin/python3 -I
+    import socket, sys, time
+
+    path, timeout = sys.argv[1], float(sys.argv[2])
+    deadline = time.monotonic() + timeout
+    while True:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(path)
+            sys.exit(0)
+        except OSError as e:
+            err = e
+        finally:
+            s.close()
+        if time.monotonic() >= deadline:
+            print(f"genie-xmsg-ready: timeout: {path} did not accept within {timeout:g}s ({err})", file=sys.stderr)
+            sys.exit(75)
+        time.sleep(0.5)
+  '';
+  # Applied to every unit that binds xmsgSocket.
+  xmsgConsumer =
+    unit:
+    if xmsgTrigger == null then
+      unit
+    else
+      unit
+      // xmsgTriggerDeps
+      // {
+        after = unit.after ++ [
+          xmsgTrigger
+          xmsgPrepUnit
+        ];
+        requires = (unit.requires or [ ]) ++ [ xmsgPrepUnit ];
+        # Bounded: a few readiness timeouts in a row exhaust it, leaving the unit failed.
+        unitConfig = {
+          StartLimitBurst = 5;
+          StartLimitIntervalSec = 10 * (cfg.xmsgReadinessTimeoutSec + 5);
+        };
+        serviceConfig = unit.serviceConfig // {
+          ExecStartPre = [
+            "${xmsgReady} ${toString cfg.xmsgSocket}/agent.sock ${toString cfg.xmsgReadinessTimeoutSec}"
+          ]
+          ++ lib.toList (unit.serviceConfig.ExecStartPre or [ ]);
+          TimeoutStartSec = cfg.xmsgReadinessTimeoutSec + 60;
+        };
+      };
+
   credDir = "/run/credentials/genie-agent.service";
   modelKeyRuntime = if cfg.loadCredential then "${credDir}/model-key" else toString cfg.model.keyFile;
   guardOutKeyRuntime =
@@ -518,7 +576,7 @@ let
       ) " --token-credential-file ${lib.escapeShellArg dispCredPath}";
     in
     {
-      "genie-herdr@${tier}" = {
+      "genie-herdr@${tier}" = xmsgConsumer {
         description = "genie-agent headless herdr server (${tier} tier)";
         after = [ "network.target" ];
         wantedBy = [ "multi-user.target" ];
@@ -557,7 +615,7 @@ let
           };
       };
 
-      "genie-dispatcher@${tier}" = {
+      "genie-dispatcher@${tier}" = xmsgConsumer {
         description = "genie-agent expert dispatcher (${tier} tier)";
         after = [
           "network.target"
@@ -741,7 +799,7 @@ in
     );
 
     systemd.services = {
-      genie-agent = {
+      genie-agent = xmsgConsumer {
         description = "genie-agent Tier-1 composition root service";
         after = [ "network.target" ] ++ lib.optional cfg.guard.enable "genie-guard.service";
         wantedBy = [ "multi-user.target" ];
@@ -840,7 +898,7 @@ in
           ) " --scope-producer ${lib.escapeShellArg cfg.guard.scopeProducer}";
           keyArg = lib.optionalString (cfg.guard.apiKeyFile != null) " --api-key-file ${guardCredFile}";
         in
-        {
+        xmsgConsumer {
           description = "genie-guard inbound prompt-injection screening service";
           after = [ "network.target" ];
           wantedBy = [ "multi-user.target" ];
@@ -881,6 +939,25 @@ in
     }
     // lib.optionalAttrs cfg.experts.enable (
       (mkTierUnits "public" cfg.experts.public) // (mkTierUnits "trusted" cfg.experts.trusted)
-    );
+    )
+    // lib.optionalAttrs (xmsgTrigger != null) {
+      genie-xmsg-socket-dir = xmsgTriggerDeps // {
+        description = "Create the genie-agent xmsg socket directory as its owner";
+        after = [ xmsgTrigger ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          User = cfg.user;
+          UMask = "0077";
+          ExecStart = pkgs.writeShellScript "genie-xmsg-socket-dir" ''
+            d=${lib.escapeShellArg (toString cfg.xmsgSocket)}
+            [ -d "$d" ] || ${pkgs.coreutils}/bin/mkdir -m 0700 -- "$d"
+          '';
+        }
+        // lib.optionalAttrs (effectiveGroup != null) {
+          Group = effectiveGroup;
+        };
+      };
+    };
   };
 }

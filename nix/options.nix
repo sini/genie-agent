@@ -502,8 +502,53 @@ rec {
       xmsgSocket = lib.mkOption {
         type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
         default = defaultXmsgSocket;
-        example = "/run/user/1000/xmsg";
-        description = "Path to the xmsg runtime directory containing register.sock and agent.sock.";
+        example = "/run/user/1000/xmsg-sockets";
+        description = ''
+          Directory holding xmsg's `http.sock`, `agent.sock` and `register.sock`. Every unit that
+          talks to xmsg bind-mounts it and gets `XMSG_{HTTP,AGENT,REGISTER}_SOCK` under it. Pin the
+          xmsg daemon's sockets to this same directory.
+
+          When `xmsgSocketTrigger` is set (the default under `/run/user/<uid>/`), a preparation unit,
+          `genie-xmsg-socket-dir.service`, runs as `user` and creates the directory at 0700 if it is
+          absent. Nothing runs as root against the directory.
+        '';
+      };
+
+      xmsgSocketTrigger = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default =
+          let
+            m =
+              if cfg.xmsgSocket != null then
+                builtins.match "/run/user/([0-9]+)/.+" (toString cfg.xmsgSocket)
+              else
+                null;
+          in
+          if m == null then null else "user-runtime-dir@${builtins.head m}.service";
+        defaultText = lib.literalMD "`user-runtime-dir@<uid>.service` when `xmsgSocket` is under `/run/user/<uid>/`, else `null`";
+        example = "user-runtime-dir@1000.service";
+        description = ''
+          The unit whose lifetime is the lifetime of `xmsgSocket`'s parent. The preparation unit and
+          every unit that binds `xmsgSocket` are `WantedBy=`, `Requisite=`, `After=` and `PartOf=` this
+          unit, and nothing else wants them: no `multi-user.target`. They start each time the owner's
+          runtime directory is set up (first login, or boot with linger) and stop with it. A manual
+          start while it is inactive fails at once with a dependency error, without creating the
+          directory or entering a restart loop.
+
+          `null` keeps plain `multi-user.target` units with no preparation unit and no readiness
+          wait, for a socket directory that exists from boot.
+        '';
+      };
+
+      xmsgReadinessTimeoutSec = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 30;
+        description = ''
+          With `xmsgSocketTrigger` set, each unit that binds `xmsgSocket` first waits, unprivileged
+          and inside its sandbox, for `agent.sock` to accept a connection. After this many seconds
+          it fails with exit status 75 (EX_TEMPFAIL). `Restart=on-failure` retries within a bounded
+          start limit (5 starts per `10 * (timeout + 5)` seconds); past it the unit stays failed.
+        '';
       };
 
       serviceName = lib.mkOption {

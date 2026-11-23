@@ -10,6 +10,13 @@ if (!summaryPath) {
 
 const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
 
+// The dispatcher's ExecStartPre list: the xmsg readiness wait, then its bootstrap script.
+function bootstrapOf(sc: { ExecStartPre: string[] }): string {
+  const found = sc.ExecStartPre.filter((p) => /-genie-expert-(public|trusted)-bootstrap$/.test(p));
+  assert.equal(found.length, 1, `expected one bootstrap in ${JSON.stringify(sc.ExecStartPre)}`);
+  return found[0];
+}
+
 const VERBATIM_ISOLATION_STATEMENT =
   "**Security & Isolation Trade-off (`nixosModules.default` vs. Kubernetes):** The NixOS system-service module runs Tier 1, the expert dispatchers, and expert Claude Code sessions on a single host under `services.genie-agent.user`, sharing that OS user's `xmsg` bus. The expert tiers do not share that user's Claude credentials: each tier authenticates with its own Claude setup-token, which systemd reads from `experts.<tier>.tokenEnvironmentFile` into that tier's `genie-herdr@<tier>` unit only, and no expert unit mounts the user's `~/.claude` beyond the tier's configured memory directory, read-only. While systemd unit hardening (`ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, and `PrivatePIDs=true` on the expert units), Tier-1 path confinement (`C1`), and `bwrap --pure-eval` (`E1`/`E9`) bound accidental host writes and untrusted Nix evaluations, **single-user local mode does not provide kernel or network isolation between `@public` and `@trusted` expert sessions, which run as the same OS user.** Operators serving untrusted public rooms with strict cross-tier isolation requirements must deploy the Kubernetes pod mode (`gVisor` `runsc` pods, Cilium network policies, and isolated per-tier credentials).";
 
@@ -165,7 +172,7 @@ test("oracle 1 (GI-4): nixosModules.default renders hardened units, mounts, expe
     assert.ok(settings.permissions.deny.includes("Bash(git push*)"), "must deny git push");
     assert.ok(settings.permissions.deny.includes("Bash(gh pr*)"), "must deny gh pr");
 
-    const bootstrapContent = readFileSync(dispUnit.serviceConfig.ExecStartPre, "utf8");
+    const bootstrapContent = readFileSync(bootstrapOf(dispUnit.serviceConfig), "utf8");
     const claudeMdMatch = /install -m 0644 "(\/nix\/store\/[^"]+CLAUDE\.md)"/.exec(bootstrapContent);
     assert.ok(claudeMdMatch, `expected CLAUDE.md install in ${dispUnit.serviceConfig.ExecStartPre}`);
     const claudeMdContent = readFileSync(claudeMdMatch[1], "utf8");
@@ -259,7 +266,11 @@ test("oracle 2 (GI-4): zero-drift oracle between nix/options.nix mkRootConfigAtt
 test("oracle 3 (G11): guard.enable = false and broker.guardOut.enable = false omit genie-guard unit, xmsg.guard, and guard-out-key credential; guard.enable = true with guardRef = null triggers assertion", () => {
   assert.deepEqual(summary.noGuardFailedAssertions, []);
   assert.equal(summary.noGuardUnits.hasGenieGuard, false, "genie-guard.service must not be defined when guard.enable is false");
-  assert.deepEqual(summary.noGuardUnits.genieAgent.after, ["network.target"]);
+  assert.deepEqual(summary.noGuardUnits.genieAgent.after, [
+    "network.target",
+    "user-runtime-dir@1000.service",
+    "genie-xmsg-socket-dir.service",
+  ]);
   assert.deepEqual(summary.noGuardUnits.genieAgent.serviceConfig.LoadCredential, [
     "model-key:/home/sini/.config/hyperqwen/api-key",
   ]);
@@ -453,7 +464,7 @@ test("oracle G0 (GI-13): every tier unit binds exactly the xmsg socket read-writ
       `genie-dispatcher@${tier} SystemCallFilter must include ~perf_event_open (K9/GH1)`,
     );
     assert.equal(dispSc.SystemCallErrorNumber, "EPERM");
-    const bootstrap = readFileSync(dispSc.ExecStartPre, "utf8");
+    const bootstrap = readFileSync(bootstrapOf(dispSc), "utf8");
     assert.ok(!bootstrap.includes("settings.json"), "bootstrap must not install settings.json");
     assert.ok(!bootstrap.includes(".claude.json"), "bootstrap must not install .claude.json");
     const credLines = bootstrap.split("\n").filter((l) => l.includes(".credentials.json"));
@@ -744,4 +755,83 @@ test("units that talk to xmsg get XMSG_{HTTP,AGENT,REGISTER}_SOCK under xmsgSock
     assert.equal(env.XMSG_AGENT_SOCK, "/run/user/1000/xmsg/agent.sock", name);
     assert.equal(env.XMSG_REGISTER_SOCK, "/run/user/1000/xmsg/register.sock", name);
   }
+});
+
+// The xmsg socket directory lives under the owner's runtime dir, so its lifetime unit,
+// user-runtime-dir@<uid>, is the trigger. Requisite= (never BindsTo=/Requires=, which would
+// start it) keeps a logged-out start from creating /run/user/<uid> or looping.
+test("oracle xmsg runtime trigger: consumers and the owner-run preparation unit hang off user-runtime-dir@<uid> only", () => {
+  const trigger = "user-runtime-dir@1000.service";
+  const prep = "genie-xmsg-socket-dir.service";
+  const r = summary.xmsgRuntime;
+  const consumers = [
+    "genie-agent",
+    "genie-guard",
+    "genie-herdr@public",
+    "genie-herdr@trusted",
+    "genie-dispatcher@public",
+    "genie-dispatcher@trusted",
+  ];
+  assert.deepEqual(Object.keys(r.units).sort(), [...consumers, "genie-xmsg-socket-dir"].sort());
+
+  for (const name of [...consumers, "genie-xmsg-socket-dir"]) {
+    const u = r.units[name];
+    assert.deepEqual(u.wantedBy, [trigger], `${name} WantedBy= the trigger only`);
+    assert.deepEqual(u.requisite, [trigger], `${name} Requisite=`);
+    assert.deepEqual(u.partOf, [trigger], `${name} PartOf=`);
+    assert.ok(u.after.includes(trigger), `${name} After=`);
+    assert.ok(!u.bindsTo.includes(trigger), `${name} must not BindsTo= ${trigger}`);
+    assert.deepEqual(u.bindsTo, [], `${name} BindsTo=`);
+    assert.ok(!u.requires.includes(trigger), `${name} must not Requires= ${trigger}`);
+    // Nothing runs as root against the directory: no +/! prefix, no PermissionsStartOnly.
+    for (const cmd of [u.serviceConfig.ExecStart, ...u.serviceConfig.ExecStartPre]) {
+      assert.doesNotMatch(cmd, /^[+!@-]/, `${name}: ${cmd}`);
+    }
+    assert.equal(u.serviceConfig.PermissionsStartOnly, null, name);
+    assert.equal(u.serviceConfig.User, "sini", `${name} runs as the owner`);
+  }
+  assert.deepEqual(r.multiUserWants, [], "nothing genie is wanted by multi-user.target");
+  assert.deepEqual(r.runtimeDirServices, [], "no systemd.services override of user-runtime-dir@");
+  assert.deepEqual(r.runtimeDirUnits, [], "no generated user-runtime-dir@ unit or drop-in");
+  assert.deepEqual(summary.xmsgRuntimeOverrideControl, [trigger], "the override predicate sees an instance");
+  assert.deepEqual(r.tmpfilesNamingSocketDir, [], "no root tmpfiles rule on the socket directory");
+
+  // The preparation unit: an owner-run oneshot that only creates the directory at 0700.
+  const p = r.units["genie-xmsg-socket-dir"];
+  assert.equal(p.serviceConfig.Type, "oneshot");
+  assert.equal(p.serviceConfig.RemainAfterExit, true);
+  assert.deepEqual(p.requires, []);
+  const prepScript = readFileSync(p.serviceConfig.ExecStart, "utf8");
+  assert.match(prepScript, /^d='?\/run\/user\/1000\/xmsg'?$/m);
+  assert.match(prepScript, /\[ -d "\$d" \] \|\| \/nix\/store\/[^ ]+\/bin\/mkdir -m 0700 -- "\$d"/);
+
+  // Consumers: Requires=/After= the preparation unit, a bounded readiness wait first, and a
+  // bounded start limit.
+  for (const name of consumers) {
+    const u = r.units[name];
+    assert.ok(u.requires.includes(prep), `${name} Requires= ${prep}`);
+    assert.ok(u.after.includes(prep), `${name} After= ${prep}`);
+    assert.equal(u.serviceConfig.Restart, "on-failure", name);
+    assert.equal(u.unitConfig.StartLimitBurst, 5, name);
+    assert.equal(u.unitConfig.StartLimitIntervalSec, 350, name);
+    assert.equal(u.serviceConfig.TimeoutStartSec, 90, name);
+    const [ready] = u.serviceConfig.ExecStartPre;
+    assert.match(ready, /^\/nix\/store\/[^ ]+-genie-xmsg-ready \/run\/user\/1000\/xmsg\/agent\.sock 30$/, name);
+    const readyScript = readFileSync(ready.split(" ")[0], "utf8");
+    assert.ok(readyScript.includes("sys.exit(75)"), "typed timeout exit");
+    assert.ok(readyScript.includes("genie-xmsg-ready: timeout:"), "typed timeout message");
+    assert.ok(readyScript.includes("time.monotonic() >= deadline"), "bounded wait");
+  }
+
+  // null opts out: plain multi-user.target units with no preparation unit and no wait.
+  const n = summary.xmsgRuntimeNoTrigger;
+  assert.ok(!("genie-xmsg-socket-dir" in n.units));
+  for (const name of consumers) {
+    assert.deepEqual(n.units[name].wantedBy, ["multi-user.target"], name);
+    assert.deepEqual(n.units[name].requisite, [], name);
+    assert.deepEqual(n.units[name].partOf, [], name);
+    assert.ok(!n.units[name].serviceConfig.ExecStartPre.some((c: string) => c.includes("genie-xmsg-ready")), name);
+  }
+  // The default trigger is derived only from a /run/user/<uid>/ path.
+  assert.equal(summary.xmsgRuntimeOutsideRunUser, null);
 });

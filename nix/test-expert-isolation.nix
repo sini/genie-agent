@@ -4665,6 +4665,8 @@ let
         enable = true;
         user = "sini";
         xmsgSocket = "/run/user/1000/xmsg";
+        # tmpfiles fakes /run/user/1000 with no login, so the units stay on multi-user.target.
+        xmsgSocketTrigger = null;
         package = idle "genie-root";
         piPackage = idle "pi";
         model = {

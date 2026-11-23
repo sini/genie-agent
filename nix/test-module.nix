@@ -441,7 +441,63 @@ let
     };
   };
 
+  # The xmsg runtime-dir trigger, as rendered: every field the lifecycle depends on.
+  xmsgRuntimeUnit = u: {
+    inherit (u)
+      wantedBy
+      requisite
+      partOf
+      bindsTo
+      requires
+      after
+      unitConfig
+      ;
+    serviceConfig = {
+      inherit (u.serviceConfig) Type;
+      User = u.serviceConfig.User or null;
+      Restart = u.serviceConfig.Restart or null;
+      RemainAfterExit = u.serviceConfig.RemainAfterExit or null;
+      PermissionsStartOnly = u.serviceConfig.PermissionsStartOnly or null;
+      TimeoutStartSec = u.serviceConfig.TimeoutStartSec or null;
+      ExecStart = toString u.serviceConfig.ExecStart;
+      ExecStartPre = map toString (lib.toList (u.serviceConfig.ExecStartPre or [ ]));
+    };
+  };
+  isRuntimeDirInstance = n: builtins.match "user-runtime-dir@[^.].*" n != null;
+  xmsgRuntimeSummary =
+    ev:
+    let
+      sv = ev.config.systemd.services;
+      genie = lib.filter (lib.hasPrefix "genie-") (lib.attrNames sv);
+    in
+    {
+      units = lib.genAttrs genie (n: xmsgRuntimeUnit sv.${n});
+      # Any service or unit for an instance (the template is NixOS's own) would override the
+      # system's unit, so a switch could restart it.
+      runtimeDirServices = lib.filter isRuntimeDirInstance (lib.attrNames sv);
+      runtimeDirUnits = lib.filter isRuntimeDirInstance (lib.attrNames ev.config.systemd.units);
+      multiUserWants = lib.filter (n: lib.elem "multi-user.target" sv.${n}.wantedBy) genie;
+      tmpfilesNamingSocketDir = lib.filter (lib.hasInfix (toString ev.config.services.genie-agent.xmsgSocket)) ev.config.systemd.tmpfiles.rules;
+    };
+
   summaryJson = (pkgs.formats.json { }).generate "nixos-module-summary.json" {
+    xmsgRuntime = xmsgRuntimeSummary evalLocal;
+    xmsgRuntimeNoTrigger = xmsgRuntimeSummary (
+      evalLocal.extendModules {
+        modules = [ { services.genie-agent.xmsgSocketTrigger = null; } ];
+      }
+    );
+    # Positive control for the no-override predicate: an instance override must show up.
+    xmsgRuntimeOverrideControl =
+      (xmsgRuntimeSummary (
+        evalLocal.extendModules {
+          modules = [ { systemd.services."user-runtime-dir@1000".restartIfChanged = false; } ];
+        }
+      )).runtimeDirUnits;
+    xmsgRuntimeOutsideRunUser =
+      (evalLocal.extendModules {
+        modules = [ { services.genie-agent.xmsgSocket = lib.mkForce "/srv/xmsg"; } ];
+      }).config.services.genie-agent.xmsgSocketTrigger;
     secretPathChecks = {
       acceptsRunSecrets = secretPath.check "/run/secrets/hyperqwen-api-key";
       acceptsHomePath = secretPath.check "/home/sini/.config/hyperqwen/api-key";
@@ -571,6 +627,7 @@ pkgs.runCommand "genie-agent-nixos-module"
       && grep -q '^ok [0-9]* - oracle (loadCredential = false): adapter-off mode sets LoadCredential = \[\] on all units, wires credentialsDir and explicit \*File paths into rootConfigJson, ExecStart, BindReadOnlyPaths, and InaccessiblePaths$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle (loadCredential = true): default adapter-on mode is deepEqual on every rendered unit and rootConfigJson to the LoadCredential baseline$' $TMPDIR/tap \
       && grep -q '^ok [0-9]* - oracle: deployed-host default units are unchanged modulo store hashes compared against the base commit render$' $TMPDIR/tap \
+      && grep -q '^ok [0-9]* - oracle xmsg runtime trigger: consumers and the owner-run preparation unit hang off user-runtime-dir@<uid> only$' $TMPDIR/tap \
       && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
     touch $out
   ''
