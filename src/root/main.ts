@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { type Config as RootConfig, main, validateRootConfig } from "./index.ts";
 import { XmsgIo } from "./io.ts";
-import { explicitXmsgEndpoints, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../xmsg-endpoints.ts";
+import { explicitXmsgEndpoints, xmsgEndpointFlags, type XmsgEndpointOverrides } from "../dispatcher/xmsg.ts";
 
 export class ConfigError extends Error {}
 
