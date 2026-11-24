@@ -1,0 +1,56 @@
+# Example; adapt. A genie-guard pod with an xmsg leaf sidecar.
+# Render or install against xmsg's charts/xmsg:
+#   helm install genie-guard path/to/xmsg/charts/xmsg -n genie -f examples/helm/genie-guard-values.yaml
+mode: leaf
+
+image:
+  repository: ghcr.io/sini/xmsg
+  tag: latest
+
+tls:
+  # A kubernetes.io/tls Secret with tls.crt, tls.key and ca.crt (cert-manager writes all three).
+  existingSecret: genie-guard-xmsg-tls
+
+securityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+
+leaf:
+  principal: genie-guard
+  hubs:
+    - name: alice.hub
+      address: hub.example.com:7788
+      identity: spiffe://example.com/ns/xmsg/sa/xmsg-hub
+  containers:
+    - name: genie-guard
+      image: ghcr.io/sini/genie-guard:latest
+      env:
+        - name: GENIE_GUARD_NINFER_URL
+          valueFrom:
+            secretKeyRef:
+              name: genie-guard
+              key: ninfer-url
+        - name: GENIE_GUARD_API_KEY_FILE
+          value: /etc/genie-guard/api-key
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: api-key
+          mountPath: /etc/genie-guard
+          readOnly: true
+  volumes:
+    - name: tmp
+      emptyDir: {}
+    - name: api-key
+      secret:
+        secretName: genie-guard
+        items:
+          - key: api-key
+            path: api-key
+        defaultMode: 288 # 0440, read through fsGroup

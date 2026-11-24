@@ -2300,11 +2300,24 @@ test("scope wire: service origin enables scope while display and ancestor claims
 
 test("socket discovery: unpinned old CLI selects the fixture once", async () => {
   const node = await startXmsg({ "doctor-legacy": process.execPath });
+  const oldBinDir = join(node.dir, "old-bin");
+  mkdirSync(oldBinDir, { recursive: true, mode: 0o700 });
+  const stub = join(oldBinDir, "xmsg");
+  writeFileSync(
+    stub,
+    [
+      `#!${process.execPath}`,
+      'process.stderr.write("error: unrecognized subcommand \'doctor\'\\n\\nUsage: xmsg <COMMAND>\\n\\nFor more information, try \'--help\'.\\n");',
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
   let probes = 0;
   let observed: DoctorResult | undefined;
   const logs: string[] = [];
   const resolve = createXmsgEndpointResolver({
-    env: { PATH: dirname(XMSG_BIN!), HOME: node.dir, XDG_RUNTIME_DIR: node.runDir },
+    env: { PATH: oldBinDir, HOME: node.dir, XDG_RUNTIME_DIR: node.runDir },
     log: (line) => logs.push(line),
     probe: async (file, args, options) => {
       probes++;
@@ -2400,5 +2413,90 @@ test("genie-root exits 0 within 5s of SIGTERM, with xmsg up, gone, and absent", 
       await stopChild(rootProc);
       await node.stop();
     }
+  }
+});
+
+test("socket discovery: doctor-capable CLI resolves endpoints without HOME mismatch and refuses mismatched HOME", async () => {
+  const dir = join(tmpdir(), `xmsg-doctor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const runDir = join(dir, "run");
+  const stateHome = join(dir, "state");
+  const configHome = join(dir, "config");
+  const sessionsDir = join(dir, "sessions");
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  mkdirSync(stateHome, { recursive: true, mode: 0o700 });
+  mkdirSync(configHome, { recursive: true, mode: 0o700 });
+  mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+
+  const daemonEnv = {
+    PATH: dirname(XMSG_BIN!),
+    XDG_RUNTIME_DIR: runDir,
+    XDG_STATE_HOME: stateHome,
+    XDG_CONFIG_HOME: configHome,
+  };
+  const child = spawn(
+    XMSG_BIN!,
+    ["serve", "--sessions-dir", sessionsDir, "--svc-exe", `doctor-modern=${process.execPath}`],
+    { env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (d) => (stderr += String(d)));
+
+  let discoveredHttpSock = "";
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`xmsg serve exited early (${child.exitCode}): ${stderr}`);
+    }
+    const probe = await new Promise<DoctorResult>((done) =>
+      execFile(XMSG_BIN!, ["doctor", "--json"], { env: daemonEnv, encoding: "utf8" }, (error, stdout, stderr) =>
+        done({ error, stdout, stderr }),
+      ),
+    );
+    try {
+      const parsed = JSON.parse(probe.stdout);
+      if (parsed.endpoints_usable === true && typeof parsed.http_socket === "string") {
+        discoveredHttpSock = parsed.http_socket;
+        break;
+      }
+    } catch {
+      // keep polling until ready
+    }
+    await sleep(100);
+  }
+  assert.ok(discoveredHttpSock, `doctor did not become usable within timeout; stderr=${stderr}`);
+
+  let probes = 0;
+  let observed: DoctorResult | undefined;
+  const logs: string[] = [];
+  const resolve = createXmsgEndpointResolver({
+    env: daemonEnv,
+    log: (line) => logs.push(line),
+    probe: async (file, args, options) => {
+      probes++;
+      observed = await new Promise<DoctorResult>((done) => execFile(file, args, options, (error, stdout, stderr) => done({ error, stdout, stderr })));
+      return observed;
+    },
+  });
+  const client = new SocketXmsg({}, "doctor-modern", { resolve });
+  try {
+    await client.register();
+    const services = await unixHttp(discoveredHttpSock, "GET", "/v1/recipients?kind=service");
+    assert.ok(services.json.recipients.some((entry: any) => entry.address === client.address));
+    await client.list();
+    assert.equal(probes, 1, "healthy calls must not repeat the bounded CLI probe");
+    assert.equal(observed?.error, null);
+    assert.equal(JSON.parse(observed?.stdout ?? "{}").endpoints_usable, true);
+    assert.deepEqual(logs, []);
+
+    const mismatchResolve = createXmsgEndpointResolver({
+      env: { PATH: dirname(XMSG_BIN!), HOME: dir, XDG_RUNTIME_DIR: runDir },
+    });
+    const mismatchClient = new SocketXmsg({}, "doctor-modern", { resolve: mismatchResolve });
+    await assert.rejects(() => mismatchClient.register(), /xmsg: doctor refused endpoint resolution/);
+    mismatchClient.close();
+  } finally {
+    client.close();
+    await stopChild(child);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

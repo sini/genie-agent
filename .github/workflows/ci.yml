@@ -11,6 +11,7 @@ env:
     agents-md-citations
     ci-plane-coverage
     ci-self-input
+    chart-genie-guard
     corpus
     default
     mdformat-plugins

@@ -148,6 +148,17 @@ once at start and trimmed, sent as `Authorization: Bearer <key>` on `/v1/models`
 unreadable or empty exits 2; unset sends no header). `tests/guard-eval.ts` takes the same
 `--api-key-file`. A bad model setting exits 2 and names it. Socket discovery can succeed without `XDG_RUNTIME_DIR`.
 
+### Kubernetes
+
+[`examples/helm/genie-guard-values.yaml`](examples/helm/genie-guard-values.yaml) layers the
+`genie-guard` container onto [`xmsg`'s Helm chart](https://github.com/sini/xmsg/tree/main/charts/xmsg)
+in `mode: leaf` (`XDG_RUNTIME_DIR=/run`, shared memory `emptyDir`, hardened UID `65532`,
+read-only `/etc/genie-guard/api-key` secret mount with mode `0440`, and `/tmp` `emptyDir`):
+
+```sh
+helm install genie-guard path/to/xmsg/charts/xmsg -n genie -f examples/helm/genie-guard-values.yaml
+```
+
 ## Support Memory & Review Queue (Unit H2, Oracle 20)
 
 Accepted thread resolutions are distilled into candidates and enqueued to a persistent review queue on disk (`<queueDir>/pending/<id>.json`).

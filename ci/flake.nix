@@ -6,7 +6,7 @@
     # snapshot of the tree (den-hoag-lbtnv D1). So `outputs` below applies `../flake.nix`'s own
     # `outputs` to the `nixpkgs` declared here, line for line as `../flake.nix` declares it.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-    xmsg.url = "github:sini/xmsg/3aa04570cf9768164bd7c82b8ffca8002591bf87";
+    xmsg.url = "github:sini/xmsg/627b21acd9125156872a1169b89627c71db4593e";
     xmsg.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -36,6 +36,12 @@
         { gen.ci.rootSurface.entry = "not-owed"; }
         # Nor an evaluator matrix: its CI is one upstream-Nix column, not evaluators.yml.
         { gen.ci.evaluators = "not-owed"; }
+        {
+          gen.ci.examplesExcluded.helm = {
+            row = "xmsg-dkvs";
+            reason = "Helm values overlay for xmsg's leaf-mode chart, verified by chart-genie-guard.";
+          };
+        }
         # The eval runner's oracle runs as a program under each column's evaluator, not as a check.
         ./tests-process.nix
         {
@@ -67,7 +73,25 @@
               xmsgCargoArtifacts = xmsg.packages.${system}.cargoArtifacts;
             in
             {
-              checks = lib.optionalAttrs ((genie-agent.packages.${system} or { }) ? genie-guard) {
+              checks = {
+                chart-genie-guard =
+                  pkgs.runCommand "genie-agent-chart-genie-guard"
+                    {
+                      nativeBuildInputs = [
+                        pkgs.kubernetes-helm
+                        (pkgs.python3.withPackages (p: [ p.pyyaml ]))
+                      ];
+                    }
+                    ''
+                      export HOME="$TMPDIR"
+                      python3 ${./tests/check-chart-genie-guard.py} \
+                        ${xmsg}/ci/tests/check-chart-leaf.py \
+                        ${xmsg}/charts/xmsg \
+                        ${../examples/helm/genie-guard-values.yaml}
+                      touch $out
+                    '';
+              }
+              // lib.optionalAttrs ((genie-agent.packages.${system} or { }) ? genie-guard) {
                 xmsg-integration =
                   pkgs.runCommand "genie-agent-xmsg-integration"
                     {
@@ -119,6 +143,7 @@
                         && grep -q '^ok [0-9]* - oracle 11 (GI-10): genie-root re-registers within backoff bound when xmsg serve restarts without restarting its own process, logs drop and re-registration, and receives messages after restart$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - scope wire: service origin enables scope while display and ancestor claims do not$' $TMPDIR/tap \
                         && grep -q '^ok [0-9]* - socket discovery: unpinned old CLI selects the fixture once$' $TMPDIR/tap \
+                        && grep -q '^ok [0-9]* - socket discovery: doctor-capable CLI resolves endpoints without HOME mismatch and refuses mismatched HOME$' $TMPDIR/tap \
                         && grep -q '^# fail 0$' $TMPDIR/tap || exit 1
                       cp -r . $TMPDIR/mut-go6-source-obj
                       chmod -R u+w $TMPDIR/mut-go6-source-obj
@@ -142,6 +167,14 @@
                         --replace-fail 'assertSourceRepoUnchanged(sourceRepoDir, sourceBaseline, "after forced git gc in source repo");' 'assert.equal(git(["-C", sourceRepoDir, "count-objects"]), looseBaseline, "source repo git count-objects must be unchanged");'
                       if (cd $TMPDIR/mut-go6-old-loose-oracle && node --test --test-force-exit --test-name-pattern='oracle 6 \(GI-3\.1\)' tests/integration/xmsg.test.ts >/dev/null 2>&1); then
                         echo "positive control M-go6-old-loose-oracle survived forced git gc in xmsg-integration" >&2
+                        exit 1
+                      fi
+                      cp -r . $TMPDIR/mut-doctor-fallback-any-error
+                      chmod -R u+w $TMPDIR/mut-doctor-fallback-any-error
+                      substituteInPlace $TMPDIR/mut-doctor-fallback-any-error/src/dispatcher/xmsg.ts \
+                        --replace-fail 'if (result.error?.code === 2 && result.stdout === "" && result.stderr === unsupportedDoctorStderr) {' 'if (result.error) {'
+                      if (cd $TMPDIR/mut-doctor-fallback-any-error && node --test --test-force-exit --test-name-pattern='socket discovery: doctor-capable CLI resolves endpoints without HOME mismatch and refuses mismatched HOME' tests/integration/xmsg.test.ts >/dev/null 2>&1); then
+                        echo "mutant M-doctor-fallback-any-error survived in xmsg-integration" >&2
                         exit 1
                       fi
                       touch $out
