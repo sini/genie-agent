@@ -77,6 +77,20 @@ def main():
             f"mount={tmp_mount} vol={tmp_vol}",
         )
 
+        xmsg = containers.get("xmsg", {})
+        xmsg_requests = xmsg.get("resources", {}).get("requests")
+        check(
+            "xmsg carries no resource requests from the overlay",
+            not xmsg_requests,
+            str(xmsg.get("resources")),
+        )
+        guard_requests = guard.get("resources", {}).get("requests")
+        check(
+            "genie-guard carries resource requests",
+            guard_requests == {"cpu": "10m", "memory": "32Mi"},
+            str(guard.get("resources")),
+        )
+
     if failures:
         sys.exit(f"{len(failures)} genie-guard chart invariant(s) failed: {failures}")
     print("genie-guard chart: all invariants hold")

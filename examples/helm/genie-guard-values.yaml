@@ -16,11 +16,6 @@ securityContext:
   runAsGroup: 65532
   fsGroup: 65532
 
-resources:
-  requests:
-    cpu: 10m
-    memory: 32Mi
-
 leaf:
   principal: genie-guard
   hubs:
@@ -30,6 +25,10 @@ leaf:
   containers:
     - name: genie-guard
       image: ghcr.io/sini/genie-guard:latest
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
       env:
         - name: GENIE_GUARD_NINFER_URL
           valueFrom:
