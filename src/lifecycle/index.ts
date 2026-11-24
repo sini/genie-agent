@@ -258,8 +258,11 @@ export class Lifecycle {
     });
   }
 
+  private stopped = false;
+
   // Arm every open thread from its stored state, on supervisor start.
   start(): void {
+    this.stopped = false;
     if (!existsSync(this.o.store.stateRoot)) return;
     for (const thread of readdirSync(this.o.store.stateRoot)) {
       this.seenThreads.add(thread);
@@ -268,6 +271,7 @@ export class Lifecycle {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const t of this.timers.values()) this.clock.clearTimeout(t);
     this.timers.clear();
     for (const q of this.queue) {
@@ -496,6 +500,7 @@ export class Lifecycle {
   private arm(thread: string): void {
     this.clock.clearTimeout(this.timers.get(thread));
     this.timers.delete(thread);
+    if (this.stopped) return;
     const st = this.o.store.read(thread);
     if (!st || st.status === "closed") return;
     const last = Date.parse(st.last_active);

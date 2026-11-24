@@ -192,6 +192,7 @@ const ghReadSchema = load("gh-read");
 // Fixed notices, posted without guard-out: no thread text is in them.
 export const REFUSAL = "I can't help with that message.";
 export const WITHHELD = "I drafted an answer, but my output check held it back. I've flagged this for review.";
+export const INTERRUPTED = "interrupted by restart, please resend";
 export const DEADLINE_NOTICE = readFileSync(new URL("prompts/tier1-deadline.md", repo).pathname, "utf8").trim();
 export const approvalNotice = (action: string, params: unknown): PostEnvelope & { approval: true } => ({
   approval: true,
@@ -568,6 +569,10 @@ export function main(
     args: (t) => ["--model", `genie/${id}`, ...store.sessionArgs(t)],
   });
 
+  let activeThread: string | null = null;
+  let repliedInActive = false;
+  let stopped = false;
+
   // Wrap every outbound post in a structured envelope { text: <string> }, with approval: true
   // only on approval notices, so model output can never mint an approval request (Unit C10).
   // Records `lastReplyMessageId` in ThreadStateStore for GAP-6 redact/edit support.
@@ -584,6 +589,7 @@ export function main(
       const payload: PostEnvelope = approval ? { text, approval: true } : { text };
       sentId = await io.post.post(thread, payload);
     }
+    if (activeThread === thread) repliedInActive = true;
     if (typeof sentId === "string" && sentId) {
       store.setLastReplyMessageId(thread, sentId);
     }
@@ -1058,12 +1064,64 @@ export function main(
       lifecycle.start();
       gc.start();
     },
-    // Reads the intake until it closes; an item that fails is logged and the next one runs.
-    async run(): Promise<void> {
-      for (let batch; (batch = await io.intake.next()); )
-        for (const i of batch) await handle(i).catch((e) => console.error(`thread ${i.thread}: ${e}`));
+    // Reads the intake until it closes; on abort, waits up to graceMs for the in-flight item,
+    // then stops the supervisor, clears un-answered pending state, and posts INTERRUPTED if needed.
+    async run(opts?: { signal?: AbortSignal; graceMs?: number }): Promise<void> {
+      const signal = opts?.signal;
+      const graceMs = opts?.graceMs ?? 5_000;
+      for (let batch; !signal?.aborted && (batch = await io.intake.next()); ) {
+        for (const i of batch) {
+          if (signal?.aborted) break;
+          activeThread = i.thread ?? null;
+          repliedInActive = false;
+          const inFlight = handle(i).catch((e) => console.error(`thread ${i.thread}: ${e}`));
+          if (!signal) {
+            await inFlight;
+            activeThread = null;
+            continue;
+          }
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let onAbort: (() => void) | undefined;
+          const outcome = await Promise.race([
+            inFlight.then(() => "done" as const),
+            new Promise<"aborted">((resolve) => {
+              onAbort = () => {
+                timer = setTimeout(() => resolve("aborted"), graceMs);
+              };
+              if (signal.aborted) onAbort();
+              else signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]);
+          if (timer !== undefined) clearTimeout(timer);
+          if (onAbort) signal.removeEventListener("abort", onAbort);
+          if (outcome === "aborted") {
+            await this.stop();
+            let teardownTimer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              inFlight,
+              new Promise<void>((r) => {
+                teardownTimer = setTimeout(r, 6_000);
+              }),
+            ]);
+            if (teardownTimer !== undefined) clearTimeout(teardownTimer);
+            if (i.thread) {
+              store.setPending(i.thread, []);
+              if (!repliedInActive && "envelope" in i) {
+                await postEnvelope(i.thread, INTERRUPTED).catch((e) =>
+                  console.error(`thread ${i.thread}: interrupt reply failed: ${e}`),
+                );
+              }
+            }
+            activeThread = null;
+            return;
+          }
+          activeThread = null;
+        }
+      }
     },
     async stop(): Promise<void> {
+      if (stopped) return;
+      stopped = true;
       await bridge?.close();
       lifecycle.stop();
       gc.stop();

@@ -418,6 +418,7 @@ export class XmsgIo implements Io {
   private readonly earlyRequestReplies = new Map<string, string>();
   private readonly buffered: Inbound[] = [];
   private closed = false;
+  private intakeClosed = false;
   private pumping: Promise<void> | null = null;
   private notifyIntake: (() => void) | null = null;
 
@@ -502,12 +503,13 @@ export class XmsgIo implements Io {
 
     this.intake = {
       next: async (): Promise<Inbound[] | null> => {
-        while (!this.closed) {
+        while (!this.closed && !this.intakeClosed) {
           if (this.buffered.length > 0) {
             return this.buffered.splice(0, 1);
           }
           await this.waitForNext();
         }
+        if (this.intakeClosed) return null;
         if (this.buffered.length > 0) {
           return this.buffered.splice(0, 1);
         }
@@ -559,8 +561,14 @@ export class XmsgIo implements Io {
     return this.post.post(thread, { edit: targetId, text });
   }
 
+  closeIntake(): void {
+    this.intakeClosed = true;
+    this.wakeIntake();
+  }
+
   close(): void {
     this.closed = true;
+    this.intakeClosed = true;
     this.closeAbort.abort();
     this.guard?.close();
     for (const p of this.pendingRequests.values()) {

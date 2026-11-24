@@ -55,9 +55,19 @@ async function run(opts: CliOptions): Promise<void> {
     guardEnable,
   });
   let stopping = false;
+  let started = false;
+  let ioClosed = false;
+  const closeIo = () => {
+    if (ioClosed) return;
+    ioClosed = true;
+    io.close();
+  };
+  const stopController = new AbortController();
   const shutdown = () => {
     stopping = true;
-    io.close();
+    if (started) io.closeIntake();
+    else closeIo();
+    stopController.abort();
   };
   // Before registering, which can wait on xmsg indefinitely: as PID 1 (the unit's PrivatePIDs=)
   // an unhandled TERM is ignored and a stop waits out TimeoutStopSec.
@@ -66,17 +76,25 @@ async function run(opts: CliOptions): Promise<void> {
   try {
     await io.register(false);
   } catch (e) {
-    if (stopping) return;
+    if (stopping) {
+      closeIo();
+      return;
+    }
     throw e;
   }
-  if (stopping) return;
+  if (stopping) {
+    closeIo();
+    return;
+  }
   const root = main(opts.configPath, io);
   io.resume();
   await root.start();
+  started = true;
   try {
-    await root.run();
+    await root.run({ signal: stopController.signal });
   } finally {
     await root.stop();
+    closeIo();
   }
 }
 
