@@ -113,6 +113,8 @@ export interface Post {
 
 export interface Io {
   intake: Intake;
+  closeIntake?: () => void;
+  drainIntake?: () => Inbound[];
   post: Post;
   guard?: GuardClient;
   xmsg: XmsgSend;
@@ -1065,15 +1067,31 @@ export function main(
       gc.start();
     },
     // Reads the intake until it closes; on abort, waits up to graceMs for the in-flight item,
-    // then stops the supervisor, clears un-answered pending state, and posts INTERRUPTED if needed.
+    // then stops the supervisor, restores pre-turn pending state, and posts INTERRUPTED for the
+    // aborted item (if unanswered) and every remaining buffered envelope while io is open.
     async run(opts?: { signal?: AbortSignal; graceMs?: number }): Promise<void> {
       const signal = opts?.signal;
       const graceMs = opts?.graceMs ?? 5_000;
+      const notifyBuffered = async (remainingInBatch: Inbound[] = []) => {
+        const queued = [...remainingInBatch, ...(io.drainIntake?.() ?? [])];
+        for (const q of queued) {
+          if ("envelope" in q && q.thread) {
+            await postEnvelope(q.thread, INTERRUPTED).catch((e) =>
+              console.error(`thread ${q.thread}: interrupt reply failed: ${e}`),
+            );
+          }
+        }
+      };
       for (let batch; !signal?.aborted && (batch = await io.intake.next()); ) {
-        for (const i of batch) {
-          if (signal?.aborted) break;
+        for (let idx = 0; idx < batch.length; idx++) {
+          const i = batch[idx];
+          if (signal?.aborted) {
+            await notifyBuffered(batch.slice(idx));
+            return;
+          }
           activeThread = i.thread ?? null;
           repliedInActive = false;
+          const pendingBefore = i.thread ? store.pending(i.thread) : [];
           const inFlight = handle(i).catch((e) => console.error(`thread ${i.thread}: ${e}`));
           if (!signal) {
             await inFlight;
@@ -1105,7 +1123,7 @@ export function main(
             ]);
             if (teardownTimer !== undefined) clearTimeout(teardownTimer);
             if (i.thread) {
-              store.setPending(i.thread, []);
+              store.setPending(i.thread, pendingBefore);
               if (!repliedInActive && "envelope" in i) {
                 await postEnvelope(i.thread, INTERRUPTED).catch((e) =>
                   console.error(`thread ${i.thread}: interrupt reply failed: ${e}`),
@@ -1113,10 +1131,14 @@ export function main(
               }
             }
             activeThread = null;
+            await notifyBuffered(batch.slice(idx + 1));
             return;
           }
           activeThread = null;
         }
+      }
+      if (signal?.aborted) {
+        await notifyBuffered();
       }
     },
     async stop(): Promise<void> {

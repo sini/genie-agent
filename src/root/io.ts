@@ -566,6 +566,10 @@ export class XmsgIo implements Io {
     this.wakeIntake();
   }
 
+  drainIntake(): Inbound[] {
+    return this.buffered.splice(0);
+  }
+
   close(): void {
     this.closed = true;
     this.intakeClosed = true;
@@ -706,6 +710,9 @@ export class XmsgIo implements Io {
       }
     }
 
+    if (this.intakeClosed) {
+      throw new Error(`${this.service}: intake closed`);
+    }
     const parsed = parseMatrixForward(m.text);
     if (!parsed) {
       const origin = m.origin as { service?: unknown; node?: unknown } | null;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { after, test } from "node:test";
-import { type Inbound, INTERRUPTED, main } from "../src/root/index.ts";
+import { type Inbound, INTERRUPTED, main, XmsgIo } from "../src/root/index.ts";
 import { piAiPath } from "../src/tier1/custody.ts";
 
 const tmp = mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/genie-root-stop-test-`);
@@ -165,4 +165,76 @@ test("root stop: reply landing inside grace completes with exactly one reply and
     "must not post INTERRUPTED when reply lands inside grace",
   );
   assert.deepEqual(root.store.pending("$stop_fast"), []);
+});
+
+test("root stop: two items queued in XmsgIo (first in-flight past grace, second buffered) both get INTERRUPTED and pre-existing pending is preserved", async () => {
+  process.env.FAKE_PI_MODE = "slow";
+  const cfgPath = makeConfig(slowPi);
+  const sentReplies: { id: string; text: string; ioClosedAtReply: boolean }[] = [];
+  let ioClosed = false;
+  let pollIdx = 0;
+  const msgs = [
+    { id: "m-1", from: "matrix", text: makeEnvelope("$stop_q1", "first slow question") },
+    { id: "m-2", from: "matrix", text: makeEnvelope("$stop_q2", "second buffered question") },
+  ];
+  const io = new XmsgIo(
+    { guardEnable: false },
+    {
+      async register() {
+        return {};
+      },
+      async poll() {
+        if (pollIdx < msgs.length) return msgs[pollIdx++];
+        await new Promise((r) => setTimeout(r, 50));
+        return null;
+      },
+      async ack() {},
+      async send() {
+        return "s1";
+      },
+      async reply(id: string, text: string) {
+        sentReplies.push({ id, text, ioClosedAtReply: ioClosed });
+        return `r-${sentReplies.length}`;
+      },
+      close() {
+        ioClosed = true;
+      },
+    } as never,
+  );
+  const controller = new AbortController();
+  (io as unknown as { guard: unknown }).guard = {
+    check: async () => ({ verdict: "allow", reason: "ok", cleaned_text: "" }),
+    close() {},
+  };
+  const root = main(cfgPath, io);
+
+  await io.register(true);
+  await root.start();
+  // Pre-seed an unrelated pending entry on $stop_q1 after start() so start() doesn't mark it for resync.
+  root.store.setPending("$stop_q1", ["unrelated-prior-pending"]);
+  const running = root.run({ signal: controller.signal, graceMs: 60 });
+  try {
+    // Wait until m-1 is actively in-flight in supervisor and m-2 is buffered in XmsgIo.
+    const deadline = Date.now() + 2_000;
+    while (root.supervisor.pid("$stop_q1") === undefined && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.notEqual(root.supervisor.pid("$stop_q1"), undefined, "first item must be in-flight before stop");
+    io.closeIntake();
+    controller.abort();
+    await running;
+  } finally {
+    await root.stop();
+    io.close();
+  }
+
+  assert.equal(sentReplies.length, 2, "both the in-flight item and the buffered item must get INTERRUPTED");
+  assert.deepEqual(
+    sentReplies.map((r) => [r.id, JSON.parse(r.text), r.ioClosedAtReply]),
+    [
+      ["m-1", { text: INTERRUPTED }, false],
+      ["m-2", { text: INTERRUPTED }, false],
+    ],
+  );
+  assert.deepEqual(root.store.pending("$stop_q1"), ["unrelated-prior-pending"]);
 });
