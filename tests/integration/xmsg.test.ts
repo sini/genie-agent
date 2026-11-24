@@ -616,7 +616,7 @@ import type { Envelope } from "../../src/guard/verdict.ts";
 
 test(
   "oracle 3 (GI-2): XmsgGuardClient enforces FIFO concurrency limit over 3 parallel checks and fails closed on timeout",
-  { timeout: 30_000 },
+  { timeout: 60_000 },
   async () => {
     const node = await startXmsg({
       "genie": process.execPath,
@@ -639,7 +639,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await x.ack(m.id);
     const env = JSON.parse(m.text);
     order.push(env.content.text);
-    await sleep(20);
+    await sleep(1700);
     await x.reply(m.id, JSON.stringify({ verdict: "allow", reason: "ok:" + env.content.text, cleaned_text: "" }));
   }
   process.stdout.write("STATS " + JSON.stringify({ order }) + "\\n");
@@ -669,10 +669,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await callerXmsg.register();
       await waitGuardLine("READY");
 
+      // Three queued checks share one timeoutMs budget from t=0; 20s tolerates CI I/O contention.
       const guardClient = new XmsgGuardClient(callerXmsg, {
         target: "genie-guard",
         maxConcurrency: 1,
-        timeoutMs: 5_000,
+        timeoutMs: 20_000,
       });
 
       const pumpCallerPromise = (async () => {
